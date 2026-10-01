@@ -45,7 +45,9 @@ export async function withCredentials(env: Env): Promise<Env> {
   }
   const keys = Object.keys(stored);
   if (!keys.length || !env.SESSION_SECRET) return env;
-  const merged: Record<string, unknown> = { ...env };
+  // Prototype-chain over the real env instead of spreading it: spreading can drop bindings
+  // that aren't own-enumerable (Cloudflare secrets), which made SESSION_SECRET vanish.
+  const merged: Record<string, unknown> = Object.create(env);
   for (const k of keys) {
     try {
       merged[k] = await decrypt(env, stored[k]);

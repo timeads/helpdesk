@@ -31,8 +31,12 @@ app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // Raw env stays reachable for the credentials screen, which must tell app-entered from Cloudflare values
-    const merged = new URL(request.url).pathname.startsWith("/api/") ? { ...(await withCredentials(env)), RAW_ENV: env } : env;
-    return app.fetch(request, merged as Env, ctx);
+    if (!new URL(request.url).pathname.startsWith("/api/")) return app.fetch(request, env, ctx);
+    const merged = await withCredentials(env);
+    // Layer RAW_ENV on top without copying (copies can lose secret bindings)
+    const withRaw = Object.create(merged) as Env;
+    withRaw.RAW_ENV = env;
+    return app.fetch(request, withRaw, ctx);
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
