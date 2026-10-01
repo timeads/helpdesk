@@ -2,7 +2,7 @@
 import { api } from "./api.js";
 import { h, mount, money, toast, skeletonRows } from "./ui.js";
 
-const PERIODS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "12 months"]];
+const PERIODS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], ["ytd", "Year to date"], [365, "12 months"]];
 const SVG = "http://www.w3.org/2000/svg";
 const s = (tag, attrs = {}, ...kids) => {
   const el = document.createElementNS(SVG, tag);
@@ -13,11 +13,12 @@ const s = (tag, attrs = {}, ...kids) => {
 const usd = (n) => money(n ?? 0, "USD");
 const usd0 = (n) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n ?? 0);
 
+let compareLabel = "vs prior";
 function delta(cur, prev, { invert = false, fmt = (x) => x } = {}) {
   if (prev === null || prev === undefined || !Number.isFinite(prev) || prev === 0 || cur === null || cur === undefined) return null;
   const pct = ((cur - prev) / Math.abs(prev)) * 100;
   const good = invert ? pct <= 0 : pct >= 0;
-  return h("span", { class: "delta " + (Math.abs(pct) < 0.5 ? "" : good ? "up" : "down"), title: `Previous period: ${fmt(prev)}` }, `${pct >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(0)}% vs prior`);
+  return h("span", { class: "delta " + (Math.abs(pct) < 0.5 ? "" : good ? "up" : "down"), title: `Previous period: ${fmt(prev)}` }, `${pct >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(0)}% ${compareLabel}`);
 }
 
 function tile(label, value, sub, extra) {
@@ -133,7 +134,7 @@ function teamCard(rows) {
 
 export function renderAnalytics(main) {
   const params = new URLSearchParams(location.search);
-  let days = Number(params.get("days")) || 30;
+  let days = params.get("days") === "ytd" ? "ytd" : Number(params.get("days")) || 30;
   const body = h("div", { class: "stack", style: { gap: "16px" } }, h("div", { class: "card" }, skeletonRows(4)));
   const chips = h("div", { class: "view-chips" });
   mount(main, h("div", { class: "page" },
@@ -148,6 +149,7 @@ export function renderAnalytics(main) {
     let a;
     try {
       a = await api(`/analytics?days=${days}`);
+      compareLabel = a.ytd ? "vs last year" : "vs prior";
     } catch (e) {
       return mount(body, h("div", { class: "notice bad" }, e.message));
     }
@@ -181,7 +183,7 @@ export function renderAnalytics(main) {
           })))) : h("p", { class: "muted" }, "No labels in this period.")),
       h("h2", { class: "analytics-h" }, "Support"),
       h("div", { class: "kpis" },
-        tile("New tickets", String(sp.created), `in the last ${days} days`),
+        tile("New tickets", String(sp.created), a.ytd ? "this year" : `in the last ${days} days`),
         tile("Closed", String(sp.closed), "tickets closed"),
         tile("Open now", String(sp.open), `${sp.inProgress} in progress · ${sp.snoozed} snoozed`),
         tile("First reply", hours(sp.medianFirstReplyHours), `median, ${sp.replied} replied`),

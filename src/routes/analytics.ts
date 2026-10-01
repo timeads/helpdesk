@@ -12,9 +12,22 @@ const median = (xs: number[]) => {
 
 /** Shipping cost vs what customers paid, fulfillment speed, and support volume for a period. */
 analytics.get("/", async (c) => {
-  const days = Math.min(730, Math.max(1, Number(c.req.query("days")) || 30));
-  const since = new Date(Date.now() - days * 86400_000).toISOString();
-  const prevSince = new Date(Date.now() - 2 * days * 86400_000).toISOString();
+  const ytd = c.req.query("days") === "ytd";
+  let days: number, since: string, prevSince: string, prevUntil: string;
+  if (ytd) {
+    // Year to date in store time (Philadelphia), compared with the same stretch of last year
+    const year = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric" }).format(new Date()));
+    const jan1 = (y: number) => new Date(`${y}-01-01T05:00:00Z`).getTime(); // midnight EST
+    since = new Date(jan1(year)).toISOString();
+    prevSince = new Date(jan1(year - 1)).toISOString();
+    prevUntil = new Date(jan1(year - 1) + (Date.now() - jan1(year))).toISOString();
+    days = Math.max(1, Math.ceil((Date.now() - jan1(year)) / 86400_000));
+  } else {
+    days = Math.min(730, Math.max(1, Number(c.req.query("days")) || 30));
+    since = new Date(Date.now() - days * 86400_000).toISOString();
+    prevSince = new Date(Date.now() - 2 * days * 86400_000).toISOString();
+    prevUntil = since;
+  }
   const db = c.env.DB;
 
   const shippingTotals = (from: string, to: string) =>
@@ -32,7 +45,7 @@ analytics.get("/", async (c) => {
   const now = new Date(Date.now() + 1000).toISOString();
   const [cur, prev, weekly, services, states, voided, recent, ticketsCreated, ticketsClosed, openNow, firstResponses, daily] = await db.batch([
     shippingTotals(since, now),
-    shippingTotals(prevSince, since),
+    shippingTotals(prevSince, prevUntil),
     db.prepare(
       `SELECT strftime('%Y-%m-%d', created_at, 'weekday 0', '-6 days') AS week, SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END) AS labels, COUNT(*) AS orders, SUM(cost) AS spend,
               COALESCE(SUM(shipping_paid), 0) AS collected, COALESCE(SUM(CASE WHEN shipping_paid IS NOT NULL THEN shipping_paid - cost END), 0) AS margin
@@ -107,6 +120,7 @@ analytics.get("/", async (c) => {
   const frt = (firstResponses.results as { hours: number }[]).map((r) => r.hours).filter((h) => h >= 0);
   return c.json({
     days,
+    ytd,
     shipping: { current: cur.results[0], previous: prev.results[0], voided: (voided.results[0] as any).n },
     weekly: weekly.results,
     services: services.results,
