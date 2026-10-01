@@ -808,6 +808,17 @@ details.macro-row > summary svg { width: 13px; height: 13px; vertical-align: -2p
 .heat-h { font-size: 9.5px; color: var(--text-3); white-space: nowrap; overflow: visible; }
 .heat-d { font-size: 11px; color: var(--text-3); font-weight: 600; }
 
+/* Shipping: quotes, box split */
+.tbl td.quote { white-space: nowrap; min-width: 128px; }
+.q-line { display: flex; gap: 6px; align-items: baseline; justify-content: space-between; }
+.skel-inline { display: inline-block; width: 90px; height: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--sunken), var(--hover), var(--sunken)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+.refreshing .rates { opacity: .55; transition: opacity .2s; }
+.alloc { margin-top: 12px; padding: 14px; }
+.alloc-tbl td, .alloc-tbl th { padding: 6px 8px; }
+.alloc-item { display: flex; align-items: center; gap: 8px; min-width: 180px; }
+.alloc-item img { width: 30px; height: 30px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); flex: none; }
+.qty-in { width: 64px; height: 30px; min-height: 30px; text-align: right; padding: 3px 6px; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1320px) {
   .customer { width: 312px; }

@@ -39,6 +39,9 @@ export interface Parcel {
   width: number;
   height: number;
   weight: number; // lb
+  /** What's packed in this box (multi-box shipments); stored with the label, never sent to UPS. */
+  contents?: { id: string; title: string; qty: number }[];
+  box?: string;
 }
 
 export type Signature = "standard" | "adult" | null | undefined;

@@ -22,7 +22,10 @@ function validParcels(parcels: Parcel[]): Parcel[] {
     const n = { length: +p.length, width: +p.width, height: +p.height || 0, weight: +p.weight };
     // Height may be 0 for flat envelopes; length, width and weight must be set
     if (!(n.length > 0 && n.width > 0 && n.weight > 0) || n.height < 0) throw new HttpError(400, `Package ${i + 1} needs dimensions and a weight`);
-    return n;
+    const contents = Array.isArray(p.contents)
+      ? p.contents.filter((x) => x && Number(x.qty) > 0).slice(0, 100).map((x) => ({ id: String(x.id).slice(0, 100), title: String(x.title ?? "").slice(0, 200), qty: Math.round(Number(x.qty)) }))
+      : undefined;
+    return { ...n, ...(contents?.length ? { contents } : {}), ...(p.box ? { box: String(p.box).slice(0, 100) } : {}) };
   });
 }
 
@@ -213,6 +216,16 @@ shipping.put("/rules", async (c) => {
 // ---- Rates and labels
 shipping.post("/rates", async (c) => {
   const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string }>();
+  if (demo(c.env) && !upsConfigured(c.env)) {
+    // Local preview only: plausible made-up prices so the screens can be tried without UPS keys
+    const lb = validParcels(body.parcels).reduce((n, p) => n + Math.max(p.weight, (p.length * p.width * p.height) / 139), 0);
+    const n = body.parcels.length;
+    const mk = (serviceCode: string, serviceName: string, base: number, perLb: number, days: number | null) => {
+      const total = Math.round((base * n + perLb * lb) * 100) / 100;
+      return { serviceCode, serviceName, total, listTotal: Math.round(total * 1.35 * 100) / 100, currency: "USD", days };
+    };
+    return c.json({ rates: [mk("03", "UPS Ground", 7.4, 0.62, 4), mk("12", "UPS 3 Day Select", 11.2, 1.1, 3), mk("02", "UPS 2nd Day Air", 16.5, 1.9, 2), mk("13", "UPS Next Day Air Saver", 29, 3.2, 1)] });
+  }
   const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels), validSignature(body.signature));
   return c.json({ rates });
 });

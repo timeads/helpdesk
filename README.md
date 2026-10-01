@@ -116,7 +116,8 @@ Every deploy then uploads those three to the running app (`scripts/write-secrets
 
 ## Shipping day to day
 
-- **Shipping → Orders** lists every open, unshipped Shopify order (oldest first) with saved views: Ready to ship, Priority, Payment pending, On hold, International, All open. Tick orders to **buy labels in bulk** (by rule, cheapest, fastest or a specific UPS service), **print packing slips**, or **hold / release**. Click an order for the full label builder: every UPS service with its price, what the customer paid, and the margin.
+- **Shipping → Orders** lists every open, unshipped Shopify order (oldest first) with saved views: Ready to ship, Priority, Payment pending, On hold, International, All open. Tick orders to **buy labels in bulk** (by rule, cheapest, fastest or a specific UPS service), **print packing slips**, or **hold / release**. The **UPS quote · margin** column fills in by itself (hover it to see every service), and the bulk bar shows the estimated spend and margin for the selected orders. Click an order for the full label builder: UPS rates load automatically and refresh as you change the box, weight or address, each service shows your margin (shipping paid − label), and the Buy button shows the margin of the service you picked.
+- **Big orders:** *Add a box* splits a shipment into several boxes. Assign items to each box (or *Split evenly*); box weights fill in from Shopify product weights. You get one UPS shipment with a label and tracking number per box, plus printable "Box 2 of 3" contents slips.
 - **Shipping rules** (Settings) pick the box, signature, service, or hold an order. When no rule applies, the box and weight you used last time for the same items are reused (package learning).
 - **Scan & pack**: scan the barcode on the packing slip, scan each item (SKU or barcode), then **Verify & print label**.
 - **Label batches**: every label run is a batch you can reprint or void.

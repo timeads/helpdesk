@@ -90,8 +90,38 @@ export function renderShipping(main) {
 
 let queueApi = null; // lets the slideout refresh the queue after buying a label
 
+// ---- Live UPS quotes for queue rows (cached per order + package, a few at a time)
+const quoteCache = new Map();
+const quoteKey = (o) => `${o.id}|${JSON.stringify(o.plan.parcel)}|${o.plan.signature ?? ""}`;
+function pickRate(rates, policy, plan) {
+  if (!rates?.length) return null;
+  const want = policy === "rule" ? plan.service ?? "cheapest" : policy;
+  if (want === "fastest") return [...rates].filter((r) => r.days).sort((a, b) => a.days - b.days || a.total - b.total)[0] ?? rates[0];
+  if (want === "cheapest") return [...rates].sort((a, b) => a.total - b.total)[0];
+  return rates.find((r) => r.serviceCode === want) ?? null;
+}
+function loadQuotes(orders, onEach) {
+  const todo = orders.filter((o) => o.plan.weightKnown && !o.hasLabel && !o.international && !quoteCache.has(quoteKey(o)));
+  let i = 0;
+  const worker = async () => {
+    while (i < todo.length) {
+      const o = todo[i++];
+      const key = quoteKey(o);
+      quoteCache.set(key, { loading: true });
+      try {
+        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: [o.plan.parcel], signature: o.plan.signature || undefined } });
+        quoteCache.set(key, { rates });
+      } catch (e) {
+        quoteCache.set(key, { error: e.message });
+      }
+      onEach(o);
+    }
+  };
+  return Promise.all([worker(), worker(), worker()]);
+}
+
 function renderQueue(root, params) {
-  const st = { view: params.get("view") || "ready", orders: [], counts: {}, selected: new Set(), q: "", searchResults: null };
+  const st = { view: params.get("view") || "ready", orders: [], counts: {}, selected: new Set(), q: "", searchResults: null, policy: "rule" };
   const chips = h("div", { class: "view-chips", role: "tablist" });
   const search = h("input", { class: "input", type: "search", placeholder: "Find any order — #, email or name", "aria-label": "Search orders" });
   const bulk = h("div", { class: "bulk-bar card", hidden: true });
@@ -144,7 +174,7 @@ function renderQueue(root, params) {
     allBox.onchange = () => { rows.forEach((o) => (allBox.checked ? st.selected.add(o.id) : st.selected.delete(o.id))); draw(); };
     mount(tableWrap, h("div", { class: "tbl-wrap" }, h("table", { class: "tbl queue" },
       h("thead", {}, h("tr", {}, h("th", { class: "chk" }, allBox),
-        ["Order", "Customer", "Items", "Weight", "Box", "Customer chose", "Paid", "Ship to", ""].map((x) => h("th", {}, x)))),
+        ["Order", "Customer", "Items", "Weight", "Box", "Customer chose", "Paid", "UPS quote · margin", "Ship to", ""].map((x) => h("th", { class: x === "Paid" ? "num" : null }, x)))),
       h("tbody", {}, rows.map((o) => {
         const box = h("input", { type: "checkbox", checked: st.selected.has(o.id), "aria-label": `Select ${o.name}` });
         box.onclick = (e) => e.stopPropagation();
@@ -160,6 +190,7 @@ function renderQueue(root, params) {
             o.plan.source !== "default" ? h("div", { class: "small muted" }, o.plan.source === "rule" ? "by rule" : "remembered") : null),
           h("td", {}, o.requestedService || "—", o.priority ? h("span", { class: "badge warn plain", style: { marginLeft: "6px" } }, "Priority") : null),
           h("td", { class: "num" }, money(o.shippingPaid, "USD")),
+          quoteCell(o),
           h("td", {}, [a.city, a.provinceCode].filter(Boolean).join(", "), o.international ? h("span", { class: "badge plain", style: { marginLeft: "6px" } }, a.countryCodeV2) : null),
           h("td", { class: "flags" },
             o.hold ? h("span", { class: "badge bad", title: o.hold }, "On hold") : null,
@@ -169,14 +200,43 @@ function renderQueue(root, params) {
             o.plan.signature ? h("span", { class: "badge plain" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null));
         return tr;
       })))));
+    refreshQuotes(rows);
   }
+
+  const cells = new Map();
+  function quoteCell(o) {
+    const td = h("td", { class: "quote" });
+    cells.set(o.id, td);
+    fillQuote(o, td);
+    return td;
+  }
+  function fillQuote(o, td = cells.get(o.id)) {
+    if (!td) return;
+    if (o.hasLabel) return mount(td, h("span", { class: "muted small" }, "—"));
+    if (o.international) return mount(td, h("span", { class: "muted small" }, "Open to quote"));
+    if (!o.plan.weightKnown) return mount(td, h("span", { class: "muted small" }, "Needs weight"));
+    const q = quoteCache.get(quoteKey(o));
+    if (!q || q.loading) return mount(td, h("span", { class: "skel-inline" }));
+    if (q.error) return mount(td, h("span", { class: "small neg", title: q.error }, "No quote"));
+    const r = pickRate(q.rates, st.policy, o.plan);
+    if (!r) return mount(td, h("span", { class: "small muted" }, "Service not offered"));
+    const m = o.shippingPaid - r.total;
+    td.title = q.rates.map((x) => `${x.serviceName}: ${money(x.total, "USD")} → ${marginText(o.shippingPaid - x.total)}`).join("\n");
+    mount(td, h("div", { class: "q-line" }, h("span", { class: "small" }, r.serviceName.replace(/^UPS /, "")), h("b", {}, money(r.total, "USD"))),
+      h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`));
+  }
+  const refreshQuotes = (rows) => loadQuotes(rows, (o) => { fillQuote(o); if (st.selected.has(o.id)) drawBulk(visible()); });
 
   function drawBulk(rows) {
     const picked = rows.filter((o) => st.selected.has(o.id));
     bulk.hidden = !picked.length;
     if (!picked.length) return;
     const policy = h("select", { class: "input", style: { width: "auto" }, "aria-label": "Service for these labels" },
-      POLICIES.map(([v, t]) => h("option", { value: v }, t)));
+      POLICIES.map(([v, t]) => h("option", { value: v, selected: v === st.policy }, t)));
+    policy.onchange = () => { st.policy = policy.value; for (const o of visible()) fillQuote(o); drawBulk(visible()); };
+    const quoted = picked.map((o) => [o, pickRate(quoteCache.get(quoteKey(o))?.rates, st.policy, o.plan)]).filter(([, r]) => r);
+    const est = quoted.reduce((n, [, r]) => n + r.total, 0);
+    const estMargin = quoted.reduce((n, [o, r]) => n + (o.shippingPaid - r.total), 0);
     const buy = h("button", { class: "btn primary" }, icon("printer"), `Buy ${picked.length} label${picked.length > 1 ? "s" : ""}`);
     buy.onclick = () => bulkBuy(picked, policy.value);
     const slips = h("button", { class: "btn" }, "Packing slips");
@@ -198,6 +258,9 @@ function renderQueue(root, params) {
       load();
     });
     mount(bulk, h("b", {}, `${picked.length} selected`),
+      quoted.length ? h("span", { class: "small", title: quoted.length < picked.length ? "Some selected orders have no quote yet" : null },
+        `Est. ${money(est, "USD")} · `, h("span", { class: "margin " + (estMargin >= 0 ? "pos" : "neg") }, `${marginText(estMargin)} margin`),
+        quoted.length < picked.length ? h("span", { class: "muted" }, ` (${quoted.length} of ${picked.length} quoted)`) : null) : null,
       h("div", { class: "row", style: { marginLeft: "auto" } }, h("span", { class: "small muted" }, "Service"), policy, buy, slips,
         picked.some((o) => !o.hold) ? hold : null, picked.some((o) => o.hold) ? release : null,
         h("button", { class: "btn ghost icon-only", "aria-label": "Clear selection", onclick: () => { st.selected.clear(); draw(); } }, icon("x"))));
@@ -275,81 +338,174 @@ async function openSlideout(order, opts = {}) {
   buildLabelForm(panel, order, presets, opts);
 }
 
+const WEIGHT_TO_LB = { POUNDS: 1, OUNCES: 1 / 16, KILOGRAMS: 2.20462, GRAMS: 0.00220462 };
+const lineWeight = (l) => {
+  const w = l.variant?.inventoryItem?.measurement?.weight;
+  return w && w.value > 0 ? w.value * (WEIGHT_TO_LB[w.unit] ?? 1) : null;
+};
+
+export function addressFromOrder(o) {
+  const a = o.shippingAddress || {};
+  return { name: a.name || "", company: a.company || "", phone: a.phone || o.phone || "", address1: a.address1 || "", address2: a.address2 || "", city: a.city || "", state: a.provinceCode || "", zip: a.zip || "", country: a.countryCodeV2 || "US", residential: !a.company };
+}
+
+const marginText = (m) => `${m >= 0 ? "+" : "−"}${money(Math.abs(m), "USD")}`;
+
 function buildLabelForm(root, o, presets, opts) {
   const plan = o?.plan;
-  const a = o?.shippingAddress || {};
   const s = {
-    to: o ? { name: a.name || "", company: a.company || "", phone: a.phone || o.phone || "", address1: a.address1 || "", address2: a.address2 || "", city: a.city || "", state: a.provinceCode || "", zip: a.zip || "", country: a.countryCodeV2 || "US", residential: !a.company } : { ...EMPTY_TO },
+    to: o ? addressFromOrder(o) : { ...EMPTY_TO },
     parcels: [],
     signature: plan?.signature || "",
     rates: [],
     rate: null,
-    itemsLbs: o?.itemsWeight ?? 0,
+    wantCode: null,
   };
   const round1 = (n) => Math.round(n * 10) / 10;
+  const lines = o ? o.lineItems.nodes.map((l) => ({ id: l.id, title: l.title + (l.variantTitle ? ` · ${l.variantTitle}` : ""), qty: l.quantity, lb: lineWeight(l), image: l.image?.url })) : [];
+  const weightsKnown = lines.length > 0 && lines.every((l) => l.lb !== null);
   const defaultBox = presets.find((b) => b.is_default) ?? presets[0];
-  if (plan) s.parcels = [{ preset: plan.preset?.id ?? "", ...plan.parcel, weight: plan.weightKnown ? plan.parcel.weight : "" }];
-  else s.parcels = [{ preset: defaultBox?.id ?? "", length: defaultBox?.length ?? "", width: defaultBox?.width ?? "", height: defaultBox?.height ?? "", weight: "" }];
+  const allIn = () => Object.fromEntries(lines.map((l) => [l.id, l.qty]));
+  if (plan) s.parcels = [{ preset: plan.preset?.id ?? "", ...plan.parcel, weight: plan.weightKnown ? plan.parcel.weight : "", alloc: allIn(), auto: false }];
+  else s.parcels = [{ preset: defaultBox?.id ?? "", length: defaultBox?.length ?? "", width: defaultBox?.width ?? "", height: defaultBox?.height ?? "", weight: "", alloc: allIn(), auto: false }];
   const paid = o ? o.shippingPaid : null;
+  const split = () => s.parcels.length > 1;
+  const boxWeight = (p) => presets.find((b) => String(b.id) === String(p.preset))?.weight ?? 0;
+  /** Box weight + items allocated to it (only when every product has a Shopify weight). */
+  const autoWeight = (p) => round1(Math.max(0.1, boxWeight(p) + lines.reduce((n, l) => n + (p.alloc[l.id] || 0) * l.lb, 0)));
+  const reweigh = () => { if (weightsKnown) for (const p of s.parcels) if (p.auto) p.weight = autoWeight(p); };
 
+  // ---- Rates load by themselves and refresh when anything that changes the price changes
   const ratesEl = h("div");
-  const resetRates = () => { s.rates = []; s.rate = null; drawRates(); };
+  let seq = 0;
+  let timer;
+  const ready = () => ["name", "address1", "city", "state", "zip", "country"].every((k) => String(s.to[k] ?? "").trim())
+    && s.parcels.every((p) => +p.length > 0 && +p.width > 0 && +p.weight > 0);
+  const quote = (delay = 600) => {
+    clearTimeout(timer);
+    if (s.rate) s.wantCode = s.rate.serviceCode;
+    if (!ready()) { s.rates = []; s.rate = null; drawRates(); return; }
+    ratesEl.classList.add("refreshing");
+    timer = setTimeout(fetchRates, delay);
+  };
+  async function fetchRates() {
+    const my = ++seq;
+    if (!s.rates.length) mount(ratesEl, h("div", { class: "rates-card" }, h("div", { class: "row small muted" }, spinner(), "Getting UPS rates…")));
+    try {
+      const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels.map(cleanParcel), signature: s.signature || undefined } });
+      if (my !== seq) return;
+      s.rates = rates;
+      const want = s.wantCode ?? plan?.service;
+      const fastest = [...rates].filter((r) => r.days).sort((x, y) => x.days - y.days || x.total - y.total)[0];
+      s.rate = (want === "fastest" ? fastest : rates.find((r) => r.serviceCode === want)) ?? rates[0] ?? null;
+      drawRates();
+    } catch (e) {
+      if (my !== seq) return;
+      s.rates = [];
+      s.rate = null;
+      mount(ratesEl, h("div", { class: "notice bad" }, e.message, " ", h("button", { class: "btn sm", onclick: () => quote(0) }, "Try again")));
+    } finally {
+      if (my === seq) ratesEl.classList.remove("refreshing");
+    }
+  }
+  const cleanParcel = (p) => ({
+    length: p.length, width: p.width, height: p.height, weight: p.weight,
+    box: presets.find((b) => String(b.id) === String(p.preset))?.name,
+    contents: split() ? lines.filter((l) => p.alloc[l.id] > 0).map((l) => ({ id: l.id, title: l.title, qty: p.alloc[l.id] })) : undefined,
+  });
+
   const field = (label, key, attrs = {}) => {
     const input = h("input", { class: "input", value: s.to[key] ?? "", ...attrs });
-    input.addEventListener("input", () => { s.to[key] = input.value; resetRates(); });
+    input.addEventListener("input", () => { s.to[key] = input.value; quote(900); });
     return h("label", { class: "field" }, label, input);
   };
 
+  // ---- Packages (+ which items go in each box)
   const parcelsEl = h("div", { class: "stack" });
-  const drawParcels = () => mount(parcelsEl, s.parcels.map((p, i) => {
-    const presetSel = h("select", { class: "input" },
-      h("option", { value: "" }, "Custom size"),
-      presets.map((b) => h("option", { value: b.id, selected: String(b.id) === String(p.preset) }, b.name + (b.is_default ? " (default)" : ""))));
-    presetSel.onchange = () => {
-      const b = presets.find((x) => String(x.id) === presetSel.value);
-      const old = presets.find((x) => String(x.id) === String(p.preset));
-      p.preset = presetSel.value;
-      if (b) {
-        Object.assign(p, { length: b.length, width: b.width, height: b.height });
-        if (p.weight !== "" && !Number.isNaN(+p.weight)) p.weight = round1(Math.max(0.1, +p.weight - (old?.weight ?? 0) + (b.weight ?? 0)));
-      }
-      drawParcels();
-      resetRates();
-    };
-    const num = (key, label) => {
-      const inp = h("input", { class: "input", type: "number", min: "0", step: key === "weight" ? "0.1" : "0.5", value: p[key], inputmode: "decimal" });
-      inp.oninput = () => { p[key] = inp.value; if (key !== "weight") p.preset = ""; resetRates(); };
-      return h("label", { class: "field" }, label, inp);
-    };
-    return h("div", { class: "parcel" },
-      h("label", { class: "field" }, s.parcels.length > 1 ? `Package ${i + 1}` : "Box", presetSel),
-      num("length", "L in"), num("width", "W in"), num("height", "H in"), num("weight", "Weight lb"),
-      s.parcels.length > 1 ? h("button", { class: "btn ghost sm icon-only", "aria-label": "Remove package", onclick: () => { s.parcels.splice(i, 1); drawParcels(); resetRates(); } }, icon("x")) : h("span"));
-  }));
+  const allocEl = h("div");
+  const drawParcels = () => {
+    mount(parcelsEl, s.parcels.map((p, i) => {
+      const presetSel = h("select", { class: "input" },
+        h("option", { value: "" }, "Custom size"),
+        presets.map((b) => h("option", { value: b.id, selected: String(b.id) === String(p.preset) }, b.name + (b.is_default ? " (default)" : ""))));
+      presetSel.onchange = () => {
+        const b = presets.find((x) => String(x.id) === presetSel.value);
+        const old = presets.find((x) => String(x.id) === String(p.preset));
+        p.preset = presetSel.value;
+        if (b) {
+          Object.assign(p, { length: b.length, width: b.width, height: b.height });
+          if (p.auto) p.weight = autoWeight(p);
+          else if (p.weight !== "" && !Number.isNaN(+p.weight)) p.weight = round1(Math.max(0.1, +p.weight - (old?.weight ?? 0) + (b.weight ?? 0)));
+        }
+        drawParcels();
+        quote();
+      };
+      const num = (key, label) => {
+        const inp = h("input", { class: "input", type: "number", min: "0", step: key === "weight" ? "0.1" : "0.5", value: p[key], inputmode: "decimal" });
+        inp.oninput = () => { p[key] = inp.value; if (key !== "weight") p.preset = ""; else p.auto = false; quote(); };
+        return h("label", { class: "field" }, key === "weight" && p.auto ? h("span", { title: "Box + the items in it, from Shopify product weights" }, "Weight lb · auto") : label, inp);
+      };
+      return h("div", { class: "parcel" },
+        h("label", { class: "field" }, split() ? `Box ${i + 1} of ${s.parcels.length}` : "Box", presetSel),
+        num("length", "L in"), num("width", "W in"), num("height", "H in"), num("weight", "Weight lb"),
+        split() ? h("button", { class: "btn ghost sm icon-only", "aria-label": `Remove box ${i + 1}`, onclick: () => removeBox(i) }, icon("x")) : h("span"));
+    }));
+    drawAlloc();
+  };
+  const addBox = () => {
+    const last = s.parcels.at(-1) ?? {};
+    s.parcels.push({ preset: last.preset ?? "", length: last.length, width: last.width, height: last.height, weight: "", alloc: Object.fromEntries(lines.map((l) => [l.id, 0])), auto: weightsKnown });
+    if (s.parcels.length === 2 && weightsKnown) s.parcels[0].auto = true;
+    if (lines.length) splitEvenly();
+    reweigh();
+    drawParcels();
+    quote();
+  };
+  const removeBox = (i) => {
+    const [gone] = s.parcels.splice(i, 1);
+    for (const l of lines) s.parcels[0].alloc[l.id] = (s.parcels[0].alloc[l.id] || 0) + (gone.alloc[l.id] || 0); // items go back to box 1
+    reweigh();
+    drawParcels();
+    quote();
+  };
+  /** Deal units out so each box gets about the same weight (heaviest units first). */
+  const splitEvenly = () => {
+    const units = lines.flatMap((l) => Array.from({ length: l.qty }, () => l)).sort((a, b) => (b.lb ?? 1) - (a.lb ?? 1));
+    const load = s.parcels.map(() => 0);
+    for (const p of s.parcels) for (const l of lines) p.alloc[l.id] = 0;
+    for (const u of units) {
+      const i = load.indexOf(Math.min(...load));
+      s.parcels[i].alloc[u.id]++;
+      load[i] += u.lb ?? 1;
+    }
+  };
+  const drawAlloc = () => {
+    if (!split() || !lines.length) return mount(allocEl);
+    const left = (l) => l.qty - s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0);
+    const anyLeft = lines.some((l) => left(l) !== 0);
+    const evenBtn = h("button", { class: "btn sm", onclick: () => { splitEvenly(); reweigh(); drawParcels(); quote(); } }, "Split evenly");
+    mount(allocEl, h("div", { class: "alloc card" },
+      h("div", { class: "row", style: { justifyContent: "space-between", marginBottom: "8px" } },
+        h("b", {}, "What goes in each box"), h("div", { class: "row", style: { gap: "6px" } },
+          anyLeft ? h("span", { class: "badge warn" }, "Some items aren't in a box") : h("span", { class: "badge good" }, "Every item is packed"), evenBtn)),
+      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl alloc-tbl" },
+        h("thead", {}, h("tr", {}, h("th", {}, "Item"), s.parcels.map((_, i) => h("th", { class: "num" }, `Box ${i + 1}`)), h("th", { class: "num" }, "Left"))),
+        h("tbody", {}, lines.map((l) => h("tr", {},
+          h("td", {}, h("div", { class: "alloc-item" }, l.image ? h("img", { src: l.image, alt: "" }) : null, h("span", {}, l.title, h("span", { class: "muted" }, ` × ${l.qty}`)))),
+          s.parcels.map((p) => {
+            const inp = h("input", { class: "input qty-in", type: "number", min: "0", max: String(l.qty), value: p.alloc[l.id] || 0, inputmode: "numeric", "aria-label": `${l.title} in box` });
+            inp.onchange = () => { p.alloc[l.id] = Math.max(0, Math.min(l.qty, Math.round(+inp.value || 0))); reweigh(); drawParcels(); quote(); };
+            return h("td", { class: "num" }, inp);
+          }),
+          h("td", { class: "num " + (left(l) ? "neg" : "muted") }, left(l))))),
+        h("tfoot", {}, h("tr", {}, h("td", { class: "small muted" }, weightsKnown ? "Box weight (box + items)" : "Product weights missing in Shopify — enter box weights above"),
+          s.parcels.map((p) => h("td", { class: "num small" }, p.weight ? lbOz(+p.weight) : "—")), h("td")))))));
+  };
   drawParcels();
 
   const sigSel = h("select", { class: "input" },
     [["", "No signature"], ["standard", "Signature required"], ["adult", "Adult signature required"]].map(([v, t]) => h("option", { value: v, selected: s.signature === v }, t)));
-  sigSel.onchange = () => { s.signature = sigSel.value; resetRates(); };
-
-  const getRates = h("button", { class: "btn primary" }, "Get UPS rates");
-  getRates.onclick = busy(getRates, async () => {
-    mount(ratesEl, h("div", { class: "card" }, skeletonRows(3)));
-    try {
-      const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels, signature: s.signature || undefined } });
-      s.rates = rates;
-      // Pre-pick what the rules asked for, else the cheapest
-      const want = plan?.service;
-      const fastest = [...rates].filter((r) => r.days).sort((x, y) => x.days - y.days || x.total - y.total)[0];
-      s.rate = (want === "fastest" ? fastest : rates.find((r) => r.serviceCode === want)) ?? rates[0] ?? null;
-      getRates.className = "btn";
-      getRates.textContent = "Refresh rates";
-    } catch (e) {
-      mount(ratesEl, h("div", { class: "notice bad" }, e.message));
-      return;
-    }
-    drawRates();
-  });
+  sigSel.onchange = () => { s.signature = sigSel.value; quote(0); };
 
   const holdBtn = o ? h("button", { class: "btn sm" }, o.hold ? "Release hold" : "Hold") : null;
   if (holdBtn) holdBtn.onclick = busy(holdBtn, async () => {
@@ -375,7 +531,7 @@ function buildLabelForm(root, o, presets, opts) {
         h("div", {}, h("div", { class: "lbl" }, "Customer paid for shipping"), h("b", {}, money(paid, "USD")))),
       plan?.rules?.matched?.length ? h("div", { class: "notice info", style: { marginTop: "10px" } }, icon("spark"), " Rules applied: ", plan.rules.matched.join(" · ")) : null,
       plan?.source === "learned" ? h("div", { class: "notice", style: { marginTop: "10px" } }, "Box and weight remembered from the last time these exact items shipped.") : null,
-      h("div", { class: "stack", style: { marginTop: "12px" } }, o.lineItems.nodes.map((l) =>
+      split() ? null : h("div", { class: "stack", style: { marginTop: "12px" } }, o.lineItems.nodes.map((l) =>
         h("div", { class: "line" },
           l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
           h("div", { style: { minWidth: 0 } }, h("div", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
@@ -387,36 +543,45 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "grid4" }, field("City", "city"), field("State", "state", { maxlength: 2 }), field("ZIP", "zip"), field("Country", "country", { maxlength: 2 })),
       h("div", { class: "grid2" }, field("Phone", "phone"), (() => {
         const r = h("input", { type: "checkbox", checked: s.to.residential });
-        r.onchange = () => { s.to.residential = r.checked; resetRates(); };
+        r.onchange = () => { s.to.residential = r.checked; quote(0); };
         return h("label", { class: "check", style: { alignSelf: "end", paddingBottom: "8px" } }, r, "Residential address");
       })())),
-    h("h3", { class: "section" }, "Package"),
+    h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "baseline" } },
+      h("h3", { class: "section" }, "Packages"),
+      h("span", { class: "small muted" }, "Too much for one box? Add boxes — each gets its own label and tracking number.")),
     parcelsEl,
     h("div", { class: "row", style: { marginTop: "10px" } },
       h("label", { class: "field", style: { minWidth: "220px" } }, "Delivery signature", sigSel),
-      h("button", { class: "btn sm ghost", style: { alignSelf: "end" }, onclick: () => { const last = s.parcels.at(-1) ?? {}; s.parcels.push({ ...last, weight: "" }); drawParcels(); resetRates(); } }, icon("plus"), "Add package"),
-      h("div", { style: { flex: 1 } }),
-      h("div", { style: { alignSelf: "end" } }, getRates)),
+      h("button", { class: "btn sm", style: { alignSelf: "end" }, onclick: addBox }, icon("plus"), "Add a box")),
+    allocEl,
     ratesEl);
 
   function drawRates() {
-    if (!s.rates.length) return mount(ratesEl);
+    if (!s.rates.length) {
+      return mount(ratesEl, ready() ? null : h("div", { class: "notice", style: { marginTop: "16px" } },
+        s.parcels.some((p) => !(+p.weight > 0)) ? "Enter the weight to see UPS rates and your margin." : "Finish the address and box size to see UPS rates."));
+    }
     const cheapest = Math.min(...s.rates.map((r) => r.total));
     const timed = s.rates.filter((r) => r.days);
     const fastestDays = timed.length ? Math.min(...timed.map((r) => r.days)) : null;
+    const best = paid !== null ? Math.max(...s.rates.map((r) => paid - r.total)) : null;
     const fulfill = h("input", { type: "checkbox", checked: !!o });
     const notify = h("input", { type: "checkbox", checked: true });
     const buy = h("button", { class: "btn primary", style: { height: "40px", padding: "0 18px" } });
-    const drawBuy = () => buy.replaceChildren(icon("printer"), s.rate ? `Buy & print · ${money(s.rate.total, s.rate.currency)}` : "Pick a service");
+    const drawBuy = () => buy.replaceChildren(icon("printer"), s.rate
+      ? `Buy ${split() ? `${s.parcels.length} labels` : "& print"} · ${money(s.rate.total, s.rate.currency)}${paid !== null ? ` · ${marginText(paid - s.rate.total)}` : ""}`
+      : "Pick a service");
     drawBuy();
     buy.onclick = busy(buy, async () => {
       if (!s.rate) return;
+      if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
+        && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
       const win = reserveWindow();
       try {
         const r = await api("/shipping/labels", {
           method: "POST",
           body: {
-            orderId: o?.id, ticketId: opts.ticketId ? Number(opts.ticketId) : undefined, to: s.to, parcels: s.parcels,
+            orderId: o?.id, ticketId: opts.ticketId ? Number(opts.ticketId) : undefined, to: s.to, parcels: s.parcels.map(cleanParcel),
             presetId: s.parcels.length === 1 && s.parcels[0].preset ? Number(s.parcels[0].preset) : undefined,
             serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal,
             labelFormat: labelFormat(), fulfill: fulfill.checked, notifyCustomer: notify.checked, signature: s.signature || undefined, batchId: newBatchId(),
@@ -432,8 +597,10 @@ function buildLabelForm(root, o, presets, opts) {
     });
     mount(ratesEl, h("div", { class: "rates-card" },
       h("div", { class: "row", style: { justifyContent: "space-between", marginBottom: "8px" } },
-        h("h3", { class: "section", style: { margin: 0 } }, "Service"),
-        paid !== null ? h("span", { class: "small muted" }, `Margin = ${money(paid, "USD")} paid − label`) : null),
+        h("h3", { class: "section", style: { margin: 0 } }, "Service", split() ? h("span", { class: "small muted", style: { fontWeight: 500 } }, ` · ${s.parcels.length} boxes, one shipment`) : null),
+        h("div", { class: "row", style: { gap: "8px" } },
+          paid !== null ? h("span", { class: "small muted" }, `Margin = ${money(paid, "USD")} paid − label`) : null,
+          h("button", { class: "btn sm ghost icon-only", title: "Refresh rates", "aria-label": "Refresh rates", onclick: () => quote(0) }, icon("refresh")))),
       h("div", { class: "rates", role: "radiogroup" }, s.rates.map((r) => {
         const margin = paid !== null ? paid - r.total : null;
         return h("div", {
@@ -448,10 +615,11 @@ function buildLabelForm(root, o, presets, opts) {
               h("span", { class: "small muted" }, r.days ? `Est. ${r.days} business day${r.days > 1 ? "s" : ""}` : "Transit time varies"),
               r.total === cheapest ? h("span", { class: "badge plain" }, "Cheapest") : null,
               fastestDays !== null && r.days === fastestDays ? h("span", { class: "badge plain" }, "Fastest") : null,
+              o?.requestedService && sameService(o.requestedService, r.serviceName) ? h("span", { class: "badge plain" }, "Customer's choice") : null,
               plan?.service === r.serviceCode ? h("span", { class: "badge plain" }, "By rule") : null)),
           h("div", { class: "price-col" },
             h("div", { class: "price" }, money(r.total, r.currency), r.listTotal > r.total ? h("span", { class: "list" }, money(r.listTotal, r.currency)) : null),
-            margin !== null ? h("div", { class: "margin " + (margin >= 0 ? "pos" : "neg") }, `${margin >= 0 ? "+" : "−"}${money(Math.abs(margin), "USD")} margin`) : null));
+            margin !== null ? h("div", { class: "margin " + (margin >= 0 ? "pos" : "neg"), title: margin === best ? "Best margin" : null }, `${marginText(margin)} margin`) : null));
       })),
       h("div", { class: "stack", style: { marginTop: "14px" } },
         o ? h("label", { class: "check" }, fulfill, "Mark the order fulfilled in Shopify with this tracking number") : null,
@@ -460,16 +628,43 @@ function buildLabelForm(root, o, presets, opts) {
   }
 
   function showPurchased(r) {
+    const boxes = s.parcels.map(cleanParcel);
     mount(ratesEl, h("div", { class: "card success-card fade-in" },
-      h("h2", {}, "Label bought"),
-      h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}`),
-      r.trackingNumbers.map((n) => h("div", { class: "tn" }, h("a", { href: `https://www.ups.com/track?tracknum=${n}`, target: "_blank", rel: "noopener" }, n))),
+      h("h2", {}, split() ? `${s.parcels.length} labels bought` : "Label bought"),
+      h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}${paid !== null ? ` · margin ${marginText(paid - r.cost)}` : ""}`),
+      r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
+        h("a", { href: `https://www.ups.com/track?tracknum=${n}`, target: "_blank", rel: "noopener" }, n))),
       r.fulfillError ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, `The label is fine, but marking the order fulfilled in Shopify failed: ${r.fulfillError}`) : null,
       h("div", { class: "row", style: { marginTop: "16px" } },
-        h("button", { class: "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), "Print again"),
+        h("button", { class: "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
+        split() && o ? h("button", { class: "btn", onclick: () => printBoxSlips(o, boxes, r.trackingNumbers) }, "Box contents slips") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: closeSlideout }, "Back to ticket") : null,
         h("button", { class: "btn", onclick: closeSlideout }, "Done"))));
   }
+
+  quote(0);
+}
+
+const sameService = (chosen, service) => {
+  const a = chosen.toLowerCase();
+  const b = service.toLowerCase().replace(/^ups\s+/, "");
+  return a.includes(b) || (b.includes("ground") && /ground|standard/.test(a)) || (b.includes("2nd day") && /2.?day|two.?day|express/.test(a)) || (b.includes("next day") && /next.?day|overnight/.test(a));
+};
+
+/** One 4×6 page per box: "Box 2 of 3", what's inside, its tracking number. */
+function printBoxSlips(o, boxes, tracking) {
+  const w = window.open("", "_blank");
+  if (!w) return toast("Allow pop-ups to print box slips", true);
+  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  w.document.write(`<!doctype html><title>${esc(o.name)} boxes</title><style>
+@page { size: 4in 6in; margin: 0.25in; } body { font: 12pt/1.35 Arial, sans-serif; margin: 0; }
+.page { page-break-after: always; } h1 { font-size: 22pt; margin: 0 0 4pt; } h2 { font-size: 13pt; margin: 0 0 10pt; font-weight: normal; }
+li { margin: 3pt 0; } .tn { font-family: monospace; font-size: 11pt; margin-top: 10pt; }</style>
+${boxes.map((b, i) => `<div class="page"><h1>Box ${i + 1} of ${boxes.length}</h1><h2>${esc(o.name)} · ${esc(o.shippingAddress?.name ?? "")}</h2>
+<ul>${(b.contents ?? []).map((c) => `<li><b>${c.qty} ×</b> ${esc(c.title)}</li>`).join("") || "<li>(no items assigned)</li>"}</ul>
+${tracking[i] ? `<div class="tn">UPS ${esc(tracking[i])}</div>` : ""}</div>`).join("")}
+<script>onload = () => print()</script>`);
+  w.document.close();
 }
 
 // ---------------------------------------------------------------- Batches
