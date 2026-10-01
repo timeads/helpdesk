@@ -1,0 +1,791 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-01T12:02:38Z",
+  "title": "Design System: Tuft the World Support",
+  "extensions": {
+    "colorMeta": {
+      "teal": {
+        "role": "secondary",
+        "displayName": "Storefront Teal",
+        "canonical": "#213838",
+        "oklch": "oklch(32.2% 0.029 196)",
+        "tonalRamp": [
+          "#000f0f",
+          "#122828",
+          "#2d4545",
+          "#4b6363",
+          "#6a8383",
+          "#8aa4a4",
+          "#afcaca",
+          "#d9f5f5"
+        ],
+        "dark": "#142222"
+      },
+      "teal-2": {
+        "role": "secondary",
+        "displayName": "Teal 2 (rail hover)",
+        "canonical": "#2b4646",
+        "oklch": "oklch(37.3% 0.033 196)",
+        "tonalRamp": [
+          "#000f10",
+          "#0e2929",
+          "#2a4545",
+          "#486464",
+          "#678483",
+          "#87a5a5",
+          "#adcbcb",
+          "#d6f6f6"
+        ],
+        "dark": "#1d3030"
+      },
+      "teal-3": {
+        "role": "secondary",
+        "displayName": "Teal 3 (rail active)",
+        "canonical": "#365555",
+        "oklch": "oklch(42.5% 0.037 196)",
+        "tonalRamp": [
+          "#000f10",
+          "#0a292a",
+          "#274646",
+          "#456464",
+          "#648484",
+          "#85a6a6",
+          "#aacccc",
+          "#d5f6f6"
+        ],
+        "dark": "#284040"
+      },
+      "teal-ink": {
+        "role": "secondary",
+        "displayName": "Teal Ink",
+        "canonical": "#1a2c2c",
+        "oklch": "oklch(27.8% 0.024 196)",
+        "tonalRamp": [
+          "#010e0e",
+          "#162828",
+          "#314444",
+          "#4e6262",
+          "#6e8282",
+          "#8ea3a3",
+          "#b3c9c9",
+          "#ddf4f4"
+        ]
+      },
+      "teal-soft": {
+        "role": "secondary",
+        "displayName": "Teal Wash",
+        "canonical": "#e3eeec",
+        "oklch": "oklch(94.0% 0.012 184)",
+        "tonalRamp": [
+          "#060d0c",
+          "#1e2625",
+          "#394240",
+          "#57605e",
+          "#76807e",
+          "#97a19f",
+          "#bcc7c5",
+          "#e6f1ef"
+        ],
+        "dark": "#1f3433",
+        "cssVar": "none: literal #e3eeec in .badge.open and select.status-open; dark literal #1f3433 with text #9fd0c8"
+      },
+      "on-teal": {
+        "role": "neutral",
+        "displayName": "Rail Cream",
+        "canonical": "#f3efe9",
+        "oklch": "oklch(95.4% 0.009 78)",
+        "tonalRamp": [
+          "#0d0b07",
+          "#26241f",
+          "#423f3a",
+          "#605d58",
+          "#807d77",
+          "#a19e98",
+          "#c7c3be",
+          "#f2eee8"
+        ],
+        "dark": "#ece6dd"
+      },
+      "on-teal-2": {
+        "role": "neutral",
+        "displayName": "Rail Sage",
+        "canonical": "#b9c8c4",
+        "oklch": "oklch(82.0% 0.017 178)",
+        "tonalRamp": [
+          "#040e0b",
+          "#1b2724",
+          "#364340",
+          "#54615e",
+          "#73817d",
+          "#94a29e",
+          "#b9c8c4",
+          "#e3f3ee"
+        ],
+        "dark": "#9fb2ae"
+      },
+      "ochre": {
+        "role": "primary",
+        "displayName": "Workshop Ochre",
+        "canonical": "#c78c2b",
+        "oklch": "oklch(68.2% 0.129 75)",
+        "tonalRamp": [
+          "#130900",
+          "#351f00",
+          "#5a3700",
+          "#825200",
+          "#a6710f",
+          "#c19659",
+          "#ddbf95",
+          "#fcecd6"
+        ],
+        "dark": "#d69a38"
+      },
+      "ochre-hover": {
+        "role": "primary",
+        "displayName": "Ochre Hover",
+        "canonical": "#b57b1d",
+        "oklch": "oklch(62.8% 0.124 73)",
+        "tonalRamp": [
+          "#140800",
+          "#351e00",
+          "#5b3700",
+          "#835100",
+          "#a87012",
+          "#c2955a",
+          "#debe96",
+          "#fdecd6"
+        ],
+        "dark": "#e3aa4b"
+      },
+      "ochre-text": {
+        "role": "primary",
+        "displayName": "Ochre Ink",
+        "canonical": "#8a5a10",
+        "oklch": "oklch(50.8% 0.103 71)",
+        "tonalRamp": [
+          "#140800",
+          "#361e00",
+          "#5c3600",
+          "#815200",
+          "#a3722f",
+          "#c3945b",
+          "#dfbe96",
+          "#feebd6"
+        ],
+        "dark": "#e4b062"
+      },
+      "ochre-soft": {
+        "role": "primary",
+        "displayName": "Ochre Wash",
+        "canonical": "#f7ecd8",
+        "oklch": "oklch(94.6% 0.029 83)",
+        "tonalRamp": [
+          "#110a00",
+          "#2b2313",
+          "#473e2e",
+          "#665c4b",
+          "#867c6a",
+          "#a79d8a",
+          "#cdc3af",
+          "#f8edd9"
+        ],
+        "dark": "#3a2d16"
+      },
+      "brick": {
+        "role": "tertiary",
+        "displayName": "Brick",
+        "canonical": "#b03424",
+        "oklch": "oklch(51.0% 0.163 31)",
+        "tonalRamp": [
+          "#170604",
+          "#3c1711",
+          "#662b22",
+          "#934134",
+          "#ba5f50",
+          "#d2887b",
+          "#ebb5ab",
+          "#ffe7e1"
+        ],
+        "dark": "#e0705f"
+      },
+      "brick-soft": {
+        "role": "tertiary",
+        "displayName": "Brick Wash",
+        "canonical": "#f8e3df",
+        "oklch": "oklch(93.2% 0.024 30)",
+        "tonalRamp": [
+          "#140706",
+          "#2f201d",
+          "#4c3b38",
+          "#6a5956",
+          "#8b7875",
+          "#ad9996",
+          "#d3bfbb",
+          "#fee9e5"
+        ],
+        "dark": "#3d201b"
+      },
+      "mint-soft": {
+        "role": "tertiary",
+        "displayName": "Mint Leaf Wash",
+        "canonical": "#e2f5e3",
+        "oklch": "oklch(95.1% 0.031 147)",
+        "tonalRamp": [
+          "#030f04",
+          "#1a281b",
+          "#354436",
+          "#526353",
+          "#728373",
+          "#92a493",
+          "#b8cab9",
+          "#e2f5e3"
+        ],
+        "dark": "#1d3a26"
+      },
+      "mint-ink": {
+        "role": "tertiary",
+        "displayName": "Mint Leaf Ink",
+        "canonical": "#1f5b2b",
+        "oklch": "oklch(41.9% 0.099 147)",
+        "tonalRamp": [
+          "#020f04",
+          "#0b2c12",
+          "#194c23",
+          "#326c3b",
+          "#528d5a",
+          "#76af7d",
+          "#a9d0ac",
+          "#e0f5e2"
+        ],
+        "dark": "#a8e3b0"
+      },
+      "stone": {
+        "role": "neutral",
+        "displayName": "Warm Stone",
+        "canonical": "#cec6bf",
+        "oklch": "oklch(83.1% 0.013 64)",
+        "tonalRamp": [
+          "#0f0a06",
+          "#29231d",
+          "#453e39",
+          "#635c56",
+          "#837c75",
+          "#a49d96",
+          "#cac2bb",
+          "#f5ede6"
+        ],
+        "dark": "#4a443d",
+        "cssVar": "--stone (aliased as --border-strong)"
+      },
+      "stone-2": {
+        "role": "neutral",
+        "displayName": "Stone Hairline",
+        "canonical": "#e6e0da",
+        "oklch": "oklch(91.0% 0.010 68)",
+        "tonalRamp": [
+          "#0e0a07",
+          "#28231f",
+          "#443f3a",
+          "#625d57",
+          "#827c77",
+          "#a39d98",
+          "#c9c3bd",
+          "#f3ede7"
+        ],
+        "dark": "#34302b",
+        "cssVar": "--stone-2 (aliased as --border)"
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 90)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ],
+        "dark": "#1a1918"
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Warm Panel",
+        "canonical": "#f8f6f3",
+        "oklch": "oklch(97.4% 0.005 78)",
+        "tonalRamp": [
+          "#0c0b09",
+          "#252422",
+          "#413f3d",
+          "#5f5d5b",
+          "#7f7d7a",
+          "#a09e9b",
+          "#c6c4c1",
+          "#f0eeeb"
+        ],
+        "dark": "#161514"
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Paper Surface",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 90)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ],
+        "dark": "#211f1d"
+      },
+      "sunken": {
+        "role": "neutral",
+        "displayName": "Sunken Stone",
+        "canonical": "#efebe6",
+        "oklch": "oklch(94.2% 0.008 74)",
+        "tonalRamp": [
+          "#0d0b08",
+          "#262320",
+          "#423f3b",
+          "#605d59",
+          "#807d78",
+          "#a19e99",
+          "#c7c3bf",
+          "#f2eee9"
+        ],
+        "dark": "#2b2825"
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover Linen",
+        "canonical": "#f3efea",
+        "oklch": "oklch(95.4% 0.008 74)",
+        "tonalRamp": [
+          "#0d0b08",
+          "#262320",
+          "#423f3b",
+          "#605d59",
+          "#807d78",
+          "#a19e99",
+          "#c7c3bf",
+          "#f2eee9"
+        ],
+        "dark": "#26231f"
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Charcoal",
+        "canonical": "#2b2b2b",
+        "oklch": "oklch(28.9% 0.000 90)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ],
+        "dark": "#efebe5"
+      },
+      "text-2": {
+        "role": "neutral",
+        "displayName": "Umber",
+        "canonical": "#565049",
+        "oklch": "oklch(43.5% 0.014 72)",
+        "tonalRamp": [
+          "#0f0a05",
+          "#28231d",
+          "#443f38",
+          "#635c55",
+          "#837c75",
+          "#a49d95",
+          "#cac3bb",
+          "#f4ede5"
+        ],
+        "dark": "#c3bbb0"
+      },
+      "text-3": {
+        "role": "neutral",
+        "displayName": "Taupe",
+        "canonical": "#6c655d",
+        "oklch": "oklch(51.1% 0.015 71)",
+        "tonalRamp": [
+          "#0f0a05",
+          "#29231c",
+          "#453f37",
+          "#635c54",
+          "#837c74",
+          "#a59d94",
+          "#cbc3ba",
+          "#f5ede4"
+        ],
+        "dark": "#978f84"
+      },
+      "out": {
+        "role": "neutral",
+        "displayName": "Sent Sage",
+        "canonical": "#edf3f1",
+        "oklch": "oklch(95.9% 0.007 174)",
+        "tonalRamp": [
+          "#080c0b",
+          "#212524",
+          "#3c413f",
+          "#5a5f5d",
+          "#797f7d",
+          "#9aa09e",
+          "#c0c6c4",
+          "#eaf0ee"
+        ],
+        "dark": "#1c2a28"
+      },
+      "out-border": {
+        "role": "neutral",
+        "displayName": "Sent Sage Border",
+        "canonical": "#d4e2de",
+        "oklch": "oklch(90.1% 0.016 177)",
+        "tonalRamp": [
+          "#050d0b",
+          "#1c2724",
+          "#37433f",
+          "#55615d",
+          "#74817d",
+          "#95a29e",
+          "#bac8c4",
+          "#e4f2ee"
+        ],
+        "dark": "#2c403c"
+      },
+      "note": {
+        "role": "neutral",
+        "displayName": "Note Parchment",
+        "canonical": "#fbf2df",
+        "oklch": "oklch(96.3% 0.027 86)",
+        "tonalRamp": [
+          "#100a01",
+          "#2a2315",
+          "#463f30",
+          "#645d4d",
+          "#847c6b",
+          "#a69e8c",
+          "#ccc3b1",
+          "#f7eedb"
+        ],
+        "dark": "#2f2716"
+      },
+      "note-border": {
+        "role": "neutral",
+        "displayName": "Note Parchment Border",
+        "canonical": "#ecd6a6",
+        "oklch": "oklch(88.3% 0.067 86)",
+        "tonalRamp": [
+          "#110a00",
+          "#312100",
+          "#4f3d0e",
+          "#6e5b2e",
+          "#8f7b4e",
+          "#b19c6e",
+          "#d7c294",
+          "#f9edd5"
+        ],
+        "dark": "#54441f"
+      },
+      "select": {
+        "role": "neutral",
+        "displayName": "Selected Cream",
+        "canonical": "#fff8ea",
+        "oklch": "oklch(98.1% 0.020 85)",
+        "tonalRamp": [
+          "#0f0a03",
+          "#282319",
+          "#453f34",
+          "#635d51",
+          "#837d70",
+          "#a49e91",
+          "#cac3b6",
+          "#f5eee0"
+        ],
+        "dark": "#2a2416"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Wordmark",
+        "purpose": "Abril Fatface, uppercase: the Tuft the World wordmark only (21px rail, 30px login, 26px first-letter monogram in the icon rail)."
+      },
+      "headline": {
+        "displayName": "Page Title",
+        "purpose": "Settings and Shipping page titles."
+      },
+      "title": {
+        "displayName": "Ticket Title",
+        "purpose": "Ticket subject (18px) and list pane title (19px); 16.5px on phones."
+      },
+      "title-sm": {
+        "displayName": "Card Title",
+        "purpose": "Card titles, customer name (17px), empty-state headings (17px)."
+      },
+      "body": {
+        "displayName": "UI Body",
+        "purpose": "All interface text, tabular numerals; 15px on phones."
+      },
+      "body-read": {
+        "displayName": "Reading Body",
+        "purpose": "Roboto for mail, composer, notes, snippets and descriptive copy; 72ch max."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Field labels, badges (11.5px), table headers, sub-labels."
+      },
+      "label-rail": {
+        "displayName": "Rail Group Label",
+        "purpose": "Uppercase tracked group headers inside the teal rail only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-sm",
+        "value": "0 1px 2px rgba(33, 56, 56, .08)",
+        "purpose": "Hairline lift for cards, incoming messages, primary button, active row, open order.",
+        "dark": "0 1px 2px rgba(0, 0, 0, .4)"
+      },
+      {
+        "name": "shadow",
+        "value": "0 2px 4px rgba(33, 56, 56, .06), 0 12px 32px -8px rgba(33, 56, 56, .18)",
+        "purpose": "Float for menus and toasts.",
+        "dark": "0 2px 4px rgba(0, 0, 0, .3), 0 12px 32px -8px rgba(0, 0, 0, .6)"
+      },
+      {
+        "name": "focus-halo",
+        "value": "0 0 0 3px var(--ochre-soft)",
+        "purpose": "Focused inputs, composer frame, selected rate."
+      },
+      {
+        "name": "focus-ring",
+        "value": "outline: 2px solid var(--ochre); outline-offset: 2px",
+        "purpose": "Global :focus-visible ring."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "The single ease-out curve for every transition and entrance."
+      },
+      {
+        "name": "duration-press",
+        "value": "100ms",
+        "purpose": "Button press translateY(1px)."
+      },
+      {
+        "name": "duration-state",
+        "value": "150ms",
+        "purpose": "Hover, border and focus changes (120ms on ticket rows)."
+      },
+      {
+        "name": "duration-enter",
+        "value": "180–250ms",
+        "purpose": "Menu pop 180ms, fade-in 220ms, toast pop and phone customer sheet 250ms, row leave 200ms."
+      },
+      {
+        "name": "shimmer",
+        "value": "1.2s linear infinite",
+        "purpose": "Skeleton bars."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "durations to .01ms",
+        "purpose": "All animation and transition removed under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "composer-hints",
+        "value": "1500px",
+        "purpose": "kbd hints hide in the composer bar below this."
+      },
+      {
+        "name": "narrow-desktop",
+        "value": "1320px",
+        "purpose": "List 300px, customer 312px."
+      },
+      {
+        "name": "icon-rail",
+        "value": "1240px",
+        "purpose": "Rail collapses to 64px icons; three panes kept."
+      },
+      {
+        "name": "stack",
+        "value": "1023px",
+        "purpose": "Customer column stacks below conversation; shipping one column."
+      },
+      {
+        "name": "phone",
+        "value": "760px",
+        "purpose": "Bottom teal tab bar, one pane at a time, customer as full-screen sheet."
+      }
+    ],
+    "darkScheme": "prefers-color-scheme: dark overrides the same custom properties; per-color values are in colorMeta.*.dark. Primary button text becomes #1a1206 in dark."
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one ochre action per screen (Send & close, Get UPS rates, Buy label, a dirty Save).",
+      "html": "<button class=\"ds-btn ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m22 2-7 20-4-9-9-4Z\"/><path d=\"M22 2 11 13\"/></svg>Send &amp; close</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:7px;border:1px solid var(--border-strong,#cec6bf);background:var(--surface,#fff);color:var(--text,#2b2b2b);font:600 13.5px \"Chivo\",system-ui,sans-serif;cursor:pointer;transition:background .15s cubic-bezier(.16,1,.3,1),border-color .15s cubic-bezier(.16,1,.3,1),transform .1s cubic-bezier(.16,1,.3,1)}.ds-btn:active{transform:translateY(1px)}.ds-btn:focus-visible{outline:2px solid var(--ochre,#c78c2b);outline-offset:2px}.ds-btn-primary{background:var(--ochre,#c78c2b);border-color:var(--ochre,#c78c2b);color:var(--teal-ink,#1a2c2c);box-shadow:0 1px 2px rgba(33,56,56,.08)}.ds-btn-primary:hover{background:var(--ochre-hover,#b57b1d);border-color:var(--ochre-hover,#b57b1d)}"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Outlined resting state for Save and secondary actions; Save turns primary only when its form is dirty.",
+      "html": "<button class=\"ds-btn-default\">Save</button>",
+      "css": ".ds-btn-default{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:7px;border:1px solid var(--border-strong,#cec6bf);background:var(--surface,#fff);color:var(--text,#2b2b2b);font:600 13.5px \"Chivo\",system-ui,sans-serif;cursor:pointer;transition:background .15s cubic-bezier(.16,1,.3,1),transform .1s cubic-bezier(.16,1,.3,1)}.ds-btn-default:hover{background:var(--hover,#f3efea)}.ds-btn-default:active{transform:translateY(1px)}.ds-btn-default:focus-visible{outline:2px solid var(--ochre,#c78c2b);outline-offset:2px}"
+    },
+    {
+      "name": "Dark Button",
+      "kind": "button",
+      "refersTo": "button-dark",
+      "description": "Teal strong-secondary for store actions (Ship, Add note, Sign in with Google).",
+      "html": "<button class=\"ds-btn-dark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 17h4V5H2v12h3\"/><path d=\"M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1\"/><circle cx=\"7.5\" cy=\"17.5\" r=\"2.5\"/><circle cx=\"17.5\" cy=\"17.5\" r=\"2.5\"/></svg>Ship</button>",
+      "css": ".ds-btn-dark{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:7px;border:1px solid var(--teal,#213838);background:var(--teal,#213838);color:var(--on-teal,#f3efe9);font:600 13.5px \"Chivo\",system-ui,sans-serif;cursor:pointer;transition:background .15s cubic-bezier(.16,1,.3,1)}.ds-btn-dark:hover{background:var(--teal-2,#2b4646)}.ds-btn-dark:active{transform:translateY(1px)}.ds-btn-dark:focus-visible{outline:2px solid var(--ochre,#c78c2b);outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Danger Button",
+      "kind": "button",
+      "refersTo": "button-ghost-danger",
+      "description": "Destructive actions (Delete, Remove, Void, Disconnect): brick text, no border.",
+      "html": "<button class=\"ds-btn-ghost-danger\">Delete</button>",
+      "css": ".ds-btn-ghost-danger{display:inline-flex;align-items:center;height:30px;padding:0 10px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--brick,#b03424);font:600 12.5px \"Chivo\",system-ui,sans-serif;cursor:pointer;transition:background .15s cubic-bezier(.16,1,.3,1)}.ds-btn-ghost-danger:hover{background:var(--brick-soft,#f8e3df)}.ds-btn-ghost-danger:focus-visible{outline:2px solid var(--ochre,#c78c2b);outline-offset:2px}"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Stone-outlined field with ochre focus and a 3px ochre-wash halo.",
+      "html": "<label class=\"ds-field\">Name<input class=\"ds-input\" placeholder=\"name@tufttheworld.com\"></label>",
+      "css": ".ds-field{display:grid;gap:5px;font:600 12px \"Chivo\",system-ui,sans-serif;color:var(--text-2,#565049);width:280px}.ds-input{min-height:36px;padding:7px 11px;border-radius:7px;border:1px solid var(--border-strong,#cec6bf);background:var(--surface,#fff);color:var(--text,#2b2b2b);font:400 14px \"Chivo\",system-ui,sans-serif;outline:none;caret-color:var(--ochre,#c78c2b);transition:border-color .15s,box-shadow .15s}.ds-input::placeholder{color:var(--text-3,#6c655d)}.ds-input:hover{border-color:var(--text-3,#6c655d)}.ds-input:focus{border-color:var(--ochre,#c78c2b);box-shadow:0 0 0 3px var(--ochre-soft,#f7ecd8)}"
+    },
+    {
+      "name": "Status Badges",
+      "kind": "chip",
+      "refersTo": "badge-open",
+      "description": "Pill badges with a leading dot in brand tones: open, pending, good, bad, closed.",
+      "html": "<span class=\"ds-badge ds-open\">Open</span> <span class=\"ds-badge ds-pending\">Unfulfilled</span> <span class=\"ds-badge ds-good\">Paid</span> <span class=\"ds-badge ds-bad\">Refunded</span> <span class=\"ds-badge ds-closed\">Closed</span>",
+      "css": ".ds-badge{display:inline-flex;align-items:center;gap:5px;height:21px;padding:0 8px;border-radius:999px;font:600 11.5px \"Chivo\",system-ui,sans-serif;white-space:nowrap}.ds-badge::before{content:\"\";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85}.ds-open{background:#e3eeec;color:var(--teal,#213838)}.ds-pending{background:var(--ochre-soft,#f7ecd8);color:var(--ochre-text,#8a5a10)}.ds-good{background:var(--mint-soft,#e2f5e3);color:var(--mint-ink,#1f5b2b)}.ds-bad{background:var(--brick-soft,#f8e3df);color:var(--brick,#b03424)}.ds-closed{background:var(--sunken,#efebe6);color:var(--text-3,#6c655d)}"
+    },
+    {
+      "name": "Teal Rail",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "The store-teal rail with cut-pile dot texture, wordmark lockup, and ochre-accented active item.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-brand\" href=\"#\"><span class=\"ds-word\">Tuft the World</span><span class=\"ds-sub\">Support desk</span></a><div class=\"ds-nav-label\">Tickets</div><a class=\"ds-nav-item\" href=\"#\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"8\" r=\"4\"/><path d=\"M4 21a8 8 0 0 1 16 0\"/></svg>Assigned to me<span class=\"ds-count\">1</span></a><a class=\"ds-nav-item ds-active\" href=\"#\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M22 12h-6l-2 3h-4l-2-3H2\"/><path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"/></svg>All open<span class=\"ds-count\">3</span></a></nav>",
+      "css": ".ds-rail{position:relative;overflow:hidden;width:228px;padding:18px 12px 12px;background:var(--teal,#213838);color:var(--on-teal,#f3efe9);display:flex;flex-direction:column;gap:1px;font-family:\"Chivo\",system-ui,sans-serif}.ds-rail::before{content:\"\";position:absolute;inset:0;pointer-events:none;opacity:.07;background-image:radial-gradient(circle at 50% 50%,#f3efe9 0 1.1px,transparent 1.6px);background-size:7px 7px;-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 55%);mask-image:linear-gradient(180deg,transparent 0%,#000 55%)}.ds-rail>*{position:relative}.ds-brand{display:grid;gap:3px;padding:2px 10px 22px;text-decoration:none;color:var(--on-teal,#f3efe9)}.ds-word{font:400 21px/1 \"Abril Fatface\",Georgia,serif;letter-spacing:.02em;text-transform:uppercase}.ds-sub{font:700 10.5px \"Chivo\",system-ui,sans-serif;letter-spacing:.22em;text-transform:uppercase;color:var(--ochre,#c78c2b)}.ds-nav-label{font:600 10.5px \"Chivo\",system-ui,sans-serif;text-transform:uppercase;letter-spacing:.16em;color:var(--on-teal-2,#b9c8c4);opacity:.8;padding:16px 10px 7px}.ds-nav-item{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:7px;color:var(--on-teal-2,#b9c8c4);text-decoration:none;font-weight:500;font-size:13.5px;transition:background .15s cubic-bezier(.16,1,.3,1),color .15s cubic-bezier(.16,1,.3,1)}.ds-nav-item:hover{background:var(--teal-2,#2b4646);color:var(--on-teal,#f3efe9)}.ds-nav-item:focus-visible{outline:2px solid var(--ochre,#c78c2b);outline-offset:2px}.ds-nav-item.ds-active{background:var(--teal-3,#365555);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}.ds-nav-item.ds-active svg{color:var(--ochre,#c78c2b)}.ds-count{margin-left:auto;min-width:22px;height:20px;padding:0 6px;border-radius:999px;display:inline-grid;place-items:center;font-size:11.5px;font-weight:700;background:rgba(255,255,255,.07)}.ds-active .ds-count{background:var(--ochre,#c78c2b);color:var(--teal-ink,#1a2c2c)}"
+    },
+    {
+      "name": "Ticket Row",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "Queue row: ochre unread dot, bold name, ochre-ink time, Roboto snippet; active row lifts to a white card.",
+      "html": "<div class=\"ds-list\"><a class=\"ds-row ds-unread\" href=\"#\"><span class=\"ds-top\"><b>Priya Patel</b><span class=\"ds-when\">5h</span></span><span class=\"ds-subj\">Workshop gift card question</span><span class=\"ds-snip\">Can a gift card be used for the Saturday rug workshop at the Bok Building?</span></a><a class=\"ds-row ds-active\" href=\"#\"><span class=\"ds-top\"><b>Jane Doe</b><span class=\"ds-when\">1h</span></span><span class=\"ds-subj\">Where is my tufting gun order?</span><span class=\"ds-snip\">Hi! I ordered the AK-I tufting gun last week and haven't received a tracking number yet.</span></a></div>",
+      "css": ".ds-list{width:320px;padding:6px 8px;background:var(--panel,#f8f6f3);font:14px/1.45 \"Chivo\",system-ui,sans-serif;color:var(--text,#2b2b2b)}.ds-row{display:grid;gap:3px;padding:11px 12px 12px 22px;border-radius:7px;margin-bottom:2px;position:relative;text-decoration:none;color:inherit;transition:background .12s cubic-bezier(.16,1,.3,1)}.ds-row:hover{background:var(--hover,#f3efea)}.ds-row:focus-visible{outline:2px solid var(--ochre,#c78c2b);outline-offset:2px}.ds-row.ds-active{background:var(--surface,#fff);box-shadow:0 1px 2px rgba(33,56,56,.08),inset 0 0 0 1px var(--border,#e6e0da)}.ds-unread::before{content:\"\";position:absolute;left:9px;top:17px;width:7px;height:7px;border-radius:50%;background:var(--ochre,#c78c2b)}.ds-top{display:flex;gap:8px;align-items:baseline}.ds-top b{flex:1;font-weight:500}.ds-unread .ds-top b{font-weight:700}.ds-when{font-size:12px;color:var(--text-3,#6c655d)}.ds-unread .ds-when{color:var(--ochre-text,#8a5a10);font-weight:600}.ds-subj{font-size:13.5px;color:var(--text-2,#565049)}.ds-unread .ds-subj{color:var(--text,#2b2b2b)}.ds-snip{font:12.5px/1.45 \"Roboto\",system-ui,sans-serif;color:var(--text-3,#6c655d);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}"
+    },
+    {
+      "name": "Conversation Items",
+      "kind": "card",
+      "refersTo": "message-in",
+      "description": "Incoming white message, outgoing sage message, and dashed parchment internal note.",
+      "html": "<div class=\"ds-thread\"><article class=\"ds-msg\"><div class=\"ds-mh\"><b>Marcus Lee</b><span>Oct 1, 8:34 AM</span></div><p>Amazing, thank you! Do you have a tracking number yet?</p></article><article class=\"ds-msg ds-out\"><div class=\"ds-mh\"><b>Tuft the World Support</b><span>Sep 30, 3:34 PM</span></div><p>So sorry about that, Marcus! We'll send Mustard out today.</p></article><div class=\"ds-note\"><div class=\"ds-nh\">Internal note · Tim</div>Replacement packed, ship Ground.</div></div>",
+      "css": ".ds-thread{display:flex;flex-direction:column;gap:14px;width:420px;padding:16px;background:var(--bg,#fff)}.ds-msg{background:var(--surface,#fff);border:1px solid var(--border,#e6e0da);border-radius:12px;box-shadow:0 1px 2px rgba(33,56,56,.08);margin-right:auto;width:90%}.ds-msg.ds-out{background:var(--out,#edf3f1);border-color:var(--out-border,#d4e2de);box-shadow:none;margin-left:auto;margin-right:0}.ds-mh{display:flex;gap:10px;padding:12px 16px 0;font:700 13.5px \"Chivo\",system-ui,sans-serif;color:var(--text,#2b2b2b)}.ds-mh span{margin-left:auto;font-weight:400;font-size:12px;color:var(--text-3,#6c655d)}.ds-msg p{margin:0;padding:10px 16px 14px;font:14.5px/1.6 \"Roboto\",system-ui,sans-serif;color:var(--text,#2b2b2b)}.ds-note{background:var(--note,#fbf2df);border:1px dashed var(--note-border,#ecd6a6);border-radius:12px;padding:11px 16px 12px;margin-right:auto;font:14px/1.55 \"Roboto\",system-ui,sans-serif;color:var(--text,#2b2b2b)}.ds-nh{font:700 12px \"Chivo\",system-ui,sans-serif;color:var(--ochre-text,#8a5a10);margin-bottom:4px}"
+    },
+    {
+      "name": "Inbox Zero Rug",
+      "kind": "custom",
+      "description": "Empty-inbox art: a round tufted rug from above in brand yarns, above a short title and message.",
+      "html": "<div class=\"ds-empty\"><svg width=\"120\" height=\"120\" viewBox=\"0 0 120 120\" aria-hidden=\"true\"><circle cx=\"60\" cy=\"60\" r=\"54\" fill=\"#213838\"/><circle cx=\"60\" cy=\"60\" r=\"46\" fill=\"none\" stroke=\"#c78c2b\" stroke-width=\"7\" stroke-dasharray=\"3 2.4\"/><circle cx=\"60\" cy=\"60\" r=\"35\" fill=\"none\" stroke=\"#cec6bf\" stroke-width=\"7\" stroke-dasharray=\"3 2.4\"/><circle cx=\"60\" cy=\"60\" r=\"24\" fill=\"none\" stroke=\"#b03424\" stroke-width=\"7\" stroke-dasharray=\"3 2.4\"/><circle cx=\"60\" cy=\"60\" r=\"13\" fill=\"#b4eaba\"/><path d=\"M54 60.5l4.2 4.2L67 56\" fill=\"none\" stroke=\"#213838\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><h2>Inbox zero</h2><p>Nothing waiting. New email shows up here.</p></div>",
+      "css": ".ds-empty{padding:56px 28px;text-align:center;display:grid;justify-items:center;gap:6px;color:var(--text-3,#6c655d);font:14px/1.5 \"Chivo\",system-ui,sans-serif}.ds-empty svg{margin-bottom:4px}.ds-empty h2{margin:6px 0 0;font:700 17px \"Chivo\",system-ui,sans-serif;color:var(--text,#2b2b2b)}.ds-empty p{margin:0;max-width:34ch}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Shop Counter",
+    "overview": "This is the store's own counter, not a SaaS dashboard. The helpdesk wears the Tuft the World shopfront: the deep teal of the store's top bar becomes a full-height rail, ochre is the colour of the one thing to do next, and everything else is white paper and warm stone hairlines. The work surface is a dense, quiet three-pane desk (queue, conversation, customer with orders) built for fast passes through a short queue, with the brand carried by colour, type and one material detail rather than by decoration.\n\nThe material detail is yarn. The rail carries a faint cut-pile texture, a 7px grid of dots like the back of a tufted rug, fading in from the top. The same material returns in the inbox-zero art, a round tufted rug seen from above in brand yarns. Mail is set in Roboto so customers' words read like a letter; the interface around them is set in Chivo; Abril Fatface appears only in the wordmark.\n\nThe system ships both schemes from one token set. Dark mode keeps the teal rail, warms the neutrals to a dark brown-grey paper, and lightens ochre and brick so they still read as text.",
+    "keyCharacteristics": [
+      "Teal rail, white work surface, warm-stone hairlines; a second neutral layer (panel) behind the list and customer columns.",
+      "One ochre primary action per screen; everything else is outlined, dark teal, or ghost.",
+      "Chivo for UI, Roboto for mail and descriptive copy, Abril Fatface for the wordmark only.",
+      "Status is spoken in brand tones: teal open, ochre pending, mint good, brick bad, sunken closed.",
+      "Flat surfaces with hairline borders; shadows are a whisper (shadow-sm) except for floating layers.",
+      "Motion is short and decelerating (150–250ms on a single ease-out curve), and is removed under reduced motion."
+    ],
+    "rules": [
+      {
+        "name": "The One Ochre Rule",
+        "body": "Each screen has at most one filled ochre button. Save buttons render as outlined default buttons and only turn ochre when their own card or saved-reply row becomes dirty; they drop back after a successful save.",
+        "section": "colors"
+      },
+      {
+        "name": "The Brand Tone Rule",
+        "body": "Status is coloured only with brand tones: teal for open, ochre for pending or warning, mint for good, brick for bad, sunken stone for closed. No other hue is introduced for state.",
+        "section": "colors"
+      },
+      {
+        "name": "The Teal Is The Store Rule",
+        "body": "Teal is the structural brand surface (rail, toasts, dark buttons, success). It is never used as a large fill inside the work area other than the shipping success card.",
+        "section": "colors"
+      },
+      {
+        "name": "The Wordmark Only Rule",
+        "body": "Abril Fatface sets the brand wordmark and nothing else: never a heading, number, or empty-state title.",
+        "section": "typography"
+      },
+      {
+        "name": "The Letter And Desk Rule",
+        "body": "Words the customer wrote, or words that will be sent to them, are set in Roboto. Words the interface speaks are set in Chivo.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Numerals are tabular everywhere so counts, times and prices align in lists.",
+        "section": "typography"
+      },
+      {
+        "name": "The Whisper Rule",
+        "body": "Resting surfaces get at most the hairline lift. The float shadow is reserved for layers that overlap content.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Outgoing Is Flat Rule",
+        "body": "Outgoing messages drop their shadow and take the sage tint; incoming messages keep the hairline lift.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep a single filled ochre action per screen; render every other action outlined, dark teal, or ghost, and let Save turn ochre only when its own form is dirty.",
+      "**Do** colour status with the brand tones only: teal-soft/teal (open), ochre-soft/ochre-text (pending), mint-soft/mint-ink (good), brick-soft/brick (bad), sunken/text-3 (closed).",
+      "**Do** set customer and outgoing mail in Roboto 14.5px/1.6 and interface text in Chivo 14px/1.45 with tabular numerals.",
+      "**Do** separate panes and rows with 1px stone hairlines and the white-on-panel tonal step before reaching for shadow.",
+      "**Do** animate with the one ease-out curve, cubic-bezier(.16, 1, .3, 1), at 150ms for state changes and 180–250ms for entrances (menus, toasts, sheet), and honour reduced motion.",
+      "**Do** show loading as skeleton rows shaped like the content they replace.",
+      "**Do** use the dot grid (radial dots on a 7–9px pitch, 7–8% opacity) only on teal brand surfaces: the rail and the login ground."
+    ],
+    "donts": [
+      "**Don't** set anything but the wordmark in Abril Fatface.",
+      "**Don't** introduce a second accent hue or a generic success green; good is mint, danger is brick.",
+      "**Don't** use brick for anything but destructive actions, errors and link hover.",
+      "**Don't** put uppercase letter-spaced labels above content headings; tracked uppercase lives only in the wordmark lockup and the rail group headers.",
+      "**Don't** give resting cards anything heavier than the hairline lift, or use offset hard shadows.",
+      "**Don't** fill large areas of the work surface with teal; the rail, toasts, dark buttons and the shipping success card are its places."
+    ]
+  }
+}

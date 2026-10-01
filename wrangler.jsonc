@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "helpdesk",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/auth/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "helpdesk",
+      // Replace with the id printed by `npx wrangler d1 create helpdesk`
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Pull new mail from Gmail every minute
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    "APP_NAME": "Tuft the World Support",
+    "SUPPORT_EMAIL": "support@tufttheworld.com",
+    // Comma-separated Google accounts allowed to sign in as admins on first login
+    "ADMIN_EMAILS": "kingtuft@tufttheworld.com",
+    "SHOPIFY_SHOP": "tufttheworld.myshopify.com",
+    "SHOPIFY_API_VERSION": "2026-07",
+    // "production" or "test" (UPS Customer Integration Environment — no real charges)
+    "UPS_ENV": "test",
+    "AI_MODEL": "claude-opus-5-5"
+  }
+  // Secrets (set with `npx wrangler secret put NAME`, or in .dev.vars locally):
+  //   SESSION_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  //   SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET  (or SHOPIFY_ADMIN_TOKEN),
+  //   UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_NUMBER,
+  //   ANTHROPIC_API_KEY (optional — enables "Draft with AI")
+}

@@ -1,0 +1,13 @@
+# Copy to .dev.vars for local development (never commit .dev.vars)
+SESSION_SECRET=change-me-to-a-long-random-string
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+SHOPIFY_CLIENT_ID=
+SHOPIFY_CLIENT_SECRET=
+# SHOPIFY_ADMIN_TOKEN=shpat_...   (alternative to client id/secret)
+UPS_CLIENT_ID=
+UPS_CLIENT_SECRET=
+UPS_ACCOUNT_NUMBER=
+ANTHROPIC_API_KEY=
+# Local only: skip Google sign-in and act as this email
+# DEV_LOGIN_EMAIL=kingtuft@tufttheworld.com
