@@ -101,6 +101,15 @@ Once you're happy, turn off Redo's email forwarding or helpdesk so customers don
 
 ---
 
+### Deploying from GitHub (Cloudflare Workers Builds)
+
+In the Worker's **Settings → Build**:
+
+- **Deploy command:** `npm run deploy:ci`
+- **Variables and secrets** (Build): `SESSION_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+
+Every deploy then uploads those three to the running app (`scripts/write-secrets.mjs` → `wrangler deploy --secrets-file`), so a deploy can never leave the app without them. The build log lists the *names* of the secrets it included, never the values.
+
 ## Everyday use
 
 | Key | Action |
