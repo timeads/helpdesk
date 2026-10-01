@@ -121,7 +121,7 @@ Every deploy then uploads those three to the running app (`scripts/write-secrets
 - **Shipping rules** (Settings) pick the box, signature, service, or hold an order. When no rule applies, the box and weight you used last time for the same items are reused (package learning).
 - **Scan & pack**: scan the barcode on the packing slip, scan each item (SKU or barcode), then **Verify & print label**.
 - **Label batches**: every label run is a batch you can reprint or void.
-- **Analytics**: label spend vs shipping collected, margin, negotiated savings, order-to-ship time, service mix, destinations, plus support volume and first-reply time.
+- **Dashboard** (top of the sidebar): label spend vs shipping collected, margin, negotiated savings, order-to-ship time, service mix, destinations, plus support volume and first-reply time.
 
 ### Printing straight to the Zebra
 

@@ -819,6 +819,8 @@ details.macro-row > summary svg { width: 13px; height: 13px; vertical-align: -2p
 .alloc-item img { width: 30px; height: 30px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); flex: none; }
 .qty-in { width: 64px; height: 30px; min-height: 30px; text-align: right; padding: 3px 6px; }
 
+.sidebar .dash-item { margin-bottom: 4px; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1320px) {
   .customer { width: 312px; }

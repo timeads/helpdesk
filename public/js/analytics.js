@@ -1,4 +1,4 @@
-// Shipping & support analytics. Chart palette validated with the dataviz checks (light + dark, CVD-safe).
+// Dashboard: shipping & support analytics. Chart palette validated with the dataviz checks (light + dark, CVD-safe).
 import { api } from "./api.js";
 import { h, mount, money, toast, skeletonRows } from "./ui.js";
 
@@ -139,12 +139,12 @@ export function renderAnalytics(main) {
   mount(main, h("div", { class: "page" },
     h("header", { class: "page-head" }, h("div", { class: "inner" },
       h("div", { class: "row", style: { justifyContent: "space-between", paddingBottom: "16px" } },
-        h("div", {}, h("h1", {}, "Analytics"), h("p", { class: "sub", style: { margin: 0 } }, "What shipping costs you versus what customers pay, how fast orders go out, and support volume.")),
+        h("div", {}, h("h1", {}, "Dashboard"), h("p", { class: "sub", style: { margin: 0 } }, "Shipping costs versus what customers paid, how fast orders go out, and how support is keeping up.")),
         chips))),
     h("div", { class: "page-inner wide" }, body)));
 
   const load = async () => {
-    mount(chips, PERIODS.map(([d, label]) => h("button", { class: "view-chip" + (d === days ? " active" : ""), onclick: () => { days = d; history.replaceState(null, "", `/analytics?days=${d}`); load(); } }, label)));
+    mount(chips, PERIODS.map(([d, label]) => h("button", { class: "view-chip" + (d === days ? " active" : ""), onclick: () => { days = d; history.replaceState(null, "", `/dashboard?days=${d}`); load(); } }, label)));
     let a;
     try {
       a = await api(`/analytics?days=${days}`);

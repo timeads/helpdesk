@@ -67,6 +67,7 @@ function renderNav() {
   const path = location.pathname;
   const params = new URLSearchParams(location.search);
   const inInbox = path === "/" || path.startsWith("/tickets");
+  const isDash = path.startsWith("/dashboard") || path.startsWith("/analytics");
   const view = params.get("view") || "open";
   const item = (href, label, short, iconName, active, count, extra = "") =>
     h("a", { href, "data-link": "", class: "nav-item" + (active ? " active" : "") + extra, title: label, "aria-current": active ? "page" : null },
@@ -77,6 +78,7 @@ function renderNav() {
     );
   mount(navEl,
     h("a", { class: "brand", href: "/", "data-link": "" }, h("span", { class: "word" }, "Tuft the World"), h("span", { class: "sub" }, "Support desk")),
+    item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " ship-view dash-item"),
     h("div", { class: "nav-scroll" },
       h("div", { class: "nav-label" }, "Tickets"),
       VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : state.counts[v.id], v.minor ? " closed-view" : "")),
@@ -92,7 +94,6 @@ function renderNav() {
       ]) : null),
     h("div", { class: "nav-label" }, "Store"),
     item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), undefined, " ship-view"),
-    item("/analytics", "Analytics", "Stats", "chart", path.startsWith("/analytics"), undefined, " ship-view"),
     item("/settings", "Settings", "Settings", "settings", path.startsWith("/settings")),
     h("div", { class: "spacer" }),
     h("div", { class: "me" },
@@ -122,7 +123,7 @@ let section = null;
 function route() {
   renderNav();
   const path = location.pathname;
-  const next = path.startsWith("/shipping") ? "shipping" : path.startsWith("/settings") ? "settings" : path.startsWith("/analytics") ? "analytics" : "inbox";
+  const next = path.startsWith("/shipping") ? "shipping" : path.startsWith("/settings") ? "settings" : path.startsWith("/dashboard") || path.startsWith("/analytics") ? "analytics" : "inbox";
   // Moving between tickets keeps the inbox mounted; anything else re-renders
   if (next !== "inbox" || section !== "inbox") {
     if (cleanup) cleanup();
