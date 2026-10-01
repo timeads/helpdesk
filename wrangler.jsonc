@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
+  // Keep variables added in the Cloudflare dashboard when GitHub pushes redeploy the app
+  "keep_vars": true,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
