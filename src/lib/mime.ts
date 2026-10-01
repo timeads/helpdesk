@@ -138,6 +138,7 @@ export interface OutgoingMessage {
   fromName?: string;
   to: string[];
   cc?: string[];
+  bcc?: string[];
   subject: string;
   inReplyTo?: string | null;
   references?: string | null;
@@ -158,6 +159,7 @@ export function buildMime(msg: OutgoingMessage, boundarySeed = crypto.randomUUID
     `From: ${formatAddress(msg.fromEmail, msg.fromName)}`,
     `To: ${msg.to.join(", ")}`,
     ...(msg.cc?.length ? [`Cc: ${msg.cc.join(", ")}`] : []),
+    ...(msg.bcc?.length ? [`Bcc: ${msg.bcc.join(", ")}`] : []),
     `Subject: ${encodeHeader(msg.subject)}`,
     ...(msg.inReplyTo ? [`In-Reply-To: ${msg.inReplyTo}`] : []),
     ...(msg.references || msg.inReplyTo ? [`References: ${(msg.references ?? msg.inReplyTo)!}`] : []),

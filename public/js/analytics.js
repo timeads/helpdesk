@@ -100,6 +100,37 @@ function servicesCard(rows) {
       h("div", { class: "num small margin " + (r.margin >= 0 ? "pos" : "neg") }, `${r.margin >= 0 ? "+" : "−"}${usd(Math.abs(r.margin))}`)))) : h("p", { class: "muted" }, "No labels in this period."));
 }
 
+/** Weekday × hour of new tickets (store time). Sequential: one hue, lighter = fewer. */
+function heatmapCard(grid) {
+  const max = Math.max(1, ...grid.flat());
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const hourLabel = (hr) => (hr === 0 ? "12a" : hr < 12 ? `${hr}a` : hr === 12 ? "12p" : `${hr - 12}p`);
+  const table = h("table", { class: "tbl", hidden: true },
+    h("thead", {}, h("tr", {}, h("th", {}, "Day"), h("th", {}, "Busiest hour"), h("th", {}, "Tickets"))),
+    h("tbody", {}, order.map((d) => {
+      const row = grid[d];
+      const best = row.indexOf(Math.max(...row));
+      return h("tr", {}, h("td", {}, days[d]), h("td", {}, row[best] ? hourLabel(best) : "—"), h("td", { class: "num" }, row.reduce((a, b) => a + b, 0)));
+    })));
+  const heat = h("div", { class: "heat", role: "img", "aria-label": "New tickets by weekday and hour" },
+    h("span"), Array.from({ length: 24 }, (_, hr) => h("span", { class: "heat-h" }, hr % 3 === 0 ? hourLabel(hr) : "")),
+    order.map((d) => [h("span", { class: "heat-d" }, days[d]), grid[d].map((n, hr) =>
+      h("i", { style: `--a:${n ? (0.15 + 0.85 * (n / max)).toFixed(3) : 0}`, title: `${days[d]} ${hourLabel(hr)}: ${n} ticket${n === 1 ? "" : "s"}` }))]));
+  const toggle = h("button", { class: "btn sm ghost" }, "Show table");
+  toggle.onclick = () => { table.hidden = !table.hidden; heat.hidden = !table.hidden; toggle.textContent = table.hidden ? "Show table" : "Show chart"; };
+  return h("section", { class: "card" },
+    h("div", { class: "row", style: { justifyContent: "space-between" } }, h("h2", {}, "When tickets arrive"), toggle),
+    h("p", { class: "muted small", style: { margin: "0 0 10px" } }, "Eastern time · darker means more new tickets"), heat, table);
+}
+
+function teamCard(rows) {
+  return h("section", { class: "card" }, h("h2", {}, "Team"),
+    rows.length ? h("table", { class: "tbl" },
+      h("thead", {}, h("tr", {}, ["Teammate", "Replies", "Tickets answered", "Closed", "Open now"].map((x) => h("th", {}, x)))),
+      h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, h("b", {}, r.name)), h("td", { class: "num" }, r.replies), h("td", { class: "num" }, r.tickets_replied), h("td", { class: "num" }, r.closed), h("td", { class: "num" }, r.active))))) : h("p", { class: "muted" }, "No activity yet."));
+}
+
 export function renderAnalytics(main) {
   const params = new URLSearchParams(location.search);
   let days = Number(params.get("days")) || 30;
@@ -152,8 +183,12 @@ export function renderAnalytics(main) {
       h("div", { class: "kpis" },
         tile("New tickets", String(sp.created), `in the last ${days} days`),
         tile("Closed", String(sp.closed), "tickets closed"),
-        tile("Open now", String(sp.open), `${sp.pending} waiting on customers`),
-        tile("First reply", hours(sp.medianFirstReplyHours), `median, ${sp.replied} replied`)),
+        tile("Open now", String(sp.open), `${sp.inProgress} in progress · ${sp.snoozed} snoozed`),
+        tile("First reply", hours(sp.medianFirstReplyHours), `median, ${sp.replied} replied`),
+        tile("Resolution time", hours(sp.medianResolutionHours), `median, ${sp.resolved} resolved`),
+        tile("Replies per ticket", sp.avgTouches == null ? "—" : sp.avgTouches.toFixed(1), "average for resolved tickets"),
+        tile("One-touch", sp.oneTouchRate == null ? "—" : `${Math.round(sp.oneTouchRate * 100)}%`, "resolved with a single reply")),
+      h("div", { class: "grid2 analytics-2" }, heatmapCard(sp.heatmap), teamCard(sp.team)),
     );
   };
   load().catch((e) => toast(e.message, true));

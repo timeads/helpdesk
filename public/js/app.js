@@ -5,18 +5,39 @@ import { renderShipping } from "./shipping.js";
 import { renderSettings } from "./settings.js";
 import { renderAnalytics } from "./analytics.js";
 
-export const state = { me: null, appName: "Support", agents: [], counts: {} };
+export const state = { me: null, appName: "Support", agents: [], counts: {}, views: [] };
 const root = document.getElementById("app");
 let mainEl, navEl, cleanup = null;
 
 const VIEWS = [
-  { id: "mine", label: "Assigned to me", short: "Mine", icon: "user" },
-  { id: "unassigned", label: "Unassigned", short: "Unassigned", icon: "question" },
-  { id: "open", label: "All open", short: "Open", icon: "inbox" },
-  { id: "pending", label: "Waiting on customer", nav: "Pending", short: "Pending", icon: "clock" },
-  { id: "closed", label: "Closed", short: "Closed", icon: "check" },
+  { id: "mine", label: "Your tickets", short: "Mine", icon: "user" },
+  { id: "unassigned", label: "Unassigned", short: "New", icon: "question" },
+  { id: "open", label: "Open", short: "Open", icon: "inbox" },
+  { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock" },
+  { id: "snoozed", label: "Snoozed", short: "Snoozed", icon: "moon", minor: true },
+  { id: "mentions", label: "Mentions", short: "@", icon: "at", minor: true },
+  { id: "closed", label: "Closed", short: "Closed", icon: "check", minor: true },
 ];
-export const viewLabel = (id) => VIEWS.find((v) => v.id === id)?.label ?? "All open";
+const MORE_VIEWS = [
+  { id: "all", label: "All tickets", icon: "layers" },
+  { id: "archived", label: "Archived", icon: "archive" },
+  { id: "spam", label: "Spam", icon: "spam" },
+  { id: "deleted", label: "Trash", icon: "trash" },
+];
+export const viewLabel = (id) => {
+  if (id === "pending") return "In progress";
+  if (id?.startsWith("v:")) return state.views.find((v) => `v:${v.id}` === id)?.name ?? "View";
+  return [...VIEWS, ...MORE_VIEWS].find((v) => v.id === id)?.label ?? "Open";
+};
+
+export async function refreshViews() {
+  try {
+    state.views = (await api("/views")).views;
+  } catch { /* keep what we had */ }
+  renderNav();
+}
+
+let moreOpen = (() => { try { return localStorage.getItem("nav:more") === "1"; } catch { return false; } })();
 
 export function navigate(path, { replace = false } = {}) {
   if (replace) history.replaceState(null, "", path);
@@ -56,8 +77,19 @@ function renderNav() {
     );
   mount(navEl,
     h("a", { class: "brand", href: "/", "data-link": "" }, h("span", { class: "word" }, "Tuft the World"), h("span", { class: "sub" }, "Support desk")),
-    h("div", { class: "nav-label" }, "Tickets"),
-    VIEWS.map((v) => item(`/?view=${v.id}`, v.nav ?? v.label, v.short, v.icon, inInbox && view === v.id, state.counts[v.id], v.id === "closed" ? " closed-view" : "")),
+    h("div", { class: "nav-scroll" },
+      h("div", { class: "nav-label" }, "Tickets"),
+      VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : state.counts[v.id], v.minor ? " closed-view" : "")),
+      h("button", { class: "nav-item nav-more closed-view", "aria-expanded": String(moreOpen), onclick: () => {
+        moreOpen = !moreOpen;
+        try { localStorage.setItem("nav:more", moreOpen ? "1" : "0"); } catch { /* ignore */ }
+        renderNav();
+      } }, icon(moreOpen ? "up" : "down"), h("span", { class: "label-long" }, moreOpen ? "Less" : "More")),
+      moreOpen || MORE_VIEWS.some((v) => v.id === view) ? MORE_VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.label, v.icon, inInbox && view === v.id, v.id === "spam" ? state.counts.spam : 0, " closed-view")) : null,
+      state.views.length ? viewGroups().map(([folder, vs]) => [
+        h("div", { class: "nav-label closed-view" }, folder || "Views"),
+        vs.map((v) => item(`/?view=v:${v.id}`, v.name, v.name, folder ? "folder" : "layers", inInbox && view === `v:${v.id}`, state.counts[`v:${v.id}`], " closed-view")),
+      ]) : null),
     h("div", { class: "nav-label" }, "Store"),
     item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), undefined, " ship-view"),
     item("/analytics", "Analytics", "Stats", "chart", path.startsWith("/analytics"), undefined, " ship-view"),
@@ -74,6 +106,16 @@ function renderNav() {
       ),
     ),
   );
+}
+
+function viewGroups() {
+  const groups = new Map();
+  for (const v of state.views) {
+    const k = v.folder || "";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(v);
+  }
+  return [...groups.entries()].sort((a, b) => (a[0] === "" ? -1 : b[0] === "" ? 1 : a[0].localeCompare(b[0])));
 }
 
 let section = null;
@@ -121,7 +163,7 @@ async function boot() {
   }
   const err = new URLSearchParams(location.search).get("error");
   if (err) toast(err, true);
-  state.agents = (await api("/agents")).agents;
+  [state.agents, state.views] = await Promise.all([api("/agents").then((r) => r.agents), api("/views").then((r) => r.views).catch(() => [])]);
   root.className = "";
   navEl = h("nav", { class: "sidebar" });
   mainEl = h("main", { class: "main" });

@@ -2,26 +2,30 @@ import { api } from "./api.js";
 import { state } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows } from "./ui.js";
 import { printSettings, savePrintSettings, testZebra, zebraPrinter } from "./printing.js";
+import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
 export function renderSettings(main) {
   const inner = h("div", { class: "page-inner", style: { maxWidth: "880px" } }, h("div", { class: "card" }, skeletonRows(4)));
   mount(main, h("div", { class: "page" },
     h("header", { class: "page-head" }, h("div", { class: "inner", style: { maxWidth: "880px", paddingBottom: "4px" } },
       h("h1", {}, "Settings"),
-      h("p", { class: "sub" }, "Connections, team, saved replies and shipping defaults."))),
+      h("p", { class: "sub" }, "Connections, team, support automation and shipping defaults."),
+      h("nav", { class: "settings-nav", "aria-label": "Settings sections" }, [["connections", "Connections"], ["team", "Team"], ["support", "Tickets"], ["macros", "Macros"], ["tags", "Tags"], ["views", "Views"], ["rules", "Rules"], ["knowledge", "AI knowledge"], ["email", "Email"], ["shipping", "Shipping"], ["printing", "Printing"]]
+        .map(([id, label]) => h("a", { href: `#${id}`, onclick: (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); history.replaceState(null, "", `#${id}`); } }, label))))),
     inner));
   load(inner);
   return () => {};
 }
 
 async function load(inner) {
-  let s, agents, macros, presets, creds = null, rulesData = null;
+  let s, agents, macros, variables, presets, creds = null, rulesData = null, tags, views, supportRules, knowledge;
   const isAdminUser = state.me.role === "admin";
   try {
-    [s, { agents }, { macros }, { presets }, creds, rulesData] = await Promise.all([
+    [s, { agents }, { macros, variables }, { presets }, creds, rulesData, { tags }, { views }, supportRules, { knowledge }] = await Promise.all([
       api("/settings"), api("/agents"), api("/macros"), api("/shipping/presets"),
       isAdminUser ? api("/credentials") : null,
       isAdminUser ? api("/shipping/rules") : null,
+      api("/tags"), api("/views"), api("/support-rules"), api("/knowledge"),
     ]);
   } catch (e) {
     return mount(inner, h("div", { class: "notice bad" }, e.message));
@@ -37,18 +41,23 @@ async function load(inner) {
     printing(),
     profile(),
     team(agents, isAdmin, inner),
-    savedReplies(macros, inner),
+    isAdmin ? supportBehavior(s) : null,
+    macrosCard(macros, variables, () => reload(inner)),
+    tagsCard(tags, () => reload(inner)),
+    viewsCard(views, tags, () => reload(inner)),
+    isAdmin ? supportRulesCard(supportRules, macros, tags, () => reload(inner)) : null,
+    knowledgeCard(knowledge, () => reload(inner)),
     isAdmin ? mailRules(s) : null,
     isAdmin ? shipping(s, presets, inner) : null,
     isAdmin && rulesData ? shippingRules(rulesData, presets, inner) : null,
-    isAdmin && s.integrations.ai.connected ? aiGuidance(s) : null,
   );
 }
 
 const reload = (inner) => load(inner);
 
+const CARD_IDS = { Connections: "connections", Team: "team", Email: "email", Shipping: "shipping", "Shipping rules": "shipping-rules", Credentials: "credentials", "Your profile": "profile" };
 function card(title, desc, ...children) {
-  return h("section", { class: "card" }, h("h2", {}, title), desc ? h("p", { class: "muted" }, desc) : null, ...children);
+  return h("section", { class: "card", id: CARD_IDS[title] }, h("h2", {}, title), desc ? h("p", { class: "muted" }, desc) : null, ...children);
 }
 
 // Save buttons stay quiet until their form changes, so each screen has at most one ochre action.
@@ -238,35 +247,16 @@ function team(agents, isAdmin, inner) {
         await api(`/agents/${a.id}`, { method: "DELETE" });
         reload(inner);
       });
+      const avail = h("input", { type: "checkbox", checked: a.available !== 0, disabled: !isAdmin && a.id !== state.me.id, title: "Available for automatic assignment" });
+      avail.onchange = async () => {
+        try { await api(`/agents/${a.id}`, { method: "PATCH", body: { available: avail.checked } }); toast(avail.checked ? `${a.name} gets new tickets` : `${a.name} is skipped by auto-assign`); }
+        catch (e) { toast(e.message, true); avail.checked = !avail.checked; }
+      };
       return h("tr", {}, h("td", {}, h("b", {}, a.name)), h("td", { class: "muted" }, a.email), h("td", {}, h("span", { class: "badge" }, a.role)),
+        h("td", {}, h("label", { class: "check small" }, avail, "Available")),
         h("td", { style: { textAlign: "right" } }, isAdmin && a.id !== state.me.id ? rm : null));
     }))),
     isAdmin ? h("div", { class: "grid4", style: { marginTop: "12px", gridTemplateColumns: "2fr 1.4fr 1fr auto" } }, email, name, role, add) : null);
-}
-
-function savedReplies(macros, inner) {
-  const list = h("div", { class: "stack" });
-  const editor = (m = { name: "", body: "" }) => {
-    const name = h("input", { class: "input", value: m.name, placeholder: "Name, e.g. Where is my order" });
-    const body = h("textarea", { class: "input", rows: 5, placeholder: "Hi {{first_name}}, …" });
-    body.value = m.body;
-    const save = saveButton(async () => {
-      if (m.id) await api(`/macros/${m.id}`, { method: "PUT", body: { name: name.value, body: body.value } });
-      else await api("/macros", { method: "POST", body: { name: name.value, body: body.value } });
-      reload(inner);
-    });
-    const del = m.id ? h("button", { class: "btn ghost danger" }, "Delete") : null;
-    if (del) del.onclick = busy(del, async () => {
-      if (!confirm(`Delete “${m.name}”?`)) return;
-      await api(`/macros/${m.id}`, { method: "DELETE" });
-      reload(inner);
-    });
-    return h("div", { class: "macro-row" }, name, body, h("div", { class: "row" }, save, del));
-  };
-  macros.forEach((m) => list.append(editor(m)));
-  const addBtn = h("button", { class: "btn" }, icon("plus"), "New saved reply");
-  addBtn.onclick = () => { list.prepend(editor()); addBtn.remove(); };
-  return card("Saved replies", "Insert from the composer. {{first_name}} and {{agent_name}} are filled in automatically.", h("div", { style: { marginBottom: "10px" } }, addBtn), list);
 }
 
 function mailRules(s) {
@@ -285,10 +275,37 @@ function mailRules(s) {
       h("label", { class: "check" }, archive, "Archive the Gmail thread when a ticket is closed"),
       h("label", { class: "field" }, "Never make tickets from", blocked),
       h("label", { class: "field" }, "On first connect, import mail from the last N days", days),
+      backfillBox(s),
       h("div", {}, saveButton(() => api("/settings", { method: "PUT", body: {
         signature: sig.value,
         mailRules: { blockedSenders: blocked.value.split("\n"), skipAutomated: skip.checked, archiveOnClose: archive.checked, importDays: Number(days.value) },
       } })))));
+}
+
+function backfillBox(s) {
+  const job = s.backfill;
+  const box = h("div", { class: "notice", style: { display: "grid", gap: "8px" } });
+  const range = h("select", { class: "input", style: { width: "auto" } },
+    [[90, "3 months"], [180, "6 months"], [365, "1 year"], [730, "2 years"], [1825, "5 years"]].map(([v, l]) => h("option", { value: v, selected: v === 365 }, l)));
+  const start = h("button", { class: "btn sm" }, "Import history");
+  start.onclick = busy(start, async () => {
+    if (!confirm(`Import email from the last ${range.selectedOptions[0].textContent}? Older conversations come in as closed tickets (no auto-replies, rules or assignment). It runs in the background, about 25 conversations a minute.`)) return;
+    const r = await api("/mailbox/backfill", { method: "POST", body: { days: Number(range.value) } });
+    draw(r.job);
+  });
+  const stop = h("button", { class: "btn sm ghost" }, "Stop");
+  stop.onclick = busy(stop, async () => { await api("/mailbox/backfill/stop", { method: "POST" }); draw({ ...job, finishedAt: new Date().toISOString(), error: "Stopped" }); });
+  const draw = (j) => {
+    const running = j && !j.finishedAt;
+    mount(box,
+      h("b", {}, "Import older email"),
+      h("span", { class: "small" }, "Brings past conversations (inbox and archived) in as closed tickets, so customer history, search and analytics cover them."),
+      j ? h("span", { class: "small" }, running ? `Importing the last ${j.days} days… ${j.threads} conversations checked, ${j.created} tickets added so far.` : `Last import (${j.days} days): ${j.threads} conversations checked, ${j.created} tickets added${j.error ? ` · ${j.error}` : ""}.`) : null,
+      running && j.error ? h("span", { class: "small", style: { color: "var(--brick)" } }, `Last batch failed: ${j.error} (it retries every minute)`) : null,
+      h("div", { class: "row" }, running ? stop : [range, start]));
+  };
+  draw(job);
+  return box;
 }
 
 function shipping(s, presets, inner) {
@@ -409,11 +426,4 @@ function shippingRules(data, presets, inner) {
     h("h3", { class: "section" }, "Package learning"),
     h("p", { class: "muted small", style: { margin: "0 0 8px" } }, "When no rule picks a box, reuse what you chose the last time the exact same items shipped."),
     h("div", { class: "stack" }, learnBox("parcel", "Remember the box"), learnBox("weight", "Remember the weight")));
-}
-
-function aiGuidance(s) {
-  const g = h("textarea", { class: "input", rows: 8, placeholder: "e.g. Returns accepted within 30 days, unused. Orders ship in 1–2 business days from Philadelphia. Offer a free replacement for damaged items with a photo. Never promise delivery dates." });
-  g.value = s.aiGuidance;
-  return card("AI guidance", "Store policies and tone notes the AI follows when drafting replies.",
-    h("div", { class: "stack" }, g, h("div", {}, saveButton(() => api("/settings", { method: "PUT", body: { aiGuidance: g.value } })))));
 }

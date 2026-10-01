@@ -96,6 +96,39 @@ export const icons = {
   logout: P('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
   chart: P('<path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/>'),
   info: P('<circle cx="12" cy="12" r="9.5"/><path d="M12 11v5M12 8h.01"/>'),
+  moon: P('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
+  at: P('<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>'),
+  tag: P('<path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
+  flag: P('<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>'),
+  dots: P('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'),
+  merge: P('<path d="M6 3v6a6 6 0 0 0 6 6h6"/><path d="m15 12 3 3-3 3"/><path d="M6 21v-6"/>'),
+  trash: P('<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>'),
+  spam: P('<path d="M12 3 2 21h20z"/><path d="M12 10v5M12 18h.01"/>'),
+  archive: P('<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/>'),
+  reply: P('<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v4"/>'),
+  replyAll: P('<path d="M7 14 2 9l5-5"/><path d="M12 14 7 9l5-5"/><path d="M7 9h8a6 6 0 0 1 6 6v4"/>'),
+  forward: P('<path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0-6 6v4"/>'),
+  download: P('<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>'),
+  filter: P('<path d="M3 5h18M6 12h12M10 19h4"/>'),
+  percent: P('<path d="M19 5 5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/>'),
+  bolt: P('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
+  activity: P('<path d="M3 12h4l3-8 4 16 3-8h4"/>'),
+  eye: P('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  chevron: P('<path d="m6 9 6 6 6-6"/>'),
+  up: P('<path d="m18 15-6-6-6 6"/>'),
+  down: P('<path d="m6 9 6 6 6-6"/>'),
+  folder: P('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>'),
+  layers: P('<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>'),
+  copy: P('<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),
+  bold: P('<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/>'),
+  italic: P('<path d="M14 5h-4M14 19h-4M14 5l-4 14"/>'),
+  underline: P('<path d="M7 4v7a5 5 0 0 0 10 0V4M5 20h14"/>'),
+  strike: P('<path d="M5 12h14"/><path d="M16 7a4 4 0 0 0-4-2c-2.5 0-4 1.3-4 3s1.5 2.5 4 3M8 17a4 4 0 0 0 4 2c2.5 0 4-1.3 4-3"/>'),
+  ul: P('<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>'),
+  ol: P('<path d="M10 6h10M10 12h10M10 18h10M4 4h1v4M4 18h2l-2-2.5a1 1 0 1 1 2-.5"/>'),
+  link: P('<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>'),
+  eraser: P('<path d="m7 21-4-4 11-11 7 7-7 8z"/><path d="M14 21h7M9 11l6 6"/>'),
+  keyboard: P('<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
 };
 
 export function icon(name) {
@@ -143,4 +176,83 @@ export function busy(btn, fn) {
       btn.disabled = false;
     }
   };
+}
+
+/** Popover anchored to a button (fixed position, flips above when there is no room). Closes on outside click / Escape. */
+let openPop = null;
+export function popover(anchor, content, { width = 280, align = "left", onClose } = {}) {
+  closePopover();
+  const pop = h("div", { class: "pop", role: "menu", style: { width: `${width}px` } }, content);
+  document.body.append(pop);
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    const ph = pop.offsetHeight;
+    const below = r.bottom + 6 + ph < innerHeight - 8 || r.top < ph + 14;
+    pop.style.top = `${below ? r.bottom + 6 : r.top - 6 - ph}px`;
+    let left = align === "right" ? r.right - width : r.left;
+    left = Math.max(8, Math.min(innerWidth - width - 8, left));
+    pop.style.left = `${left}px`;
+  };
+  place();
+  const onDoc = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) closePopover(); };
+  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); closePopover(); anchor.focus?.(); } };
+  setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+  document.addEventListener("keydown", onKey, true);
+  addEventListener("resize", closePopover, { once: true });
+  openPop = { pop, cleanup: () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey, true); onClose?.(); }, place };
+  const first = pop.querySelector("input, button, [tabindex]");
+  first?.focus();
+  return openPop;
+}
+export function closePopover() {
+  if (!openPop) return;
+  const p = openPop;
+  openPop = null;
+  p.pop.remove();
+  p.cleanup();
+}
+
+/** Arrow-key navigation between the buttons of a menu. */
+export function menuKeys(container) {
+  container.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const items = [...container.querySelectorAll("button:not([disabled])")];
+    const i = items.indexOf(document.activeElement);
+    const next = items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
+    next?.focus();
+    e.preventDefault();
+  });
+  return container;
+}
+
+export function menuList(items) {
+  return menuKeys(h("div", { class: "pop-list" }, items.filter(Boolean).map((it) =>
+    it === "-" ? h("hr") : it.heading ? h("div", { class: "pop-head" }, it.heading) :
+      h("button", { class: (it.danger ? "danger" : "") + (it.active ? " on" : ""), disabled: it.disabled, onclick: () => { closePopover(); it.run(); } },
+        it.icon ? icon(it.icon) : null, h("span", {}, it.label), it.hint ? h("kbd", {}, it.hint) : null))));
+}
+
+/** Centered dialog. Returns { el, close }. */
+export function modal(title, body, { width = 560, onClose } = {}) {
+  const prev = document.activeElement;
+  const close = () => { wrap.remove(); document.removeEventListener("keydown", onKey, true); onClose?.(); prev?.focus?.(); };
+  const onKey = (e) => { if (e.key === "Escape" && !document.querySelector(".pop")) { e.stopPropagation(); close(); } };
+  const panel = h("div", { class: "modal-panel", role: "dialog", "aria-modal": "true", "aria-label": title, style: { width: `min(${width}px, calc(100vw - 24px))` } },
+    h("div", { class: "modal-head" }, h("h2", {}, title), h("button", { class: "btn ghost sm icon-only", "aria-label": "Close", onclick: () => close() }, icon("x"))),
+    h("div", { class: "modal-body" }, body));
+  const wrap = h("div", { class: "modal" }, h("div", { class: "slide-scrim", onclick: () => close() }), panel);
+  document.body.append(wrap);
+  document.addEventListener("keydown", onKey, true);
+  setTimeout(() => panel.querySelector("input, textarea, [contenteditable], select, button.primary")?.focus(), 0);
+  return { el: panel, close };
+}
+
+/** Toast with an action button (e.g. Undo). Returns a function that dismisses it. */
+export function actionToast(msg, actionLabel, onAction, ms = 5000) {
+  const btn = h("button", { class: "toast-action" }, actionLabel);
+  const t = h("div", { class: "toast", role: "status" }, icon("send"), h("span", {}, msg), btn);
+  document.getElementById("toasts").append(t);
+  const timer = setTimeout(() => t.remove(), ms);
+  btn.onclick = () => { clearTimeout(timer); t.remove(); onAction(); };
+  return () => { clearTimeout(timer); t.remove(); };
 }

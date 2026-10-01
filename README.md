@@ -3,11 +3,15 @@
 A small, self-hosted helpdesk that replaces Redo's ticketing for **support@tufttheworld.com**.
 
 - Every customer email becomes a **ticket**. Replies stay threaded in Gmail.
-- **Assign** tickets, set them **Open / Pending / Closed**, add **internal notes**, use **saved replies**, and send **attachments**.
+- **Statuses:** Open, In progress (waiting on the customer), Snoozed (comes back at a set time), Closed, Archived, Spam and Trash. Customer replies reopen a ticket.
+- **Organize:** assign (manually, round robin or balanced), priority, tags in groups, saved **views** with live counts, filters, bulk actions, merge (automatic within 24 h, or by hand), CSV export.
+- **Reply** with rich text: reply, reply all, forward, cc/bcc, attachments, **macros** with variables (`{{customer.first_name}}`, `{{order.tracking_url}}` …) and automations, **Shopify discount codes**, undo send. **Internal notes** support @mentions (see the Mentions view).
+- **Rules** run when a ticket is created, a customer writes, a teammate replies or the status changes: tag, set priority/status, assign, or auto-reply with a macro. Every run shows in the ticket's Activity tab.
 - The customer's **Shopify orders** sit beside the conversation: items, payment and fulfillment status, tracking, and ship-to address. Use **Add to reply** to paste an order summary into your reply.
 - **Send & close** sends the reply, closes the ticket, archives the Gmail thread and opens the next ticket.
 - **Shipping:** pick an unfulfilled order, enter the box and weight, compare **UPS rates** (your negotiated prices) and buy a **4×6 label**. You can print it from the browser or download ZPL for a thermal printer. The tracking number is written back to Shopify and the customer gets Shopify's shipping email.
-- **Draft with AI** (optional): uses your own Anthropic API key, about 1–2¢ per draft. It reads the conversation, the customer's orders and your store guidance.
+- **AI** (optional, your own Anthropic key): drafts replies (about 1–2¢ each) from the conversation, the customer's orders and your **AI knowledge** entries, and writes on-demand **insights** (summary, mood, request type).
+- **History:** Settings → Email → *Import older email* brings past conversations (up to 5 years, inbox and archived) in as closed tickets for customer history, search and analytics.
 
 It runs on Cloudflare Workers with a D1 database, which is free at this volume. New mail is pulled from Gmail every minute.
 
@@ -68,7 +72,7 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 
 1. In Shopify admin, go to **Settings → Apps → Develop apps**. If Shopify sends you to the **Dev Dashboard**, create the app there.
 2. Create an app named **Helpdesk** with these Admin API scopes:
-   `read_customers, read_orders, read_products, read_fulfillments, write_fulfillments, read_merchant_managed_fulfillment_orders, write_merchant_managed_fulfillment_orders`
+   `read_customers, read_orders, read_products, read_fulfillments, write_fulfillments, read_merchant_managed_fulfillment_orders, write_merchant_managed_fulfillment_orders, write_discounts` (the last one is only needed for discount codes from the composer)
 3. Install or release it on **Tuft the World**.
 4. After you've signed in (step 6), open **Settings → Credentials → Shopify**. Enter the store address and **either** the Client ID + Client secret (Dev Dashboard apps) **or** the Admin API access token (`shpat_…`, older custom apps). Click **Save**, and the connection test runs automatically.
 
@@ -128,19 +132,26 @@ Labels then print with no dialog. The setting is per computer; packing slips use
 
 ## Everyday use
 
+Press `?` in the inbox for the full list.
+
 | Key | Action |
 | --- | --- |
 | `j` / `k` | next / previous ticket |
-| `r` | reply |
-| `a` | assign to me |
-| `e` | close ticket |
-| `x` | select ticket (then Close / Assign to me / Pending for all selected) |
-| `⌘/Ctrl + Enter` | send (ticket becomes *Pending*: waiting on the customer) |
+| `/` | search |
+| `r` / `n` / `f` | reply / internal note / forward |
+| `e` or `Alt+C` | close |
+| `Alt+R` / `Alt+I` / `Alt+M` | reopen / mark in progress / mark as spam |
+| `a` / `m` | assign… / assign to me |
+| `s` / `t` / `p` | snooze / tags / priority |
+| `x` | select ticket for bulk actions |
+| `c` | new email |
+| `⌘/Ctrl + Enter` | send (ticket becomes *In progress*) |
 | `⌘/Ctrl + Shift + Enter` | send & close, then open the next ticket |
+| `⌘/Ctrl + 5` | create a discount code |
 
-- When a customer replies to a pending or closed ticket, it **reopens automatically**.
 - Newsletters, mailing lists and auto-replies don't become tickets. You can also block senders in **Settings → Email**.
-- Replies you send from Gmail directly still show up in the ticket.
+- Replies you send from Gmail directly still show up in the ticket, and archiving a thread in Gmail closes its ticket (Settings → Tickets).
+- Macros and AI knowledge can be imported from CSV (Settings → Macros / AI knowledge → Import CSV).
 
 ## Developing locally
 

@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "./env";
 import { requireAgent } from "./lib/auth";
-import { syncMailbox } from "./lib/gmail";
+import { runBackfill, syncMailbox } from "./lib/gmail";
+import { wakeSnoozed } from "./lib/support";
 import { HttpError } from "./lib/util";
 import { withCredentials } from "./lib/credentials";
 import authRoutes from "./routes/auth";
@@ -41,10 +42,12 @@ export default {
     return app.fetch(request, withRaw, ctx);
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const merged = await withCredentials(env);
     ctx.waitUntil(
-      syncMailbox(await withCredentials(env)).catch((e) => {
-        console.error("Mail sync failed", e);
-      }),
+      Promise.all([
+        syncMailbox(merged).catch((e) => console.error("Mail sync failed", e)),
+        wakeSnoozed(merged).catch((e) => console.error("Snooze wake failed", e)),
+      ]).then(() => runBackfill(merged).catch((e) => console.error("Backfill failed", e))),
     );
   },
 } satisfies ExportedHandler<Env>;

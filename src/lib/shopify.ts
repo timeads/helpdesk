@@ -300,3 +300,38 @@ export async function fulfillOrder(
   }
   return res.fulfillmentCreate.fulfillment;
 }
+
+/** One-off discount code from the composer (needs the write_discounts scope). */
+export async function createDiscountCode(
+  env: Env,
+  input: { code: string; kind: "percentage" | "amount"; value: number; title?: string; days?: number },
+) {
+  const value =
+    input.kind === "percentage"
+      ? { percentage: Math.min(1, Math.max(0.01, input.value / 100)) }
+      : { discountAmount: { amount: input.value.toFixed(2), appliesOnEachItem: false } };
+  const startsAt = new Date().toISOString();
+  const res = await shopify<{
+    discountCodeBasicCreate: { codeDiscountNode: { id: string } | null; userErrors: { field: string[] | null; message: string }[] };
+  }>(
+    env,
+    `mutation Discount($d: DiscountCodeBasicInput!) {
+      discountCodeBasicCreate(basicCodeDiscount: $d) { codeDiscountNode { id } userErrors { field message } }
+    }`,
+    {
+      d: {
+        title: input.title || `Support: ${input.code}`,
+        code: input.code,
+        startsAt,
+        ...(input.days ? { endsAt: new Date(Date.now() + input.days * 86400_000).toISOString() } : {}),
+        usageLimit: 1,
+        appliesOncePerCustomer: true,
+        context: { all: "ALL" },
+        customerGets: { value, items: { all: true } },
+      },
+    },
+  );
+  const errs = res.discountCodeBasicCreate.userErrors;
+  if (errs.length) throw new HttpError(422, "Shopify: " + errs.map((e) => e.message).join("; "));
+  return { id: res.discountCodeBasicCreate.codeDiscountNode!.id, code: input.code };
+}
