@@ -14,10 +14,12 @@ export function renderSettings(main) {
 }
 
 async function load(inner) {
-  let s, agents, macros, presets;
+  let s, agents, macros, presets, creds = null;
+  const isAdminUser = state.me.role === "admin";
   try {
-    [s, { agents }, { macros }, { presets }] = await Promise.all([
+    [s, { agents }, { macros }, { presets }, creds] = await Promise.all([
       api("/settings"), api("/agents"), api("/macros"), api("/shipping/presets"),
+      isAdminUser ? api("/credentials") : null,
     ]);
   } catch (e) {
     return mount(inner, h("div", { class: "notice bad" }, e.message));
@@ -28,6 +30,7 @@ async function load(inner) {
   if (new URLSearchParams(location.search).get("connected") === "gmail") toast("Gmail connected — importing recent mail");
   mount(inner,
     connections(s, isAdmin, inner),
+    isAdmin && creds ? credentials(creds.fields, inner) : null,
     profile(),
     team(agents, isAdmin, inner),
     savedReplies(macros, inner),
@@ -88,10 +91,71 @@ function connections(s, isAdmin, inner) {
     row("Gmail", i.gmail.connected, i.gmail.lastError, gmailInfo,
       i.gmail.connected ? [syncBtn, isAdmin ? disconnect : null]
         : isAdmin && i.gmail.configured ? h("a", { class: "btn sm primary", href: "/auth/mailbox" }, "Connect Gmail") : null, "mail"),
-    row("Shopify", i.shopify.connected, false, h("div", { class: "muted" }, i.shopify.connected ? i.shopify.shop : "Add Shopify app credentials as secrets (see README)."), null, "bag"),
-    row("UPS", i.ups.connected, false, h("div", { class: "muted" }, i.ups.connected ? (i.ups.env === "production" ? "Live — labels are billed to your UPS account" : "Test mode — labels are not billed") : "Add UPS API credentials as secrets (see README)."), null, "truck"),
-    row("AI drafts", i.ai.connected, false, h("div", { class: "muted" }, i.ai.connected ? `On · ${i.ai.model}` : "Optional. Add ANTHROPIC_API_KEY to show a “Draft with AI” button."), null, "spark"),
+    row("Shopify", i.shopify.connected, false, h("div", { class: "muted" }, i.shopify.connected ? i.shopify.shop : "Add your Shopify app keys under Credentials below."), null, "bag"),
+    row("UPS", i.ups.connected, false, h("div", { class: "muted" }, i.ups.connected ? (i.ups.env === "production" ? "Live — labels are billed to your UPS account" : "Test mode — labels are not billed") : "Add your UPS keys under Credentials below."), null, "truck"),
+    row("AI drafts", i.ai.connected, false, h("div", { class: "muted" }, i.ai.connected ? `On · ${i.ai.model}` : "Optional. Add an Anthropic key under Credentials to turn on “Draft with AI”."), null, "spark"),
   );
+}
+
+const GROUPS = [
+  { id: "shopify", title: "Shopify", desc: "From the Helpdesk app you created in Shopify. Use a Client ID + secret (Dev Dashboard) or an Admin API token (older custom apps)." },
+  { id: "ups", title: "UPS", desc: "From your app at developer.ups.com. Keep Mode on “test” until a test label prints correctly." },
+  { id: "ai", title: "AI drafts", desc: "Optional. A key from console.anthropic.com turns on “Draft with AI” (about 1–2¢ per draft)." },
+];
+
+function credentials(fields, inner) {
+  const sections = GROUPS.map((g) => {
+    const inputs = {};
+    const result = h("div", { class: "small", role: "status" });
+    const rows = fields.filter((f) => f.group === g.id).map((f) => {
+      let input;
+      if (f.options) {
+        input = h("select", { class: "input" }, f.options.map((o) => h("option", { value: o, selected: (f.value || f.options[0]) === o }, o)));
+      } else if (f.secret) {
+        input = h("input", { class: "input", type: "password", autocomplete: "off", spellcheck: false,
+          placeholder: f.set ? `Saved (${f.hint}) — type to replace` : f.placeholder || "" });
+      } else {
+        input = h("input", { class: "input", value: f.value || "", autocomplete: "off", spellcheck: false, placeholder: f.placeholder || "" });
+      }
+      inputs[f.key] = input;
+      const clear = f.source === "app" && f.secret
+        ? h("button", { class: "btn sm ghost danger", type: "button", onclick: async () => {
+            await api("/credentials", { method: "PUT", body: { [f.key]: "" } });
+            toast(`${f.label} removed`);
+            reload(inner);
+          } }, "Remove")
+        : null;
+      return h("label", { class: "field" },
+        h("span", { class: "row", style: { gap: "6px", minHeight: "21px" } }, f.label,
+          f.source === "cloudflare" && f.secret ? h("span", { class: "badge plain" }, "set in Cloudflare") : null),
+        clear ? h("span", { class: "row", style: { flexWrap: "nowrap", gap: "6px" } }, input, clear) : input,
+        f.help ? h("span", { class: "muted", style: { fontWeight: 400 } }, f.help) : null);
+    });
+    const save = saveButton(async () => {
+      const body = {};
+      for (const [k, input] of Object.entries(inputs)) {
+        const f = fields.find((x) => x.key === k);
+        if (f.secret && !input.value) continue; // blank secret = keep the saved one
+        body[k] = input.value;
+      }
+      await api("/credentials", { method: "PUT", body });
+      for (const [k, input] of Object.entries(inputs)) if (fields.find((x) => x.key === k).secret) input.value = "";
+      await runTest();
+    });
+    const test = h("button", { class: "btn", type: "button" }, "Test connection");
+    const runTest = async () => {
+      result.replaceChildren(h("span", { class: "muted" }, "Checking…"));
+      const r = await api(`/credentials/test/${g.id}`, { method: "POST" });
+      result.replaceChildren(h("span", { class: "badge " + (r.ok ? "good" : "bad"), style: { height: "auto", whiteSpace: "normal", padding: "3px 9px" } }, r.message));
+    };
+    test.onclick = busy(test, runTest);
+    return h("div", { class: "macro-row" },
+      h("h3", { class: "section", style: { margin: 0 } }, g.title),
+      h("p", { class: "muted small", style: { margin: 0, fontFamily: "var(--read)" } }, g.desc),
+      h("div", { class: "grid2 cred-grid" }, rows),
+      h("div", { class: "row" }, save, test, result));
+  });
+  return card("Credentials", "Paste the keys for each service here. They're encrypted before they're stored, and saved secrets are never shown again — only their last four characters.", ...sections);
 }
 
 function profile() {

@@ -6,6 +6,10 @@ import { shopifyConfigured } from "../lib/shopify";
 import { upsConfigured } from "../lib/ups";
 import { aiConfigured } from "../lib/ai";
 import { HttpError, deleteSetting, getSetting, setSetting } from "../lib/util";
+import { CREDENTIAL_FIELDS, describeCredentials, saveCredentials, withCredentials } from "../lib/credentials";
+import { shopify } from "../lib/shopify";
+import { testUps } from "../lib/ups";
+import Anthropic from "@anthropic-ai/sdk";
 
 const admin = new Hono<AppEnv>();
 
@@ -107,6 +111,49 @@ admin.put("/settings", async (c) => {
   if (body.shipFrom !== undefined) await setSetting(c.env, "ship_from", body.shipFrom);
   if (body.aiGuidance !== undefined) await setSetting(c.env, "ai_guidance", body.aiGuidance);
   return c.json({ ok: true });
+});
+
+admin.get("/credentials", async (c) => {
+  requireAdmin(c);
+  return c.json({ fields: await describeCredentials(c.env.RAW_ENV ?? c.env) });
+});
+
+admin.put("/credentials", async (c) => {
+  requireAdmin(c);
+  const body = await c.req.json<Record<string, string>>();
+  const allowed = new Set(CREDENTIAL_FIELDS.map((f) => f.key as string));
+  const values = Object.fromEntries(Object.entries(body).filter(([k, v]) => allowed.has(k) && typeof v === "string"));
+  await saveCredentials(c.env.RAW_ENV ?? c.env, values);
+  return c.json({ fields: await describeCredentials(c.env.RAW_ENV ?? c.env) });
+});
+
+/** Checks the saved credentials for one service with a harmless read-only call. */
+admin.post("/credentials/test/:group", async (c) => {
+  requireAdmin(c);
+  const env = await withCredentials(c.env.RAW_ENV ?? c.env);
+  const group = c.req.param("group");
+  try {
+    if (group === "shopify") {
+      if (!shopifyConfigured(env)) throw new Error("Add the store address and either a Client ID + secret or an Admin API token.");
+      const r = await shopify<{ shop: { name: string } }>(env, "{ shop { name } }");
+      return c.json({ ok: true, message: `Connected to ${r.shop.name}` });
+    }
+    if (group === "ups") {
+      if (!upsConfigured(env)) throw new Error("Add the Client ID, Client secret and account number.");
+      await testUps(env);
+      return c.json({ ok: true, message: `UPS accepted the keys (${env.UPS_ENV === "production" ? "live" : "test"} mode)` });
+    }
+    if (group === "ai") {
+      if (!aiConfigured(env)) throw new Error("Add an Anthropic API key.");
+      const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+      await client.models.retrieve(env.AI_MODEL || "claude-opus-5-5");
+      return c.json({ ok: true, message: `Key works · ${env.AI_MODEL || "claude-opus-5-5"} is available` });
+    }
+    throw new HttpError(404, "Unknown service");
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 404) throw e;
+    return c.json({ ok: false, message: (e as Error).message.replace(/^(Shopify|UPS)[^:]*: /, "$1: ") });
+  }
 });
 
 admin.post("/mailbox/disconnect", async (c) => {

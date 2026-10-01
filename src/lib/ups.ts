@@ -253,6 +253,11 @@ export async function createShipment(
   return parseShipResponse(json);
 }
 
+/** Fetches an OAuth token to prove the keys and account number are valid. */
+export async function testUps(env: Env) {
+  await token(env);
+}
+
 export async function voidShipment(env: Env, shipmentId: string) {
   await ups(env, "DELETE", `/api/shipments/${API_VERSION}/void/cancel/${encodeURIComponent(shipmentId)}`);
 }

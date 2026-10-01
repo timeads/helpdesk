@@ -15,7 +15,12 @@ It runs on Cloudflare Workers with a D1 database, which is free at this volume. 
 
 ## One-time setup
 
-You'll need about 30 minutes. Do the steps in order. **Never paste a secret into chat, email or a file in this repo.** Each secret goes into Cloudflare with `npx wrangler secret put`, which asks for the value privately.
+You'll need about 30 minutes. Do the steps in order. **Never paste a secret into chat, email or a file in this repo.**
+
+There are two places keys can go:
+
+- **Cloudflare secrets** (only `SESSION_SECRET`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` must go here, because the app needs them before anyone can sign in). Add them with `npx wrangler secret put NAME`, or in the dashboard under **Workers & Pages → helpdesk → Settings → Variables and Secrets → Add → Secret**.
+- **Settings → Credentials inside the app** for Shopify, UPS and the Anthropic key. Values are encrypted before they're stored, and secrets are never shown again (only their last four characters). Each service has a **Test connection** button. Values entered here override any set in Cloudflare.
 
 ### 0. Get the code onto your computer
 
@@ -65,46 +70,23 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 2. Create an app named **Helpdesk** with these Admin API scopes:
    `read_customers, read_orders, read_products, read_fulfillments, write_fulfillments, read_merchant_managed_fulfillment_orders, write_merchant_managed_fulfillment_orders`
 3. Install or release it on **Tuft the World**.
-4. Add **one** of these to Cloudflare:
-
-```bash
-# Dev Dashboard apps (Client ID + Secret):
-npx wrangler secret put SHOPIFY_CLIENT_ID
-npx wrangler secret put SHOPIFY_CLIENT_SECRET
-
-# …or an older custom app's Admin API access token (starts with shpat_):
-npx wrangler secret put SHOPIFY_ADMIN_TOKEN
-```
-
-If your store's `.myshopify.com` address isn't `tufttheworld.myshopify.com`, change `SHOPIFY_SHOP` in `wrangler.jsonc`.
+4. After you've signed in (step 6), open **Settings → Credentials → Shopify**. Enter the store address and **either** the Client ID + Client secret (Dev Dashboard apps) **or** the Admin API access token (`shpat_…`, older custom apps). Click **Save**, and the connection test runs automatically.
 
 ### 4. UPS: rates and labels
 
 1. Sign in at [developer.ups.com](https://developer.ups.com) with your UPS.com login and go to **Apps → Add Apps**.
 2. Link your **UPS shipper account**, then add the **Authorization (OAuth)**, **Rating** and **Shipping** products.
-3. Copy the Client ID and Client Secret into Cloudflare, along with your 6-character UPS account number:
+3. In the app, open **Settings → Credentials → UPS**. Enter the Client ID, Client secret and your 6-character UPS account number, then click **Save**.
 
-```bash
-npx wrangler secret put UPS_CLIENT_ID
-npx wrangler secret put UPS_CLIENT_SECRET
-npx wrangler secret put UPS_ACCOUNT_NUMBER
-```
-
-The app starts in **test mode** (`UPS_ENV: "test"` in `wrangler.jsonc`), so labels aren't billed. When a test label prints correctly, change it to `"production"` and redeploy.
+Mode starts on **test**, so labels aren't billed. When a test label prints correctly, switch Mode to **production** in the same place.
 
 > Labels are US-domestic for now. International shipments need customs forms, which aren't built yet.
 
 ### 5. (Optional) AI drafts
 
-Create a key at [console.anthropic.com](https://console.anthropic.com), add some credit, then:
+Create a key at [console.anthropic.com](https://console.anthropic.com) and add some credit. Then paste the key into **Settings → Credentials → AI drafts** and pick a model. Each draft costs roughly 1–2¢ on the default model; `claude-haiku-4-5` is cheaper still.
 
-```bash
-npx wrangler secret put ANTHROPIC_API_KEY
-```
-
-The model is set by `AI_MODEL` in `wrangler.jsonc`. Each draft costs roughly 1–2¢. For an even cheaper (and simpler) writer, set it to `claude-haiku-4-5`.
-
-### 6. Deploy and connect
+### 6. Deploy, sign in and connect
 
 ```bash
 npm run deploy

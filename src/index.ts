@@ -3,6 +3,7 @@ import type { AppEnv, Env } from "./env";
 import { requireAgent } from "./lib/auth";
 import { syncMailbox } from "./lib/gmail";
 import { HttpError } from "./lib/util";
+import { withCredentials } from "./lib/credentials";
 import authRoutes from "./routes/auth";
 import ticketRoutes from "./routes/tickets";
 import shippingRoutes from "./routes/shipping";
@@ -28,10 +29,14 @@ app.route("/api", api);
 app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
 export default {
-  fetch: app.fetch,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    // Raw env stays reachable for the credentials screen, which must tell app-entered from Cloudflare values
+    const merged = new URL(request.url).pathname.startsWith("/api/") ? { ...(await withCredentials(env)), RAW_ENV: env } : env;
+    return app.fetch(request, merged as Env, ctx);
+  },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
-      syncMailbox(env).catch((e) => {
+      syncMailbox(await withCredentials(env)).catch((e) => {
         console.error("Mail sync failed", e);
       }),
     );

@@ -147,7 +147,7 @@ svg.i { width: 16px; height: 16px; flex: none; }
 .input:focus, textarea.input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px var(--ochre-soft); }
 select.input { appearance: none; padding-right: 30px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a736b' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; }
 textarea.input { resize: vertical; line-height: 1.55; font-family: var(--read); font-size: 14.5px; }
-label.field { display: grid; gap: 5px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+label.field { display: grid; gap: 5px; align-content: start; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .check { display: flex; gap: 9px; align-items: flex-start; font-size: 13.5px; color: var(--text); cursor: pointer; line-height: 1.4; }
 .check input { margin: 2px 0 0; accent-color: var(--teal); width: 15px; height: 15px; }
 
@@ -549,6 +549,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .msg-head .avatar { display: none; }
   .page-head .inner, .page-inner { padding-left: 16px; padding-right: 16px; }
   .grid2, .grid3, .grid4 { grid-template-columns: 1fr 1fr; }
+  .cred-grid { grid-template-columns: 1fr; }
   .parcel { grid-template-columns: 1fr 1fr; }
   .input, textarea.input { font-size: 16px; }
 }

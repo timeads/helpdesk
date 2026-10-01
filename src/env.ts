@@ -22,6 +22,7 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   DEV_LOGIN_EMAIL?: string;
   DEMO_DATA?: string;
+  RAW_ENV?: Env; // env before app-entered credentials were applied
 }
 
 export interface Agent {
