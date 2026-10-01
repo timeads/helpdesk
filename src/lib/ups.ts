@@ -273,3 +273,85 @@ export async function voidShipment(env: Env, shipmentId: string) {
 }
 
 export const trackingUrl = (n: string) => `https://www.ups.com/track?tracknum=${encodeURIComponent(n)}`;
+
+export interface AddressCheck {
+  status: "valid" | "corrected" | "ambiguous" | "invalid" | "unchecked";
+  residential: boolean | null;
+  suggestion: Address | null;
+  candidates?: Address[];
+  provider: "UPS" | "EasyPost" | null;
+  message: string;
+}
+
+const norm = (s: string | undefined) => (s ?? "").toUpperCase().replace(/[.,#]/g, " ").replace(/\s+/g, " ").trim();
+const zip5 = (z: string | undefined) => (z ?? "").replace(/\D/g, "").slice(0, 5);
+
+/** True when a candidate only differs by formatting, abbreviations or a ZIP+4. */
+export function sameAddress(a: Address, b: Address): boolean {
+  const abbr = (s: string) =>
+    norm(s)
+      .replace(/\bSTREET\b/g, "ST").replace(/\bAVENUE\b/g, "AVE").replace(/\bROAD\b/g, "RD").replace(/\bDRIVE\b/g, "DR")
+      .replace(/\bBOULEVARD\b/g, "BLVD").replace(/\bLANE\b/g, "LN").replace(/\bCOURT\b/g, "CT").replace(/\bPLACE\b/g, "PL")
+      .replace(/\bAPARTMENT\b/g, "APT").replace(/\bSUITE\b/g, "STE").replace(/\bNORTH\b/g, "N").replace(/\bSOUTH\b/g, "S")
+      .replace(/\bEAST\b/g, "E").replace(/\bWEST\b/g, "W");
+  const lines = (x: Address) => abbr([x.address1, x.address2].filter(Boolean).join(" "));
+  return lines(a) === lines(b) && norm(a.city) === norm(b.city) && norm(a.state) === norm(b.state) && zip5(a.zip) === zip5(b.zip);
+}
+
+/**
+ * UPS Address Validation – Street Level (US and Puerto Rico), with residential/commercial classification.
+ * Needs the "Address Validation" product added to the UPS developer app.
+ */
+export async function validateAddressUps(env: Env, a: Address): Promise<AddressCheck> {
+  const json = await ups(env, "POST", "/api/addressvalidation/v2/3", {
+    XAVRequest: {
+      AddressKeyFormat: {
+        ConsigneeName: trunc(a.company || a.name, 35),
+        AddressLine: [a.address1, a.address2].filter(Boolean).map((l) => trunc(l, 35)),
+        PoliticalDivision2: a.city,
+        PoliticalDivision1: a.state,
+        PostcodePrimaryLow: zip5(a.zip),
+        CountryCode: a.country || "US",
+      },
+    },
+  });
+  const r = json?.XAVResponse ?? {};
+  const toAddr = (c: any): Address => {
+    const k = c?.AddressKeyFormat ?? {};
+    const al = asArray<string>(k.AddressLine);
+    return {
+      ...a,
+      address1: al[0] ?? a.address1,
+      address2: al[1] ?? a.address2,
+      city: k.PoliticalDivision2 ?? a.city,
+      state: k.PoliticalDivision1 ?? a.state,
+      zip: k.PostcodeExtendedLow ? `${k.PostcodePrimaryLow}-${k.PostcodeExtendedLow}` : k.PostcodePrimaryLow ?? a.zip,
+      country: k.CountryCode ?? a.country,
+    };
+  };
+  const candidates = asArray<any>(r.Candidate);
+  const cls = (c: any) => c?.AddressClassification?.Code ?? r.AddressClassification?.Code;
+  const residential = (code: string | undefined) => (code === "2" ? true : code === "1" ? false : null);
+  if (r.NoCandidatesIndicator !== undefined || !candidates.length) {
+    return { status: "invalid", residential: null, suggestion: null, provider: "UPS", message: "UPS couldn't find this address" };
+  }
+  const first = toAddr(candidates[0]);
+  if (r.ValidAddressIndicator !== undefined) {
+    const same = sameAddress(a, first);
+    return {
+      status: same ? "valid" : "corrected",
+      residential: residential(cls(candidates[0])),
+      suggestion: same ? null : first,
+      provider: "UPS",
+      message: same ? "Verified by UPS" : "UPS suggests a corrected address",
+    };
+  }
+  return {
+    status: "ambiguous",
+    residential: residential(cls(candidates[0])),
+    suggestion: first,
+    candidates: candidates.slice(0, 5).map(toAddr),
+    provider: "UPS",
+    message: "UPS found more than one possible match",
+  };
+}

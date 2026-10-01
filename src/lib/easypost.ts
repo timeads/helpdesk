@@ -155,3 +155,30 @@ export async function testEasypost(env: Env) {
 }
 
 export const uspsTrackingUrl = (n: string) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(n)}`;
+
+/** EasyPost delivery verification (about 2¢ when used on its own). Used when UPS isn't available. */
+export async function verifyAddressEasypost(env: Env, a: Address): Promise<import("./ups").AddressCheck> {
+  const { sameAddress } = await import("./ups");
+  const r = await ep(env, "POST", "/addresses", { verify: ["delivery"], address: address(a) });
+  const v = r?.verifications?.delivery;
+  if (!v?.success) {
+    return { status: "invalid", residential: null, suggestion: null, provider: "EasyPost", message: v?.errors?.[0]?.message ?? "This address couldn't be verified" };
+  }
+  const fixed: Address = {
+    ...a,
+    address1: r.street1 ?? a.address1,
+    address2: r.street2 ?? a.address2,
+    city: r.city ?? a.city,
+    state: r.state ?? a.state,
+    zip: r.zip ?? a.zip,
+    country: r.country ?? a.country,
+  };
+  const same = sameAddress(a, fixed);
+  return {
+    status: same ? "valid" : "corrected",
+    residential: typeof r.residential === "boolean" ? r.residential : null,
+    suggestion: same ? null : fixed,
+    provider: "EasyPost",
+    message: same ? "Verified" : "Suggested correction",
+  };
+}

@@ -79,7 +79,7 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 ### 4. UPS: rates and labels
 
 1. Sign in at [developer.ups.com](https://developer.ups.com) with your UPS.com login and go to **Apps → Add Apps**.
-2. Link your **UPS shipper account**, then add the **Authorization (OAuth)**, **Rating** and **Shipping** products.
+2. Link your **UPS shipper account**, then add the **Authorization (OAuth)**, **Rating**, **Shipping** and **Address Validation – Street Level** products.
 3. In the app, open **Settings → Credentials → UPS**. Enter the Client ID, Client secret and your 6-character UPS account number, then click **Save**.
 
 Mode starts on **test**, so labels aren't billed. When a test label prints correctly, switch Mode to **production** in the same place.
@@ -123,6 +123,7 @@ Every deploy then uploads those three to the running app (`scripts/write-secrets
 ## Shipping day to day
 
 - **Shipping → Orders** lists every open, unshipped Shopify order (oldest first) with saved views: Ready to ship, Priority, Payment pending, On hold, International, All open. Tick orders to **buy labels in bulk** (by rule, cheapest, fastest or a specific UPS service), **print packing slips**, or **hold / release**. The **UPS quote · margin** column fills in by itself (hover it to see every service), and the bulk bar shows the estimated spend and margin for the selected orders. Click an order for the full label builder: UPS rates load automatically and refresh as you change the box, weight or address, each service shows your margin (shipping paid − label), and the Buy button shows the margin of the service you picked.
+- **Address checks:** every US ship-to address is checked once (UPS Address Validation in production mode, else EasyPost at about 2¢) and marked Verified, Suggested fix or Address not found. The label screen offers the corrected address in one click and sets residential/business automatically; bulk buying skips orders whose address needs a look.
 - **Big orders:** *Add a box* splits a shipment into several boxes. Assign items to each box (or *Split evenly*); box weights fill in from Shopify product weights. You get one UPS shipment with a label and tracking number per box, plus printable "Box 2 of 3" contents slips.
 - **Shipping rules** (Settings) pick the box, signature, service, or hold an order. When no rule applies, the box and weight you used last time for the same items are reused (package learning).
 - **Scan & pack**: scan the barcode on the packing slip, scan each item (SKU or barcode), then **Verify & print label**.

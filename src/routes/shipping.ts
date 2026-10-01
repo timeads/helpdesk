@@ -4,6 +4,7 @@ import { findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shop
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
+import { checkAddress } from "../lib/address";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
   addressFromOrder, buyLabel, chooseRate, isInternational, isPaymentPending, isPriority, itemCount, itemsWeightLb,
@@ -221,6 +222,20 @@ shipping.put("/rules", async (c) => {
   return c.json({ rules: await loadRules(c.env) });
 });
 
+// ---- Address verification
+shipping.post("/verify-address", async (c) => {
+  const { address, fresh } = await c.req.json<{ address: Address; fresh?: boolean }>();
+  if (demo(c.env) && !anyCarrier(c.env)) {
+    // Local preview: one sample address gets a suggested correction so the screens can be seen
+    if (/detroit/i.test(address.city ?? "") && !/^100 W /i.test(address.address1 ?? "")) {
+      return c.json({ status: "corrected", residential: true, provider: "UPS", message: "UPS suggests a corrected address",
+        suggestion: { ...address, address1: "100 W Example St", zip: `${(address.zip ?? "").slice(0, 5)}-1204` } });
+    }
+    return c.json({ status: "valid", residential: !address.company, suggestion: null, provider: "UPS", message: "Verified by UPS (sample)" });
+  }
+  return c.json(await checkAddress(c.env, address, { fresh: !!fresh }));
+});
+
 // ---- Rates and labels
 shipping.post("/rates", async (c) => {
   const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string }>();
@@ -294,7 +309,12 @@ shipping.post("/labels/auto", async (c) => {
   if (d.hold) throw new HttpError(409, `${order.name} is on hold: ${d.hold}`);
   const plan: Plan = d.plan;
   if (!plan.weightKnown) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
-  const to = validAddress(addressFromOrder(order));
+  let to = validAddress(addressFromOrder(order));
+  // Don't buy a label for an address the carrier can't find or wants to correct
+  const check = await checkAddress(c.env, to);
+  if (check.status === "invalid") throw new HttpError(422, `${order.name}: ${check.message.toLowerCase()} — open it to fix the address`);
+  if (check.status === "corrected" || check.status === "ambiguous") throw new HttpError(422, `${order.name}: ${check.message.toLowerCase()} — open it to review`);
+  if (check.residential !== null) to = { ...to, residential: check.residential };
   // Every box from the plan (a remembered multi-box packing ships as one multi-box shipment)
   const titles = new Map(order.lineItems.nodes.map((l) => [l.id, l.title + (l.variantTitle ? ` · ${l.variantTitle}` : "")]));
   const parcels = validParcels(

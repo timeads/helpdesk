@@ -128,6 +128,25 @@ function loadQuotes(orders, onEach) {
   return Promise.all([worker(), worker(), worker()]);
 }
 
+const addrCache = new Map();
+function loadAddressChecks(orders, onEach) {
+  const todo = orders.filter((o) => !o.hasLabel && !o.international && !addrCache.has(o.id));
+  let i = 0;
+  const worker = async () => {
+    while (i < todo.length) {
+      const o = todo[i++];
+      addrCache.set(o.id, { loading: true });
+      try {
+        addrCache.set(o.id, await api("/shipping/verify-address", { method: "POST", body: { address: addressFromOrder(o) } }));
+      } catch {
+        addrCache.delete(o.id);
+      }
+      onEach(o);
+    }
+  };
+  return Promise.all([worker(), worker()]);
+}
+
 function renderQueue(root, params) {
   const st = { view: params.get("view") || "ready", orders: [], counts: {}, selected: new Set(), q: "", searchResults: null, policy: "rule" };
   const chips = h("div", { class: "view-chips", role: "tablist" });
@@ -190,17 +209,17 @@ function renderQueue(root, params) {
         const a = o.shippingAddress || {};
         const tr = h("tr", { class: "click" + (st.selected.has(o.id) ? " sel" : ""), tabindex: 0, onclick: () => openSlideout(o), onkeydown: (e) => { if (e.key === "Enter") openSlideout(o); } },
           h("td", { class: "chk" }, box),
-          h("td", {}, h("b", {}, o.name), h("div", { class: "small muted", title: fullTime(o.createdAt) }, ago(o.createdAt))),
+          h("td", { class: "nowrap" }, h("b", {}, o.name), h("div", { class: "small muted", title: fullTime(o.createdAt) }, ago(o.createdAt))),
           h("td", {}, a.name || o.email || "—"),
           h("td", {}, o.itemCount),
-          h("td", { class: o.plan.weightKnown ? "" : "muted" }, o.plan.weightKnown ? lbOz(o.plan.totalWeight ?? o.plan.parcel.weight) : "Needs weight"),
+          h("td", { class: "nowrap" + (o.plan.weightKnown ? "" : " muted") }, o.plan.weightKnown ? lbOz(o.plan.totalWeight ?? o.plan.parcel.weight) : "Needs weight"),
           h("td", {}, h("div", { class: "cell-box", title: (o.plan.boxes ?? []).map((b) => b.preset?.name ?? "Custom").join(" + ") },
               (o.plan.boxes?.length ?? 1) > 1 ? `${o.plan.boxes.length} boxes` : o.plan.preset?.name ?? "Custom"),
             o.plan.source !== "default" ? h("div", { class: "small muted" }, SOURCE_LABEL[o.plan.source] ?? "") : null),
           h("td", {}, o.requestedService || "—", o.priority ? h("span", { class: "badge warn plain", style: { marginLeft: "6px" } }, "Priority") : null),
           h("td", { class: "num" }, money(o.shippingPaid, "USD")),
           quoteCell(o),
-          h("td", {}, [a.city, a.provinceCode].filter(Boolean).join(", "), o.international ? h("span", { class: "badge plain", style: { marginLeft: "6px" } }, a.countryCodeV2) : null),
+          h("td", {}, h("div", {}, [a.city, a.provinceCode].filter(Boolean).join(", "), o.international ? h("span", { class: "badge plain", style: { marginLeft: "6px" } }, a.countryCodeV2) : null), addrCell(o)),
           h("td", { class: "flags" },
             o.hold ? h("span", { class: "badge bad", title: o.hold }, "On hold") : null,
             o.paymentPending ? h("span", { class: "badge warn" }, "Payment pending") : null,
@@ -210,6 +229,7 @@ function renderQueue(root, params) {
         return tr;
       })))));
     refreshQuotes(rows);
+    refreshAddresses(rows);
   }
 
   const cells = new Map();
@@ -235,6 +255,26 @@ function renderQueue(root, params) {
       h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`));
   }
   const refreshQuotes = (rows) => loadQuotes(rows, (o) => { fillQuote(o); if (st.selected.has(o.id)) drawBulk(visible()); });
+
+  // Address check badge under the city (each address is checked once and cached)
+  const addrCells = new Map();
+  function addrCell(o) {
+    const el = h("div", { class: "addr-badge" });
+    addrCells.set(o.id, el);
+    fillAddr(o, el);
+    return el;
+  }
+  function fillAddr(o, el = addrCells.get(o.id)) {
+    if (!el) return;
+    const r = addrCache.get(o.id);
+    if (!r || r.loading || r.status === "unchecked" || o.hasLabel) return mount(el);
+    const map = { valid: ["good", "check", "Verified"], corrected: ["warn", "spam", "Suggested fix"], ambiguous: ["warn", "spam", "Check address"], invalid: ["bad", "spam", "Address not found"] };
+    const [tone, ic, text] = map[r.status] ?? [];
+    if (!tone) return mount(el);
+    el.title = r.message;
+    mount(el, h("span", { class: `addr-pill ${tone}` }, icon(ic), text));
+  }
+  const refreshAddresses = (rows) => loadAddressChecks(rows, (o) => fillAddr(o));
 
   function drawBulk(rows) {
     const picked = rows.filter((o) => st.selected.has(o.id));
@@ -432,10 +472,63 @@ function buildLabelForm(root, o, presets, opts) {
     contents: split() ? lines.filter((l) => p.alloc[l.id] > 0).map((l) => ({ id: l.id, title: l.title, qty: p.alloc[l.id] })) : undefined,
   });
 
+  const inputs = {};
   const field = (label, key, attrs = {}) => {
     const input = h("input", { class: "input", value: s.to[key] ?? "", ...attrs });
-    input.addEventListener("input", () => { s.to[key] = input.value; quote(900); });
+    inputs[key] = input;
+    input.addEventListener("input", () => { s.to[key] = input.value; quote(900); verifySoon(1200); });
     return h("label", { class: "field" }, label, input);
+  };
+
+  // ---- Address check (UPS Address Validation, or EasyPost): verified / suggested fix / not found
+  const addrEl = h("div", { class: "addr-check" });
+  let resBox = null;
+  let resTouched = false;
+  let vseq = 0;
+  let vtimer;
+  const fmtAddr = (a) => [a.address1, a.address2, `${a.city}, ${a.state} ${a.zip}`].filter(Boolean).join(", ");
+  const applyAddress = (a) => {
+    for (const k of ["address1", "address2", "city", "state", "zip", "country"]) {
+      s.to[k] = a[k] ?? "";
+      if (inputs[k]) inputs[k].value = s.to[k];
+    }
+    toast("Address updated for this label");
+    quote(0);
+    verifySoon(0);
+  };
+  const drawCheck = (r) => {
+    s.addr = r;
+    if (!r) return mount(addrEl);
+    if (r.residential !== null && r.residential !== undefined && !resTouched && resBox) {
+      if (s.to.residential !== r.residential) { s.to.residential = r.residential; resBox.checked = r.residential; quote(0); }
+    }
+    const kind = { valid: "good", corrected: "warn", ambiguous: "warn", invalid: "bad", unchecked: "muted" }[r.status] ?? "muted";
+    const recheck = h("button", { class: "btn sm ghost", onclick: () => verifySoon(0, true) }, "Check again");
+    mount(addrEl, h("div", { class: `addr-note ${kind}` },
+      h("div", { class: "row", style: { gap: "8px", flexWrap: "nowrap", alignItems: "flex-start" } },
+        icon(r.status === "valid" ? "check" : r.status === "unchecked" ? "info" : "spam"),
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h("b", {}, r.message),
+          r.residential !== null && r.residential !== undefined && r.status !== "invalid" ? h("span", { class: "small" }, ` · ${r.residential ? "residential" : "business"} address`) : null,
+          r.status === "invalid" ? h("div", { class: "small" }, "Double-check it with the customer before buying a label — a wrong address costs a correction fee or a return.") : null,
+          r.status === "corrected" && r.suggestion ? h("div", { class: "suggest" }, h("span", { class: "small" }, "Suggested: "), h("b", {}, fmtAddr(r.suggestion)),
+            h("button", { class: "btn sm", onclick: () => applyAddress(r.suggestion) }, "Use this address")) : null,
+          r.status === "ambiguous" ? h("div", { class: "stack", style: { gap: "4px", marginTop: "6px" } }, (r.candidates ?? [r.suggestion]).filter(Boolean).map((cand) =>
+            h("button", { class: "btn sm ghost cand", onclick: () => applyAddress(cand) }, fmtAddr(cand)))) : null),
+        r.status !== "valid" ? recheck : null)));
+  };
+  const verifySoon = (delay = 800, fresh = false) => {
+    clearTimeout(vtimer);
+    vtimer = setTimeout(async () => {
+      const my = ++vseq;
+      if (!s.to.address1 || !s.to.city || !s.to.zip) return drawCheck(null);
+      try {
+        const r = await api("/shipping/verify-address", { method: "POST", body: { address: s.to, fresh } });
+        if (my === vseq) drawCheck(r);
+      } catch (e) {
+        if (my === vseq) drawCheck({ status: "unchecked", residential: null, message: e.message });
+      }
+    }, delay);
   };
 
   // ---- Packages (+ which items go in each box)
@@ -557,13 +650,15 @@ function buildLabelForm(root, o, presets, opts) {
           h("div", { style: { minWidth: 0 } }, h("div", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
           h("span", { class: "qty" }, `× ${l.quantity}`))))) : h("p", { class: "muted small" }, "Not linked to an order — for replacements, samples, etc."),
     h("h3", { class: "section" }, "Ship to"),
+    addrEl,
     h("div", { class: "stack" },
       h("div", { class: "grid2" }, field("Name", "name"), field("Company", "company")),
       h("div", { class: "grid2" }, field("Address", "address1"), field("Apt / suite", "address2")),
       h("div", { class: "grid4" }, field("City", "city"), field("State", "state", { maxlength: 2 }), field("ZIP", "zip"), field("Country", "country", { maxlength: 2 })),
       h("div", { class: "grid2" }, field("Phone", "phone"), (() => {
         const r = h("input", { type: "checkbox", checked: s.to.residential });
-        r.onchange = () => { s.to.residential = r.checked; quote(0); };
+        resBox = r;
+        r.onchange = () => { s.to.residential = r.checked; resTouched = true; quote(0); };
         return h("label", { class: "check", style: { alignSelf: "end", paddingBottom: "8px" } }, r, "Residential address");
       })())),
     h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "baseline" } },
@@ -594,6 +689,8 @@ function buildLabelForm(root, o, presets, opts) {
     drawBuy();
     buy.onclick = busy(buy, async () => {
       if (!s.rate) return;
+      if (s.addr?.status === "invalid" && !confirm("The carrier couldn't find this address. Buy the label anyway?")) return;
+      if (s.addr?.status === "corrected" && !confirm("There's a suggested correction for this address you haven't used. Buy with the address as typed?")) return;
       if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
         && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
       const win = reserveWindow();
@@ -663,6 +760,7 @@ function buildLabelForm(root, o, presets, opts) {
   }
 
   quote(0);
+  verifySoon(0);
 }
 
 const sameService = (chosen, service) => {
