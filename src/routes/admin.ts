@@ -311,7 +311,7 @@ admin.get("/settings", async (c) => {
   return c.json({
     integrations: {
       gmail: box
-        ? { connected: true, email: box.email, lastSyncAt: box.lastSyncAt ?? null, lastError: box.lastError ?? null }
+        ? { connected: true, email: box.email, lastSyncAt: box.lastSyncAt ?? null, lastError: box.lastError ?? null, catchingUp: !!box.catchingUp }
         : { connected: false, configured: !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET), email: c.env.SUPPORT_EMAIL },
       shopify: { connected: shopifyConfigured(c.env), shop: c.env.SHOPIFY_SHOP },
       ups: { connected: upsConfigured(c.env), env: c.env.UPS_ENV },

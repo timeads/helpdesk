@@ -209,7 +209,8 @@ function createInbox(main, loc) {
   });
   syncBtn.addEventListener("click", busy(syncBtn, async () => {
     const r = await api("/tickets/sync", { method: "POST" });
-    toast(r.created ? `${r.created} new ticket${r.created > 1 ? "s" : ""}` : r.imported ? `${r.imported} new message${r.imported > 1 ? "s" : ""}` : "Inbox is up to date");
+    toast((r.created ? `${r.created} new ticket${r.created > 1 ? "s" : ""}` : r.imported ? `${r.imported} new message${r.imported > 1 ? "s" : ""}` : r.more ? "Importing" : "Inbox is up to date")
+      + (r.more ? " — more mail is still coming in" : ""));
     await loadList();
     refreshCounts();
   }));

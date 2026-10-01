@@ -16,6 +16,7 @@ export interface MailboxState {
   connectedAt: string;
   lastSyncAt?: string;
   lastError?: string | null;
+  catchingUp?: boolean; // the last run hit its request budget; the next one continues
 }
 
 export interface MailRules {
@@ -43,7 +44,20 @@ async function accessToken(env: Env): Promise<string> {
   });
 }
 
+/**
+ * Cloudflare's free plan allows 50 outside requests per run (cron tick or page request). Gmail calls
+ * are counted per run so a big import stops cleanly and the next minute's run carries on.
+ */
+export const GMAIL_BUDGET = 40;
+export class GmailBudgetError extends Error {}
+const budgets = new WeakMap<object, { used: number }>();
+export const gmailCallsLeft = (env: Env) => GMAIL_BUDGET - (budgets.get(env)?.used ?? 0);
+
 export async function gmail<T = any>(env: Env, path: string, init: RequestInit = {}): Promise<T> {
+  const b = budgets.get(env) ?? { used: 0 };
+  budgets.set(env, b);
+  if (b.used >= GMAIL_BUDGET) throw new GmailBudgetError("Gmail request budget for this run is used up");
+  b.used++;
   const token = await accessToken(env);
   const res = await fetch(API + path, {
     ...init,
@@ -96,20 +110,26 @@ export async function importMessage(env: Env, id: string, opts: ImportOpts = {})
     .bind(id)
     .first<{ ticket_id: number }>();
   if (existing) return { ticketId: existing.ticket_id, created: false };
+  if (!opts.force && (await env.DB.prepare("SELECT 1 FROM skipped_messages WHERE gmail_message_id = ?").bind(id).first())) return null;
 
   let msg: GmailMessage;
   try {
     msg = await gmail<GmailMessage>(env, `/messages/${id}?format=full`);
   } catch (e) {
-    if (e instanceof HttpError && e.status === 404) return null; // deleted since
+    if (e instanceof HttpError && e.status === 404) return skip(env, id, "deleted");
     throw e;
   }
   return storeMessage(env, msg, opts);
 }
 
+async function skip(env: Env, id: string, reason: string): Promise<null> {
+  await env.DB.prepare("INSERT OR IGNORE INTO skipped_messages (gmail_message_id, reason) VALUES (?, ?)").bind(id, reason).run();
+  return null;
+}
+
 async function storeMessage(env: Env, msg: GmailMessage, opts: ImportOpts): Promise<{ ticketId: number; created: boolean } | null> {
   const labels = msg.labelIds ?? [];
-  if (labels.includes("DRAFT") || labels.includes("SPAM") || labels.includes("TRASH")) return null;
+  if (labels.includes("DRAFT") || labels.includes("SPAM") || labels.includes("TRASH")) return opts.historical ? null : skip(env, msg.id, "draft/spam/trash");
 
   const h = headerMap(msg.payload);
   const box = await getMailbox(env);
@@ -123,8 +143,9 @@ async function storeMessage(env: Env, msg: GmailMessage, opts: ImportOpts): Prom
 
   if (!ticket) {
     // Only inbound customer mail in the inbox starts a ticket
-    if (outbound || (!opts.force && !opts.historical && !labels.includes("INBOX"))) return null;
-    if (!opts.force && (blocked(rules, from.email) || (rules.skipAutomated && isAutomated(h)))) return null;
+    if (outbound || (!opts.force && !opts.historical && !labels.includes("INBOX"))) return opts.historical ? null : skip(env, msg.id, outbound ? "sent by us" : "not in inbox");
+    if (!opts.force && blocked(rules, from.email)) return opts.historical ? null : skip(env, msg.id, "blocked sender");
+    if (!opts.force && rules.skipAutomated && isAutomated(h)) return opts.historical ? null : skip(env, msg.id, "newsletter / automated");
   }
 
   const sentAt = new Date(Number(msg.internalDate)).toISOString();
@@ -266,20 +287,33 @@ export async function sendMacroAutoReply(env: Env, t: TicketRow, macroId: number
   await importMessage(env, sent.id, { force: true, skipRules: true });
 }
 
-/** Pull new mail. Uses Gmail's history feed after the first run. */
-export async function syncMailbox(env: Env): Promise<{ imported: number; created: number; closed: number }> {
+/**
+ * Pull new mail. Uses Gmail's history feed after the first run. Works within a per-run request
+ * budget: when it runs out, the sync position isn't advanced, so the next run picks up the rest
+ * (messages already imported or skipped cost nothing the second time).
+ */
+export async function syncMailbox(env: Env): Promise<{ imported: number; created: number; closed: number; more: boolean }> {
   const box = await getMailbox(env);
-  if (!box) return { imported: 0, created: 0, closed: 0 };
+  if (!box) return { imported: 0, created: 0, closed: 0, more: false };
   let imported = 0;
   let created = 0;
   let closed = 0;
+  let more = false;
   const support = await supportSettings(env);
   const handle = async (ids: string[]) => {
     for (const id of ids) {
-      const r = await importMessage(env, id);
-      if (r) {
-        imported++;
-        if (r.created) created++;
+      try {
+        const r = await importMessage(env, id);
+        if (r) {
+          imported++;
+          if (r.created) created++;
+        }
+      } catch (e) {
+        if (e instanceof GmailBudgetError) {
+          more = true;
+          return;
+        }
+        throw e;
       }
     }
   };
@@ -325,30 +359,44 @@ export async function syncMailbox(env: Env): Promise<{ imported: number; created
       } catch (e) {
         // History IDs expire after about a week offline — fall back to a recent scan
         if (e instanceof HttpError && e.status === 404) needsFull = true;
+        else if (e instanceof GmailBudgetError) more = true;
         else throw e;
       }
     }
 
-    if (needsFull) {
+    if (needsFull && !more) {
       const rules = { ...DEFAULT_RULES, ...(await getSetting<Partial<MailRules>>(env, "mail_rules", {})) };
       const ids: string[] = [];
       let pageToken: string | undefined;
-      do {
-        const q = new URLSearchParams({ q: `in:inbox newer_than:${rules.importDays}d`, maxResults: "100" });
-        if (pageToken) q.set("pageToken", pageToken);
-        const page = await gmail<{ messages?: { id: string }[]; nextPageToken?: string }>(env, `/messages?${q}`);
-        ids.push(...(page.messages ?? []).map((m) => m.id));
-        pageToken = page.nextPageToken;
-      } while (pageToken && ids.length < 500);
-      await handle(ids.reverse()); // oldest first so threads build in order
+      try {
+        do {
+          const q = new URLSearchParams({ q: `in:inbox newer_than:${rules.importDays}d`, maxResults: "500" });
+          if (pageToken) q.set("pageToken", pageToken);
+          const page = await gmail<{ messages?: { id: string }[]; nextPageToken?: string }>(env, `/messages?${q}`);
+          ids.push(...(page.messages ?? []).map((m) => m.id));
+          pageToken = page.nextPageToken;
+        } while (pageToken && ids.length < 2000);
+      } catch (e) {
+        if (!(e instanceof GmailBudgetError)) throw e;
+        more = true;
+      }
+      if (!more) await handle(ids.reverse()); // oldest first so threads build in order
     }
 
-    await setSetting(env, "mailbox", { ...box, historyId: profile.historyId, lastSyncAt: nowIso(), lastError: null });
+    // Only move the sync position once everything up to now is in
+    const next = more ? box.historyId : needsFull || box.historyId ? profile.historyId : box.historyId;
+    await setSetting(env, "mailbox", {
+      ...box,
+      historyId: next,
+      lastSyncAt: nowIso(),
+      lastError: null,
+      catchingUp: more,
+    });
   } catch (e) {
     await setSetting(env, "mailbox", { ...box, lastSyncAt: nowIso(), lastError: String((e as Error).message ?? e) });
     throw e;
   }
-  return { imported, created, closed };
+  return { imported, created, closed, more };
 }
 
 export async function sendRaw(env: Env, raw: string, threadId: string | null): Promise<{ id: string; threadId: string }> {
@@ -390,6 +438,8 @@ export interface BackfillJob {
 export async function runBackfill(env: Env, batch = 25): Promise<BackfillJob | null> {
   const job = await getSetting<BackfillJob | null>(env, "backfill", null);
   if (!job || job.finishedAt) return job;
+  batch = Math.min(batch, gmailCallsLeft(env) - 2); // one list call + one thread per conversation
+  if (batch < 1) return job;
   try {
     const q = new URLSearchParams({ q: `newer_than:${job.days}d -in:spam -in:trash -in:drafts -in:chats`, maxResults: String(batch) });
     if (job.pageToken) q.set("pageToken", job.pageToken);
@@ -422,7 +472,8 @@ export async function runBackfill(env: Env, batch = 25): Promise<BackfillJob | n
     if (!page.nextPageToken) job.finishedAt = nowIso();
     job.error = null;
   } catch (e) {
-    job.error = String((e as Error).message ?? e).slice(0, 300);
+    // Out of budget mid-page: the threads done so far are saved; this page is re-listed next run
+    if (!(e instanceof GmailBudgetError)) job.error = String((e as Error).message ?? e).slice(0, 300);
   }
   await setSetting(env, "backfill", job);
   return job;

@@ -82,6 +82,7 @@ function connections(s, isAdmin, inner) {
   const i = s.integrations;
   const gmailInfo = i.gmail.connected
     ? [h("div", {}, i.gmail.email), h("div", { class: "muted" }, i.gmail.lastSyncAt ? `Last checked ${relTime(i.gmail.lastSyncAt)} ago` : "Waiting for first sync"),
+       i.gmail.catchingUp ? h("div", { class: "small", style: { color: "var(--ochre-text)" } }, "Still importing — about 40 emails a minute until it's caught up") : null,
        i.gmail.lastError ? h("div", { style: { color: "var(--red)" } }, i.gmail.lastError) : null]
     : [h("div", { class: "muted" }, i.gmail.configured ? `Connect ${i.gmail.email} to start turning email into tickets.` : "Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET first (see README).")];
   const syncBtn = h("button", { class: "btn sm" }, "Check now");
