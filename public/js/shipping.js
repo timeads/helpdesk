@@ -91,9 +91,11 @@ export function renderShipping(main) {
 
 let queueApi = null; // lets the slideout refresh the queue after buying a label
 
+const SOURCE_LABEL = { rule: "by rule", learned: "remembered", "learned-similar": "remembered (similar order)" };
+
 // ---- Live UPS quotes for queue rows (cached per order + package, a few at a time)
 const quoteCache = new Map();
-const quoteKey = (o) => `${o.id}|${JSON.stringify(o.plan.parcel)}|${o.plan.signature ?? ""}`;
+const quoteKey = (o) => `${o.id}|${JSON.stringify(o.plan.parcels ?? [o.plan.parcel])}|${o.plan.signature ?? ""}`;
 function pickRate(rates, policy, plan) {
   if (!rates?.length) return null;
   const want = policy === "rule" ? plan.service ?? "cheapest" : policy;
@@ -110,7 +112,7 @@ function loadQuotes(orders, onEach) {
       const key = quoteKey(o);
       quoteCache.set(key, { loading: true });
       try {
-        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: [o.plan.parcel], signature: o.plan.signature || undefined } });
+        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: o.plan.parcels ?? [o.plan.parcel], signature: o.plan.signature || undefined } });
         quoteCache.set(key, { rates });
       } catch (e) {
         quoteCache.set(key, { error: e.message });
@@ -186,9 +188,10 @@ function renderQueue(root, params) {
           h("td", {}, h("b", {}, o.name), h("div", { class: "small muted", title: fullTime(o.createdAt) }, ago(o.createdAt))),
           h("td", {}, a.name || o.email || "—"),
           h("td", {}, o.itemCount),
-          h("td", { class: o.plan.weightKnown ? "" : "muted" }, o.plan.weightKnown ? lbOz(o.plan.parcel.weight) : "Needs weight"),
-          h("td", {}, h("div", { class: "cell-box" }, o.plan.preset?.name ?? "Custom"),
-            o.plan.source !== "default" ? h("div", { class: "small muted" }, o.plan.source === "rule" ? "by rule" : "remembered") : null),
+          h("td", { class: o.plan.weightKnown ? "" : "muted" }, o.plan.weightKnown ? lbOz(o.plan.totalWeight ?? o.plan.parcel.weight) : "Needs weight"),
+          h("td", {}, h("div", { class: "cell-box", title: (o.plan.boxes ?? []).map((b) => b.preset?.name ?? "Custom").join(" + ") },
+              (o.plan.boxes?.length ?? 1) > 1 ? `${o.plan.boxes.length} boxes` : o.plan.preset?.name ?? "Custom"),
+            o.plan.source !== "default" ? h("div", { class: "small muted" }, SOURCE_LABEL[o.plan.source] ?? "") : null),
           h("td", {}, o.requestedService || "—", o.priority ? h("span", { class: "badge warn plain", style: { marginLeft: "6px" } }, "Priority") : null),
           h("td", { class: "num" }, money(o.shippingPaid, "USD")),
           quoteCell(o),
@@ -367,7 +370,15 @@ function buildLabelForm(root, o, presets, opts) {
   const weightsKnown = lines.length > 0 && lines.every((l) => l.lb !== null);
   const defaultBox = presets.find((b) => b.is_default) ?? presets[0];
   const allIn = () => Object.fromEntries(lines.map((l) => [l.id, l.qty]));
-  if (plan) s.parcels = [{ preset: plan.preset?.id ?? "", ...plan.parcel, weight: plan.weightKnown ? plan.parcel.weight : "", alloc: allIn(), auto: false }];
+  if (plan) {
+    const boxes = plan.boxes?.length ? plan.boxes : [{ preset: plan.preset, parcel: plan.parcel, items: allIn() }];
+    s.parcels = boxes.map((b) => ({
+      preset: b.preset?.id ?? "", length: b.parcel.length, width: b.parcel.width, height: b.parcel.height,
+      weight: plan.weightKnown ? b.parcel.weight : "",
+      alloc: Object.fromEntries(lines.map((l) => [l.id, b.items?.[l.id] ?? 0])),
+      auto: false,
+    }));
+  }
   else s.parcels = [{ preset: defaultBox?.id ?? "", length: defaultBox?.length ?? "", width: defaultBox?.width ?? "", height: defaultBox?.height ?? "", weight: "", alloc: allIn(), auto: false }];
   const paid = o ? o.shippingPaid : null;
   const split = () => s.parcels.length > 1;
@@ -411,6 +422,7 @@ function buildLabelForm(root, o, presets, opts) {
   }
   const cleanParcel = (p) => ({
     length: p.length, width: p.width, height: p.height, weight: p.weight,
+    presetId: p.preset ? Number(p.preset) : undefined,
     box: presets.find((b) => String(b.id) === String(p.preset))?.name,
     contents: split() ? lines.filter((l) => p.alloc[l.id] > 0).map((l) => ({ id: l.id, title: l.title, qty: p.alloc[l.id] })) : undefined,
   });
@@ -531,7 +543,9 @@ function buildLabelForm(root, o, presets, opts) {
         h("div", {}, h("div", { class: "lbl" }, "Customer chose"), h("b", {}, o.requestedService || "—")),
         h("div", {}, h("div", { class: "lbl" }, "Customer paid for shipping"), h("b", {}, money(paid, "USD")))),
       plan?.rules?.matched?.length ? h("div", { class: "notice info", style: { marginTop: "10px" } }, icon("spark"), " Rules applied: ", plan.rules.matched.join(" · ")) : null,
-      plan?.source === "learned" ? h("div", { class: "notice", style: { marginTop: "10px" } }, "Box and weight remembered from the last time these exact items shipped.") : null,
+      plan?.source === "learned" ? h("div", { class: "notice", style: { marginTop: "10px" } }, icon("spark"), " ",
+        (plan.boxes?.length ?? 1) > 1 ? `Packed like last time these exact items shipped: ${plan.boxes.length} boxes, same split and weights.` : "Box and weight remembered from the last time these exact items shipped.") : null,
+      plan?.source === "learned-similar" ? h("div", { class: "notice", style: { marginTop: "10px" } }, icon("spark"), " Box remembered from an order with the same products in different quantities — check the weight.") : null,
       split() ? null : h("div", { class: "stack", style: { marginTop: "12px" } }, o.lineItems.nodes.map((l) =>
         h("div", { class: "line" },
           l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),

@@ -26,7 +26,12 @@ function validParcels(parcels: Parcel[]): Parcel[] {
     const contents = Array.isArray(p.contents)
       ? p.contents.filter((x) => x && Number(x.qty) > 0).slice(0, 100).map((x) => ({ id: String(x.id).slice(0, 100), title: String(x.title ?? "").slice(0, 200), qty: Math.round(Number(x.qty)) }))
       : undefined;
-    return { ...n, ...(contents?.length ? { contents } : {}), ...(p.box ? { box: String(p.box).slice(0, 100) } : {}) };
+    return {
+      ...n,
+      ...(contents?.length ? { contents } : {}),
+      ...(p.box ? { box: String(p.box).slice(0, 100) } : {}),
+      ...(Number(p.presetId) > 0 ? { presetId: Number(p.presetId) } : {}),
+    };
   });
 }
 
@@ -282,7 +287,16 @@ shipping.post("/labels/auto", async (c) => {
   const plan: Plan = d.plan;
   if (!plan.weightKnown) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
   const to = validAddress(addressFromOrder(order));
-  const parcels = validParcels([plan.parcel]);
+  // Every box from the plan (a remembered multi-box packing ships as one multi-box shipment)
+  const titles = new Map(order.lineItems.nodes.map((l) => [l.id, l.title + (l.variantTitle ? ` · ${l.variantTitle}` : "")]));
+  const parcels = validParcels(
+    plan.boxes.map((b) => ({
+      ...b.parcel,
+      presetId: b.preset?.id ?? null,
+      box: b.preset?.name,
+      contents: plan.boxes.length > 1 ? Object.entries(b.items).filter(([, q]) => q > 0).map(([id, qty]) => ({ id, title: titles.get(id) ?? "", qty })) : undefined,
+    })),
+  );
   const rates = await getRates(c.env, await shipFrom(c.env), to, parcels, plan.signature);
   const policy = !body.policy || body.policy === "rule" ? plan.service ?? "cheapest" : body.policy;
   const rate = chooseRate(rates, policy);
@@ -346,6 +360,33 @@ async function labelRows(env: Env, q: { ids?: string; batch?: string }) {
   const { results } = await env.DB.prepare(`SELECT * FROM shipments WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY id`).bind(...ids).all<any>();
   return results;
 }
+
+/** Packings the app has learned (what box(es) each set of items went in). */
+shipping.get("/learned", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT item_key, label, boxes, preset_id, length, width, height, weight, uses, updated_at FROM learned_parcels ORDER BY updated_at DESC LIMIT 500",
+  ).all<any>();
+  const presets = new Map((await c.env.DB.prepare("SELECT id, name FROM package_presets").all<{ id: number; name: string }>()).results.map((p) => [p.id, p.name]));
+  return c.json({
+    learned: results.map((r) => {
+      const boxes = r.boxes ? JSON.parse(r.boxes) : [{ preset_id: r.preset_id, length: r.length, width: r.width, height: r.height, weight: r.weight, items: {} }];
+      return {
+        key: r.item_key,
+        label: r.label || r.item_key.replace(/\|/g, ", ").replace(/×(\d+)/g, " × $1"),
+        uses: r.uses,
+        updatedAt: r.updated_at,
+        boxes: boxes.map((b: any) => ({ name: (b.preset_id && presets.get(b.preset_id)) || `${b.length}×${b.width}×${b.height} in`, weight: b.weight, items: b.items ?? {} })),
+      };
+    }),
+  });
+});
+
+shipping.delete("/learned", async (c) => {
+  const key = c.req.query("key");
+  if (!key) throw new HttpError(400, "Which packing?");
+  await c.env.DB.prepare("DELETE FROM learned_parcels WHERE item_key = ?").bind(key).run();
+  return c.json({ ok: true });
+});
 
 /** Import a Redo shipping export (the browser parses the CSV and sends ~40 orders per call). */
 shipping.post("/import/redo", async (c) => {
@@ -432,7 +473,7 @@ function packingSlip(o: Described, size: "4x6" | "letter", from: Address | null)
     <header><div><div class="brand">Tuft the World</div>${from ? `<div class="v">${escapeHtml([from.address1, `${from.city}, ${from.state} ${from.zip}`].join(" · "))}</div>` : ""}</div>
       <div class="right"><div class="order">${escapeHtml(o.name)}</div><div class="v">${new Date(o.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div></div></header>
     <div class="cols"><div><div class="lbl">Ship to</div><div>${escapeHtml([a.name, a.company, a.address1, a.address2, `${a.city ?? ""}, ${a.provinceCode ?? ""} ${a.zip ?? ""}`, a.countryCodeV2 !== "US" ? a.country : ""].filter(Boolean).join("\n")).replace(/\n/g, "<br>")}</div></div>
-      <div><div class="lbl">Shipping</div><div>${escapeHtml(o.requestedService || "—")}</div>${o.plan.preset ? `<div class="lbl" style="margin-top:6px">Box</div><div>${escapeHtml(o.plan.preset.name)}</div>` : ""}</div></div>
+      <div><div class="lbl">Shipping</div><div>${escapeHtml(o.requestedService || "—")}</div>${o.plan.preset ? `<div class="lbl" style="margin-top:6px">${o.plan.boxes.length > 1 ? `Boxes (${o.plan.boxes.length})` : "Box"}</div><div>${escapeHtml(o.plan.boxes.map((b) => b.preset?.name ?? "Custom").join(" + "))}</div>` : ""}</div></div>
     <table><thead><tr><th class="q">Qty</th><th>Item</th></tr></thead><tbody>${lines}</tbody></table>
     ${o.note ? `<div class="note"><b>Note:</b> ${escapeHtml(o.note)}</div>` : ""}
     <footer>${code128Svg(code, { height: 48, module: 2 })}<div class="v">Scan at the packing station · ${escapeHtml(code)}</div><div class="thanks">Thanks for tufting with us!</div></footer>

@@ -113,7 +113,7 @@ export function renderScan(root, { openSlideout }) {
       })),
       h("div", { class: "row", style: { marginTop: "14px", justifyContent: "space-between" } },
         h("div", { class: "small muted" },
-          `Box: ${o.plan.preset?.name ?? "custom"} · ${o.plan.weightKnown ? `${o.plan.parcel.weight} lb` : "weight unknown — use the label builder"}`,
+          `${(o.plan.boxes?.length ?? 1) > 1 ? `${o.plan.boxes.length} boxes: ${o.plan.boxes.map((b) => b.preset?.name ?? "custom").join(" + ")}` : `Box: ${o.plan.preset?.name ?? "custom"}`} · ${o.plan.weightKnown ? `${o.plan.totalWeight ?? o.plan.parcel.weight} lb` : "weight unknown — use the label builder"}`,
           o.plan.signature ? " · signature required" : ""),
         blocked || !o.plan.weightKnown ? null : go)));
   }

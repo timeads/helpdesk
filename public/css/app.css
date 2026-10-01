@@ -845,6 +845,15 @@ textarea.grow-input { resize: none; overflow: hidden; min-height: 38px; line-hei
 }
 
 
+/* Packing memory */
+.learned { margin-top: 12px; display: grid; gap: 8px; }
+.learned-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); }
+.learned-row .what b { font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .learned-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .learned-row .boxes { grid-column: 1 / -1; grid-row: 2; }
+}
+
 /* Team */
 .team-list { display: grid; }
 .team-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }

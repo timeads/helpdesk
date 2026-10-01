@@ -429,7 +429,40 @@ function shippingRules(data, presets, inner) {
   }, "Save rules");
   return card("Shipping rules", "Applied to every order in the queue: they pick the box, signature and service, or hold the order. You can still change anything per order. Earlier rules win.",
     listEl, h("div", { class: "row", style: { marginTop: "8px" } }, save, add),
-    h("h3", { class: "section" }, "Package learning"),
-    h("p", { class: "muted small", style: { margin: "0 0 8px" } }, "When no rule picks a box, reuse what you chose the last time the exact same items shipped."),
-    h("div", { class: "stack" }, learnBox("parcel", "Remember the box"), learnBox("weight", "Remember the weight")));
+    h("h3", { class: "section" }, "Packing memory"),
+    h("p", { class: "muted small", style: { margin: "0 0 8px" } }, "Every label you buy teaches the app how those items were packed: the box (or boxes, and what went in each) and the weight. The next order with the same items is packed the same way; the same products in other quantities reuse the box. Rules above still win."),
+    h("div", { class: "stack" }, learnBox("parcel", "Remember boxes"), learnBox("weight", "Remember weights")),
+    learnedList());
+}
+
+function learnedList() {
+  const el = h("div", { class: "learned" }, h("p", { class: "small muted" }, "Loading what's been learned…"));
+  const load = async () => {
+    let learned;
+    try { ({ learned } = await api("/shipping/learned")); } catch (e) { return mount(el, h("p", { class: "small", style: { color: "var(--brick)" } }, e.message)); }
+    if (!learned.length) return mount(el, h("p", { class: "small muted" }, "Nothing learned yet — it starts with the next label you buy."));
+    const search = h("input", { class: "input", type: "search", placeholder: `Search ${learned.length} remembered packings…`, "aria-label": "Search remembered packings" });
+    const list = h("div");
+    const draw = () => {
+      const q = search.value.toLowerCase();
+      mount(list, learned.filter((r) => r.label.toLowerCase().includes(q)).slice(0, 100).map((r) => {
+        const forget = h("button", { class: "btn sm ghost danger" }, "Forget");
+        forget.onclick = busy(forget, async () => {
+          await api(`/shipping/learned?key=${encodeURIComponent(r.key)}`, { method: "DELETE" });
+          learned = learned.filter((x) => x !== r);
+          toast("Forgotten — the next order with these items starts fresh");
+          draw();
+        });
+        return h("div", { class: "learned-row" },
+          h("div", { class: "what" }, h("b", {}, r.label), h("div", { class: "small muted" }, `Used ${r.uses}× · last ${((t) => (t === "now" ? "just now" : /[mhd]$/.test(t) ? `${t} ago` : `on ${t}`))(relTime(r.updatedAt))}`)),
+          h("div", { class: "boxes small" }, r.boxes.map((b, i) => h("div", {}, r.boxes.length > 1 ? h("span", { class: "muted" }, `Box ${i + 1}: `) : null, b.name, b.weight ? h("span", { class: "muted" }, ` · ${b.weight} lb`) : null))),
+          forget);
+      }));
+    };
+    search.oninput = draw;
+    draw();
+    mount(el, learned.length > 5 ? search : null, list);
+  };
+  load();
+  return el;
 }
