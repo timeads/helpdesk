@@ -109,6 +109,7 @@ Once you're happy, turn off Redo's email forwarding or helpdesk so customers don
 | `r` | reply |
 | `a` | assign to me |
 | `e` | close ticket |
+| `x` | select ticket (then Close / Assign to me / Pending for all selected) |
 | `⌘/Ctrl + Enter` | send (ticket becomes *Pending*: waiting on the customer) |
 | `⌘/Ctrl + Shift + Enter` | send & close, then open the next ticket |
 

@@ -230,13 +230,27 @@ label.field { display: grid; gap: 5px; align-content: start; font-size: 12px; fo
 .search .input { padding-left: 33px; background: var(--surface); }
 .list { overflow-y: auto; flex: 1; padding: 6px 8px 16px; }
 .t-row {
-  display: grid; gap: 3px; padding: 11px 12px 12px 22px; border-radius: var(--radius-sm); margin-bottom: 2px;
+  display: grid; gap: 3px; padding: 11px 12px 12px 32px; border-radius: var(--radius-sm); margin-bottom: 2px;
   text-decoration: none; color: inherit; position: relative; cursor: pointer;
   transition: background .12s var(--ease), opacity .2s var(--ease), transform .2s var(--ease);
 }
 .t-row:hover { background: var(--hover); color: inherit; }
 .t-row.active { background: var(--surface); box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border); }
-.t-row.unread::before { content: ""; position: absolute; left: 9px; top: 17px; width: 7px; height: 7px; border-radius: 50%; background: var(--ochre); }
+/* Selection box: appears on hover, stays visible while anything is selected */
+.t-row .pick {
+  position: absolute; left: 7px; top: 12px; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center;
+  border: 1.5px solid var(--border-strong); background: var(--surface); color: transparent; cursor: pointer; z-index: 1;
+  opacity: 0; transition: opacity .12s var(--ease), background .12s, border-color .12s;
+}
+.t-row .pick svg { width: 12px; height: 12px; stroke-width: 3; }
+.t-row:hover .pick, .t-row .pick:focus-visible, .list.selecting .t-row .pick { opacity: 1; }
+.t-row .pick.on { background: var(--ochre); border-color: var(--ochre); color: var(--teal-ink); }
+.t-row:has(.pick.on) { background: var(--select); }
+.list.selecting .t-row.unread::before, .t-row:hover.unread::before { opacity: 0; }
+.bulk-bar { display: flex; align-items: center; gap: 8px; min-height: 30px; flex-wrap: wrap; row-gap: 6px; }
+.bulk-all { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.bulk-all input { accent-color: var(--ochre); width: 16px; height: 16px; margin: 0; }
+.t-row.unread::before { content: ""; position: absolute; left: 13px; top: 17px; width: 7px; height: 7px; border-radius: 50%; background: var(--ochre); }
 .t-row.leaving { opacity: 0; transform: translateX(-12px); }
 .t-row .top { display: flex; gap: 8px; align-items: baseline; }
 .t-row .who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: 14px; }
@@ -285,7 +299,12 @@ label.field { display: grid; gap: 5px; align-content: start; font-size: 12px; fo
 .msg-head .when { margin-left: auto; color: var(--text-3); font-size: 12px; white-space: nowrap; align-self: flex-start; padding-top: 2px; }
 .msg-body { padding: 10px 16px 14px 56px; overflow-wrap: anywhere; font: 14.5px/1.6 var(--read); }
 .msg-body pre { white-space: pre-wrap; font: inherit; margin: 0; max-width: 72ch; }
-.msg-body iframe { width: 100%; border: 0; display: block; min-height: 40px; background: #fff; border-radius: 6px; }
+.msg-body iframe { width: 100%; border: 0; display: block; min-height: 40px; background: #fff; border-radius: 8px; }
+/* HTML email is shown as a white sheet (most are designed for white); padding lives inside the frame */
+.msg-body.html { padding: 6px 14px 14px; }
+.msg-body.html iframe { box-shadow: inset 0 0 0 1px var(--border); }
+.msg-body.html .quote-toggle { margin-left: 0; }
+@media (prefers-color-scheme: dark) { .msg-body.html iframe { box-shadow: 0 0 0 1px var(--border-strong); } }
 .quote-toggle { margin-top: 8px; margin-left: -10px; }
 .attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 14px 56px; }
 .attachment {
@@ -554,4 +573,6 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .input, textarea.input { font-size: 16px; }
 }
 @media (min-width: 761px) { .nav-item .label-short { display: none; } }
+/* Touch screens have no hover: keep the boxes visible */
+@media (hover: none) { .t-row .pick { opacity: 1; } .t-row.unread::before { display: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

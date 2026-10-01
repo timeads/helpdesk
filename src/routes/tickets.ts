@@ -159,6 +159,53 @@ tickets.patch("/:id{[0-9]+}", async (c) => {
   return c.json({ ticket: await loadTicket(c.env, id) });
 });
 
+/** Bulk status / assignment change, e.g. closing tickets already answered elsewhere. */
+tickets.post("/bulk", async (c) => {
+  const me = c.get("agent");
+  const body = await c.req.json<{ ids: number[]; status?: string; assignee_id?: number | null }>();
+  const ids = [...new Set((body.ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 500);
+  if (!ids.length) throw new HttpError(400, "Select at least one ticket");
+  if (body.status && !STATUSES.includes(body.status as any)) throw new HttpError(400, "Unknown status");
+  let assigneeName = "nobody";
+  if (body.assignee_id !== undefined && body.assignee_id !== null) {
+    const a = await c.env.DB.prepare("SELECT name FROM agents WHERE id = ? AND active = 1").bind(body.assignee_id).first<{ name: string }>();
+    if (!a) throw new HttpError(400, "Unknown agent");
+    assigneeName = a.name;
+  }
+  const threads: string[] = [];
+  let changed = 0;
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, status, assignee_id, gmail_thread_id FROM tickets WHERE id IN (${chunk.map(() => "?").join(",")})`,
+    )
+      .bind(...chunk)
+      .all<{ id: number; status: string; assignee_id: number | null; gmail_thread_id: string | null }>();
+    const stmts: D1PreparedStatement[] = [];
+    for (const t of results) {
+      if (body.status && t.status !== body.status) {
+        stmts.push(...(await applyStatus(c.env, t, body.status, me.id)));
+        if (body.status === "closed" && t.gmail_thread_id) threads.push(t.gmail_thread_id);
+        changed++;
+      }
+      if (body.assignee_id !== undefined && body.assignee_id !== t.assignee_id) {
+        stmts.push(
+          c.env.DB.prepare("UPDATE tickets SET assignee_id = ? WHERE id = ?").bind(body.assignee_id, t.id),
+          c.env.DB.prepare("INSERT INTO events (ticket_id, agent_id, kind, detail) VALUES (?, ?, 'assigned', ?)").bind(t.id, me.id, assigneeName),
+        );
+        changed++;
+      }
+    }
+    if (stmts.length) await c.env.DB.batch(stmts);
+  }
+  if (threads.length) {
+    c.executionCtx.waitUntil((async () => {
+      for (const th of threads) await archiveIfClosed(c.env, th, "closed");
+    })());
+  }
+  return c.json({ ok: true, updated: ids.length, changed });
+});
+
 tickets.post("/:id{[0-9]+}/notes", async (c) => {
   const id = Number(c.req.param("id"));
   const { body } = await c.req.json<{ body: string }>();

@@ -25,17 +25,61 @@ export function renderInbox(main) {
 }
 
 function createInbox(main, loc) {
-  const self = { main, view: loc.view, q: loc.q, tickets: [], ticketId: null, detail: null };
+  const self = { main, view: loc.view, q: loc.q, tickets: [], ticketId: null, detail: null, selected: new Set() };
   const listEl = h("div", { class: "list", role: "list" }, skeletonRows());
   const search = h("input", { class: "input", type: "search", placeholder: "Search tickets", title: "Search by name, email, subject or ticket #", value: self.q, "aria-label": "Search tickets" });
   const syncBtn = h("button", { class: "btn ghost sm icon-only", title: "Check Gmail for new mail now", "aria-label": "Check for new mail" }, icon("refresh"));
   const totalEl = h("span", { class: "total" });
+  const titleRow = h("div", { class: "title-row" }, h("h1", {}, viewLabel(self.view)), totalEl, syncBtn);
+  const bulkBar = h("div", { class: "bulk-bar", hidden: true, role: "toolbar", "aria-label": "Selected tickets" });
   self.listPane = h("section", { class: "list-pane", "aria-label": "Tickets" },
-    h("div", { class: "list-head" },
-      h("div", { class: "title-row" }, h("h1", {}, viewLabel(self.view)), totalEl, syncBtn),
+    h("div", { class: "list-head" }, titleRow, bulkBar,
       h("div", { class: "search" }, icon("search"), search)),
     listEl,
   );
+
+  // ---- Multi-select: tick tickets, then close / assign / mark pending in one go
+  const renderBulk = () => {
+    const n = self.selected.size;
+    titleRow.hidden = n > 0;
+    bulkBar.hidden = n === 0;
+    listEl.classList.toggle("selecting", n > 0);
+    if (!n) return;
+    const all = self.tickets.length > 0 && self.tickets.every((t) => self.selected.has(t.id));
+    const allBox = h("input", { type: "checkbox", checked: all, "aria-label": all ? "Deselect all" : "Select all" });
+    allBox.indeterminate = !all;
+    allBox.onchange = () => {
+      if (all) self.selected.clear();
+      else self.tickets.forEach((t) => self.selected.add(t.id));
+      renderList();
+    };
+    const act = (label, body, cls = "btn sm") => {
+      const b = h("button", { class: cls }, label);
+      b.onclick = busy(b, async () => {
+        const ids = [...self.selected];
+        const r = await api("/tickets/bulk", { method: "POST", body: { ids, ...body } });
+        toast(`${ids.length} ticket${ids.length > 1 ? "s" : ""} ${body.status === "closed" ? "closed" : body.status === "pending" ? "marked pending" : "assigned to you"}`);
+        self.selected.clear();
+        if (body.status && self.view !== "all" && ids.includes(self.ticketId)) navigate(`/?view=${self.view}`);
+        await loadList();
+        refreshCounts();
+        return r;
+      });
+      return b;
+    };
+    mount(bulkBar,
+      h("label", { class: "bulk-all" }, allBox, h("b", {}, `${n} selected`)),
+      h("div", { class: "row", style: { gap: "6px", marginLeft: "auto" } },
+        self.view !== "closed" ? act([icon("check"), "Close"], { status: "closed" }, "btn sm primary") : act("Reopen", { status: "open" }, "btn sm primary"),
+        act("Assign to me", { assignee_id: state.me.id }),
+        self.view !== "pending" ? act("Pending", { status: "pending" }) : null,
+        h("button", { class: "btn sm ghost icon-only", "aria-label": "Clear selection", title: "Clear selection (Esc)", onclick: () => { self.selected.clear(); renderList(); } }, icon("x"))));
+  };
+  const toggleSelect = (id) => {
+    if (self.selected.has(id)) self.selected.delete(id);
+    else self.selected.add(id);
+    renderList();
+  };
   const detailEl = h("section", { class: "detail" });
   mount(main, self.listPane, detailEl);
 
@@ -67,6 +111,8 @@ function createInbox(main, loc) {
   }
 
   function renderList() {
+    for (const id of self.selected) if (!self.tickets.some((t) => t.id === id)) self.selected.delete(id);
+    renderBulk();
     totalEl.textContent = self.tickets.length ? String(self.tickets.length) + (self.tickets.length === 50 ? "+" : "") : "";
     if (!self.tickets.length) {
       const zero = !self.q && ["open", "mine", "unassigned"].includes(self.view);
@@ -83,6 +129,12 @@ function createInbox(main, loc) {
         class: "t-row" + (t.unread ? " unread" : "") + (t.id === self.ticketId ? " active" : ""),
         "data-id": t.id,
       },
+        h("span", {
+          class: "pick" + (self.selected.has(t.id) ? " on" : ""), role: "checkbox", tabindex: 0,
+          "aria-checked": self.selected.has(t.id), "aria-label": `Select ticket from ${t.customer_name || t.customer_email}`,
+          onclick: (e) => { e.preventDefault(); e.stopPropagation(); toggleSelect(t.id); },
+          onkeydown: (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); toggleSelect(t.id); } },
+        }, icon("check")),
         h("div", { class: "top" },
           h("span", { class: "who" }, t.customer_name || t.customer_email),
           h("span", { class: "when", title: fullTime(t.last_message_at) }, relTime(t.last_message_at))),
@@ -125,7 +177,7 @@ function createInbox(main, loc) {
     if (!id) {
       mount(detailEl, h("div", { class: "empty", style: { margin: "auto" } },
         h("h2", {}, self.tickets.length ? "Pick a ticket" : "Nothing to answer"),
-        h("p", {}, "Keyboard: ", h("kbd", {}, "j"), " ", h("kbd", {}, "k"), " move · ", h("kbd", {}, "r"), " reply · ", h("kbd", {}, "a"), " assign to me · ", h("kbd", {}, "e"), " close")));
+        h("p", {}, "Keyboard: ", h("kbd", {}, "j"), " ", h("kbd", {}, "k"), " move · ", h("kbd", {}, "r"), " reply · ", h("kbd", {}, "a"), " assign to me · ", h("kbd", {}, "e"), " close · ", h("kbd", {}, "x"), " select")));
       return;
     }
     openTicket(self, detailEl, id);
@@ -144,6 +196,11 @@ function createInbox(main, loc) {
       self.detail.close();
     } else if (e.key === "a" && self.detail) {
       self.detail.assignToMe();
+    } else if (e.key === "x" && self.ticketId) {
+      toggleSelect(self.ticketId);
+    } else if (e.key === "Escape" && self.selected.size) {
+      self.selected.clear();
+      renderList();
     }
   };
   document.addEventListener("keydown", onKey);
@@ -280,14 +337,19 @@ function describeEvent(e) {
   return `${e.kind} ${e.detail}`;
 }
 
+// Conversational mail (a person typing in Gmail/Outlook) reads best as text in the app's own colors;
+// only designed emails — images, tables, colored backgrounds — need the white sheet they were made for.
+const isRichHtml = (html) => /<(table|img)\b/i.test(html) || /background(-color)?\s*:/i.test(html);
+
 const QUOTE_RE = /^(On .{5,200}wrote:\s*$|-{2,} ?Original Message ?-{2,}|From: .+\nSent: )/m;
 
 function renderMessage(t, m) {
   const out = m.direction === "out";
   const name = out ? (m.agent_name || m.from_name || "Support") : (m.from_name || m.from_email);
-  const body = h("div", { class: "msg-body" });
+  const rich = !!m.body_html && (isRichHtml(m.body_html) || !m.body_text?.trim());
+  const body = h("div", { class: "msg-body" + (rich ? " html" : "") });
 
-  if (m.body_html) {
+  if (rich) {
     const frame = h("iframe", {
       sandbox: "allow-same-origin allow-popups allow-popups-to-escape-sandbox",
       title: `Message from ${name}`,
@@ -296,14 +358,16 @@ function renderMessage(t, m) {
     frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src * data: cid:; style-src 'unsafe-inline' *; font-src *">
 <base target="_blank"><style>
-body{margin:0;font:14.5px/1.6 Roboto,-apple-system,Segoe UI,Arial,sans-serif;color:#2b2b2b;overflow-wrap:anywhere}
+html{background:#fff}
+body{margin:0;padding:16px 18px;font:14.5px/1.6 Roboto,-apple-system,Segoe UI,Arial,sans-serif;color:#2b2b2b;overflow-wrap:anywhere;overflow-x:auto}
 a{color:#8a5a10} img{max-width:100%;height:auto} table{max-width:100%!important}
 body:not(.show-quotes) .gmail_quote, body:not(.show-quotes) blockquote[type=cite], body:not(.show-quotes) #appendonsend,
 body:not(.show-quotes) #divRplyFwdMsg, body:not(.show-quotes) .yahoo_quoted { display:none }
 </style></head><body>${m.body_html}</body></html>`;
     const fit = () => {
       try {
-        frame.style.height = frame.contentDocument.documentElement.scrollHeight + "px";
+        // body.scrollHeight ignores the iframe's default 150px viewport, so short mails don't get blank space
+        frame.style.height = frame.contentDocument.body.scrollHeight + 2 + "px";
       } catch { /* cross-origin */ }
     };
     frame.addEventListener("load", () => {
