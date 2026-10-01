@@ -14,8 +14,7 @@
     {
       "binding": "DB",
       "database_name": "helpdesk",
-      // Replace with the id printed by `npx wrangler d1 create helpdesk`
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "a26705fb-f55f-4989-ae90-470b035cf5ca",
       "migrations_dir": "migrations"
     }
   ],
