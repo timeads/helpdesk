@@ -911,6 +911,24 @@ details.macro-row > summary svg { width: 13px; height: 13px; vertical-align: -2p
   .input, textarea.input { font-size: 16px; }
 }
 @media (min-width: 761px) { .nav-item .label-short { display: none; } }
+/* Grid and stack children may shrink, so wide tables scroll inside their card instead of widening the page */
+.stack > *, .grid2 > *, .grid3 > *, .grid4 > *, .kpis > * { min-width: 0; }
+/* Phone tab bar: six tabs share the width evenly */
+@media (max-width: 760px) {
+  .sidebar .nav-item { flex: 1 1 0; min-width: 0; padding: 6px 2px; }
+  .sidebar .nav-item .label-short { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .sidebar .dash-item { margin-bottom: 0; }
+  .analytics-2 { grid-template-columns: 1fr; }
+  .kpis { gap: 8px; }
+  .kpi { padding: 12px; }
+  .kpi-value { font-size: 20px; overflow-wrap: anywhere; }
+  .kpi-sub { font-size: 11.5px; }
+  .heat { grid-template-columns: 30px repeat(24, minmax(0, 1fr)); gap: 1px; }
+  .heat-h { font-size: 0; }
+  .heat-h:nth-child(6n + 2) { font-size: 9px; }
+  .page-head .view-chips { gap: 4px; }
+  .page-head .view-chip { height: 30px; padding: 0 10px; font-size: 12.5px; }
+}
 /* Touch screens have no hover: keep the boxes visible */
 @media (hover: none) { .t-row .pick { opacity: 1; } .t-row.unread::before { display: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

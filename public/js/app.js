@@ -78,7 +78,7 @@ function renderNav() {
     );
   mount(navEl,
     h("a", { class: "brand", href: "/", "data-link": "" }, h("span", { class: "word" }, "Tuft the World"), h("span", { class: "sub" }, "Support desk")),
-    item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " ship-view dash-item"),
+    item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " dash-item"),
     h("div", { class: "nav-scroll" },
       h("div", { class: "nav-label" }, "Tickets"),
       VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : state.counts[v.id], v.minor ? " closed-view" : "")),

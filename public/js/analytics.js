@@ -127,9 +127,9 @@ function heatmapCard(grid) {
 
 function teamCard(rows) {
   return h("section", { class: "card" }, h("h2", {}, "Team"),
-    rows.length ? h("table", { class: "tbl" },
+    rows.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
       h("thead", {}, h("tr", {}, ["Teammate", "Replies", "Tickets answered", "Closed", "Open now"].map((x) => h("th", {}, x)))),
-      h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, h("b", {}, r.name)), h("td", { class: "num" }, r.replies), h("td", { class: "num" }, r.tickets_replied), h("td", { class: "num" }, r.closed), h("td", { class: "num" }, r.active))))) : h("p", { class: "muted" }, "No activity yet."));
+      h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, h("b", {}, r.name)), h("td", { class: "num" }, r.replies), h("td", { class: "num" }, r.tickets_replied), h("td", { class: "num" }, r.closed), h("td", { class: "num" }, r.active)))))) : h("p", { class: "muted" }, "No activity yet."));
 }
 
 export function renderAnalytics(main) {
@@ -170,8 +170,8 @@ export function renderAnalytics(main) {
       h("div", { class: "grid2 analytics-2" },
         servicesCard(a.services),
         h("section", { class: "card" }, h("h2", {}, "Top destinations"),
-          a.states.length ? h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["State", "Labels", "Avg cost"].map((x) => h("th", {}, x)))),
-            h("tbody", {}, a.states.map((r) => h("tr", {}, h("td", {}, r.state), h("td", {}, r.labels), h("td", { class: "num" }, usd(r.avg_cost)))))) : h("p", { class: "muted" }, "No labels in this period."))),
+          a.states.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["State", "Labels", "Avg cost"].map((x) => h("th", {}, x)))),
+            h("tbody", {}, a.states.map((r) => h("tr", {}, h("td", {}, r.state), h("td", {}, r.labels), h("td", { class: "num" }, usd(r.avg_cost))))))) : h("p", { class: "muted" }, "No labels in this period."))),
       h("section", { class: "card" }, h("h2", {}, "Recent labels"),
         a.recent.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
           h("thead", {}, h("tr", {}, ["Order", "Customer chose", "Shipped with", "Paid", "Label", "Margin"].map((x) => h("th", {}, x)))),
