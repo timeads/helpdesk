@@ -740,7 +740,7 @@ async function runImport(el, orders, reload) {
   for (let i = 0; i < orders.length; i += CHUNK) {
     status.textContent = `${Math.min(i + CHUNK, orders.length)} of ${orders.length} orders`;
     try {
-      const r = await api("/shipping/import/redo", { method: "POST", body: { orders: orders.slice(i, i + CHUNK) } });
+      const r = await api("/shipping/import/redo", { method: "POST", body: { orders: orders.slice(i, i + CHUNK), fresh: i === 0 } });
       results.push(...r.results);
       skipped += r.skipped;
     } catch (e) {

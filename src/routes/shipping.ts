@@ -350,8 +350,10 @@ async function labelRows(env: Env, q: { ids?: string; batch?: string }) {
 /** Import a Redo shipping export (the browser parses the CSV and sends ~40 orders per call). */
 shipping.post("/import/redo", async (c) => {
   requireAdmin(c);
-  const { orders } = await c.req.json<{ orders: RedoOrder[] }>();
+  const { orders, fresh } = await c.req.json<{ orders: RedoOrder[]; fresh?: boolean }>();
   if (!Array.isArray(orders) || !orders.length) throw new HttpError(400, "No orders in this batch");
+  // First batch: get a new Shopify token so recently added scopes (read_all_orders) apply
+  if (fresh) await c.env.DB.prepare("DELETE FROM settings WHERE key = 'shopify_access'").run();
   if (orders.length > 60) throw new HttpError(400, "Send at most 60 orders per batch");
   return c.json(await importRedoOrders(c.env, orders, c.get("agent").id));
 });

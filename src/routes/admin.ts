@@ -379,6 +379,7 @@ admin.post("/credentials/test/:group", async (c) => {
   try {
     if (group === "shopify") {
       if (!shopifyConfigured(env)) throw new Error("Add the store address and either a Client ID + secret or an Admin API token.");
+      await deleteSetting(c.env, "shopify_access"); // fresh token, so newly added scopes take effect
       const r = await shopify<{ shop: { name: string } }>(env, "{ shop { name } }");
       return c.json({ ok: true, message: `Connected to ${r.shop.name}` });
     }
