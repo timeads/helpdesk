@@ -11,7 +11,7 @@ let mainEl, navEl, cleanup = null;
 
 const VIEWS = [
   { id: "mine", label: "Your tickets", short: "Mine", icon: "user" },
-  { id: "unassigned", label: "Unassigned", short: "New", icon: "question" },
+  { id: "unassigned", label: "Unassigned", short: "Unassigned", icon: "question" },
   { id: "open", label: "Open", short: "Open", icon: "inbox" },
   { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock" },
   { id: "snoozed", label: "Snoozed", short: "Snoozed", icon: "moon", minor: true },

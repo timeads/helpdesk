@@ -1,7 +1,7 @@
 // Settings → Support: behavior, macros (variables + automations), tags, views, rules, knowledge.
 import { api } from "./api.js";
 import { state, refreshViews } from "./app.js";
-import { h, mount, toast, busy, icon } from "./ui.js";
+import { h, mount, toast, busy, icon, growInput } from "./ui.js";
 import { STATUS, PRIORITY } from "./common.js";
 import { describeAction, settingsCache } from "./composer.js";
 
@@ -112,7 +112,7 @@ export function macrosCard(macros, variables, reload) {
       let value;
       if (a.type === "set_status") value = h("select", { class: "input" }, Object.entries(STATUS).filter(([k]) => k !== "snoozed").map(([k, v]) => h("option", { value: k, selected: a.value === k }, v.label)));
       else if (a.type === "set_priority") value = h("select", { class: "input" }, Object.entries(PRIORITY).map(([k, v]) => h("option", { value: k, selected: a.value === k }, v)));
-      else value = h("input", { class: "input", value: a.value, placeholder: a.type === "add_tags" ? "Comma-separated tags" : "" });
+      else value = growInput({ value: a.value, placeholder: a.type === "add_tags" ? "Comma-separated tags" : "" });
       if (!a.value && value.tagName === "SELECT") a.value = value.value;
       type.onchange = () => { a.type = type.value; a.value = ""; drawActs(); };
       value.oninput = value.onchange = () => (a.value = value.value);
@@ -265,7 +265,8 @@ export function supportRulesCard(data, macros, tags, reload) {
     else if (kind === "assigned") el = h("select", { class: "input" }, [["yes", "yes"], ["no", "no"]].map(([k, l]) => h("option", { value: k, selected: obj.value === k }, l)));
     else if (kind === "assign") el = h("select", { class: "input" }, [["round_robin", "Round robin"], ["balanced", "Balanced"], ["nobody", "Nobody"], ...state.agents.map((a) => [String(a.id), a.name])].map(([k, l]) => h("option", { value: k, selected: obj.value === k }, l)));
     else if (kind === "auto_reply") el = h("select", { class: "input" }, h("option", { value: "" }, "Choose a macro…"), macros.map((m) => h("option", { value: String(m.id), selected: obj.value === String(m.id) }, m.name)));
-    else el = h("input", { class: "input", value: obj.value, placeholder: kind === "message_count" ? "Number" : kind === "has_tag" || kind === "tag" ? "Tag names, comma-separated" : "Words or phrases, comma-separated", list: kind === "has_tag" || kind === "tag" ? "rule-tags" : null });
+    else if (kind === "message_count") el = h("input", { class: "input", value: obj.value, placeholder: "Number", inputmode: "numeric" });
+    else el = growInput({ value: obj.value, placeholder: kind === "has_tag" || kind === "tag" ? "Tag names, comma-separated" : "Words or phrases, comma-separated" });
     if (el.tagName === "SELECT" && !obj.value) obj.value = el.value;
     el.oninput = el.onchange = () => (obj.value = el.value);
     return el;
@@ -306,7 +307,7 @@ export function supportRulesCard(data, macros, tags, reload) {
           draw();
         };
         return h("div", { class: "macro-row" + (r.enabled ? "" : " off") },
-          h("div", { class: "row", style: { flexWrap: "nowrap" } }, name, match,
+          h("div", { class: "rule-head" }, name, match,
             h("label", { class: "check", style: { whiteSpace: "nowrap" } }, on, "On"),
             h("button", { class: "btn sm ghost", title: "Run earlier", onclick: () => move(-1) }, "↑"),
             h("button", { class: "btn sm ghost danger", onclick: () => { rules.splice(idx, 1); draw(); } }, "Delete")),

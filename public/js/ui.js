@@ -256,3 +256,16 @@ export function actionToast(msg, actionLabel, onAction, ms = 5000) {
   btn.onclick = () => { clearTimeout(timer); t.remove(); onAction(); };
   return () => { clearTimeout(timer); t.remove(); };
 }
+
+/** One-line text box that wraps onto more lines as the text grows (for word lists in rules). */
+export function growInput(attrs = {}) {
+  const { value = "", ...rest } = attrs;
+  const ta = h("textarea", { class: "input grow-input", rows: 1, ...rest });
+  ta.value = value ?? "";
+  const fit = () => { ta.style.height = "auto"; ta.style.height = `${ta.scrollHeight + 2}px`; };
+  ta.addEventListener("input", fit);
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); }); // stays a single value
+  requestAnimationFrame(fit);
+  new ResizeObserver(fit).observe(ta);
+  return ta;
+}

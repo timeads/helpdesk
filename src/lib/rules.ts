@@ -28,7 +28,7 @@ export interface RuleResult {
 }
 
 export const RULE_FIELDS: Record<RuleCondition["field"], { label: string; ops: RuleCondition["op"][] }> = {
-  item_quantity: { label: "Item quantity (whole order)", ops: ["eq", "gt", "lt"] },
+  item_quantity: { label: "Items in order", ops: ["eq", "gt", "lt"] },
   order_total: { label: "Order total ($)", ops: ["gt", "lt", "eq"] },
   product_names: { label: "Product names", ops: ["includes_any", "excludes", "contains"] },
   product_skus: { label: "Product SKUs", ops: ["includes_any", "excludes", "contains"] },

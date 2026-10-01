@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { state } from "./app.js";
-import { h, mount, relTime, toast, busy, icon, skeletonRows } from "./ui.js";
+import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
 import { printSettings, savePrintSettings, testZebra, zebraPrinter } from "./printing.js";
 import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
@@ -241,7 +241,7 @@ function team(agents, isAdmin, inner) {
     reload(inner);
   });
   return card("Team", "Anyone listed here can sign in with their Google account and be assigned tickets.",
-    h("table", { class: "tbl" }, h("tbody", {}, agents.map((a) => {
+    h("div", { class: "team-list" }, agents.map((a) => {
       const rm = h("button", { class: "btn sm ghost danger" }, "Remove");
       rm.onclick = busy(rm, async () => {
         if (!confirm(`Remove ${a.name}? Their open tickets become unassigned.`)) return;
@@ -253,11 +253,14 @@ function team(agents, isAdmin, inner) {
         try { await api(`/agents/${a.id}`, { method: "PATCH", body: { available: avail.checked } }); toast(avail.checked ? `${a.name} gets new tickets` : `${a.name} is skipped by auto-assign`); }
         catch (e) { toast(e.message, true); avail.checked = !avail.checked; }
       };
-      return h("tr", {}, h("td", {}, h("b", {}, a.name)), h("td", { class: "muted" }, a.email), h("td", {}, h("span", { class: "badge" }, a.role)),
-        h("td", {}, h("label", { class: "check small" }, avail, "Available")),
-        h("td", { style: { textAlign: "right" } }, isAdmin && a.id !== state.me.id ? rm : null));
-    }))),
-    isAdmin ? h("div", { class: "grid4", style: { marginTop: "12px", gridTemplateColumns: "2fr 1.4fr 1fr auto" } }, email, name, role, add) : null);
+      return h("div", { class: "team-row" },
+        h("div", { class: "avatar" }, initials(a.name)),
+        h("div", { class: "who" }, h("b", {}, a.name), h("span", { class: "muted small", title: a.email }, a.email)),
+        h("span", { class: "badge" }, a.role),
+        h("label", { class: "check small" }, avail, "Available"),
+        isAdmin && a.id !== state.me.id ? rm : h("span", { class: "rm-spacer" }));
+    })),
+    isAdmin ? h("div", { class: "team-add" }, email, name, role, add) : null);
 }
 
 function mailRules(s) {
@@ -351,7 +354,7 @@ function shipping(s, presets, inner) {
       h("h3", { class: "section" }, `Box sizes (${presets.length})`),
       h("p", { class: "muted small", style: { margin: 0 } }, "In “multi layer” names, the number in parentheses is the depth the box is cut down to."),
       h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("tbody", {}, presetRows))),
-      h("div", { class: "parcel", style: { gridTemplateColumns: "2fr 1fr repeat(4, 0.8fr) auto" } },
+      h("div", { class: "preset-add" },
         pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset)));
 }
 
@@ -367,7 +370,9 @@ function shippingRules(data, presets, inner) {
   const condRow = (rule, c, i) => {
     const field = h("select", { class: "input" }, fieldKeys.map((k) => h("option", { value: k, selected: c.field === k }, data.fields[k].label)));
     const op = h("select", { class: "input" }, data.fields[c.field].ops.map((o) => h("option", { value: o, selected: c.op === o }, OP_LABELS[o])));
-    const value = h("input", { class: "input", value: c.value, placeholder: ["item_quantity", "order_total"].includes(c.field) ? "Number" : "Comma-separated" });
+    const value = ["item_quantity", "order_total"].includes(c.field)
+      ? h("input", { class: "input", value: c.value, placeholder: "Number", inputmode: "decimal" })
+      : growInput({ value: c.value, placeholder: "Comma-separated" });
     field.onchange = () => { c.field = field.value; c.op = data.fields[c.field].ops[0]; draw(); };
     op.onchange = () => (c.op = op.value);
     value.oninput = () => (c.value = value.value);
@@ -381,7 +386,7 @@ function shippingRules(data, presets, inner) {
     if (a.type === "set_package") value = h("select", { class: "input" }, h("option", { value: "" }, "Choose a box…"), presets.map((p) => h("option", { value: p.name, selected: a.value === p.name }, p.name)));
     else if (a.type === "require_signature") value = h("select", { class: "input" }, [["standard", "Signature required"], ["adult", "Adult signature"]].map(([v, t]) => h("option", { value: v, selected: a.value === v }, t)));
     else if (a.type === "set_service") value = h("select", { class: "input" }, SERVICE_CHOICES.map(([v, t]) => h("option", { value: v, selected: a.value === v }, t)));
-    else value = h("input", { class: "input", value: a.value, placeholder: "Note shown on the hold (optional)" });
+    else value = growInput({ value: a.value, placeholder: "Note shown on the hold (optional)" });
     type.onchange = () => { a.type = type.value; a.value = { require_signature: "standard", set_service: "cheapest" }[a.type] ?? ""; draw(); };
     value.onchange = () => (a.value = value.value);
     value.oninput = () => (a.value = value.value);
@@ -396,7 +401,7 @@ function shippingRules(data, presets, inner) {
     on.onchange = () => (r.enabled = on.checked);
     const move = (d) => { const j = idx + d; if (j < 0 || j >= rules.length) return; [rules[idx], rules[j]] = [rules[j], rules[idx]]; draw(); };
     return h("div", { class: "macro-row" },
-      h("div", { class: "row", style: { flexWrap: "nowrap" } }, name,
+      h("div", { class: "rule-head" }, name,
         h("label", { class: "check", style: { whiteSpace: "nowrap" } }, on, "On"),
         h("button", { class: "btn sm ghost", title: "Move up (earlier rules win)", onclick: () => move(-1), disabled: idx === 0 }, "↑"),
         h("button", { class: "btn sm ghost danger", onclick: () => { rules.splice(idx, 1); draw(); } }, "Delete")),
