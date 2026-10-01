@@ -33,7 +33,13 @@ export function renderShipping(main) {
 // ---------------------------------------------------------------- Create
 
 function renderCreate(root, preselect, ticketId) {
-  const s = { order: null, to: { ...EMPTY_TO }, parcels: [], rates: [], rate: null, presets: [] };
+  const s = { order: null, to: { ...EMPTY_TO }, parcels: [], rates: [], rate: null, presets: [], signature: "", itemsLbs: 0, suggestion: null };
+  const round1 = (n) => Math.round(n * 10) / 10;
+  const defaultBox = () => s.presets.find((b) => b.is_default) ?? s.presets[0];
+  const parcelFrom = (box, itemsLbs) => ({
+    preset: box?.id ?? "", length: box?.length ?? "", width: box?.width ?? "", height: box?.height ?? "",
+    weight: itemsLbs ? round1(itemsLbs + (box?.weight ?? 0)) : "",
+  });
   const search = h("input", { class: "input", type: "search", placeholder: "Order #, email or name", "aria-label": "Search orders" });
   const ordersEl = h("div", { class: "ship-orders" }, skeletonRows(5));
   const builder = h("div");
@@ -79,8 +85,12 @@ function renderCreate(root, preselect, ticketId) {
       const factor = { POUNDS: 1, OUNCES: 1 / 16, KILOGRAMS: 2.20462, GRAMS: 0.00220462 }[w.unit] ?? 1;
       return sum + w.value * factor * l.quantity;
     }, 0);
-    const box = s.presets[0];
-    s.parcels = [{ preset: box?.id ?? "", length: box?.length ?? "", width: box?.width ?? "", height: box?.height ?? "", weight: lbs ? Math.round((lbs + (box?.weight ?? 0)) * 10) / 10 : "" }];
+    // Shipping rules (from Redo automations) may pick the box and require a signature
+    s.suggestion = o.suggestion ?? null;
+    const ruleBox = s.suggestion?.packageName && s.presets.find((b) => b.name.toLowerCase() === s.suggestion.packageName.toLowerCase());
+    s.itemsLbs = lbs;
+    s.parcels = [parcelFrom(ruleBox || defaultBox(), lbs)];
+    s.signature = s.suggestion?.signature ?? "";
     s.rates = [];
     s.rate = null;
     drawOrders();
@@ -90,8 +100,10 @@ function renderCreate(root, preselect, ticketId) {
   const newBlank = () => {
     s.order = null;
     s.to = { ...EMPTY_TO };
-    const box = s.presets[0];
-    s.parcels = [{ preset: box?.id ?? "", length: box?.length ?? "", width: box?.width ?? "", height: box?.height ?? "", weight: "" }];
+    s.suggestion = null;
+    s.itemsLbs = 0;
+    s.signature = "";
+    s.parcels = [parcelFrom(defaultBox(), 0)];
     s.rates = [];
     s.rate = null;
     drawOrders();
@@ -113,11 +125,16 @@ function renderCreate(root, preselect, ticketId) {
     const drawParcels = () => mount(parcelsEl, s.parcels.map((p, i) => {
       const presetSel = h("select", { class: "input" },
         h("option", { value: "" }, "Custom size"),
-        s.presets.map((b) => h("option", { value: b.id, selected: String(b.id) === String(p.preset) }, b.name)));
+        s.presets.map((b) => h("option", { value: b.id, selected: String(b.id) === String(p.preset) }, b.name + (b.is_default ? " (default)" : ""))));
       presetSel.onchange = () => {
         const b = s.presets.find((x) => String(x.id) === presetSel.value);
+        const old = s.presets.find((x) => String(x.id) === String(p.preset));
         p.preset = presetSel.value;
-        if (b) Object.assign(p, { length: b.length, width: b.width, height: b.height });
+        if (b) {
+          Object.assign(p, { length: b.length, width: b.width, height: b.height });
+          // Swap the empty-box weight: old box out, new box in
+          if (p.weight !== "" && !Number.isNaN(+p.weight)) p.weight = round1(Math.max(0.1, +p.weight - (old?.weight ?? 0) + (b.weight ?? 0)));
+        }
         s.rates = [];
         drawParcels();
         drawRates();
@@ -138,7 +155,7 @@ function renderCreate(root, preselect, ticketId) {
     getRates.onclick = busy(getRates, async () => {
       mount(ratesEl, h("div", { class: "card" }, skeletonRows(3)));
       try {
-        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels } });
+        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels, signature: s.signature || undefined } });
         s.rates = rates;
         s.rate = rates[0] ?? null;
         getRates.className = "btn get-rates";
@@ -172,8 +189,18 @@ function renderCreate(root, preselect, ticketId) {
           h("div", { class: "grid2" }, field("Address", "address1"), field("Apt / suite", "address2")),
           h("div", { class: "grid4" }, field("City", "city"), field("State", "state", { maxlength: 2 }), field("ZIP", "zip"), field("Country", "country", { maxlength: 2 })),
           h("div", { class: "grid2" }, field("Phone", "phone"), h("label", { class: "check", style: { alignSelf: "end", paddingBottom: "8px" } }, residential, "Residential address"))),
+        s.suggestion?.matched?.length ? h("div", { class: "notice info", style: { marginTop: "16px" } },
+          icon("spark"), " Rules applied: ", s.suggestion.matched.join(" · ")) : null,
         h("h3", { class: "section" }, "Packages"),
         parcelsEl,
+        h("div", { class: "row", style: { marginTop: "12px" } },
+          h("label", { class: "field", style: { minWidth: "240px" } }, "Delivery signature", (() => {
+            const sel = h("select", { class: "input" },
+              [["", "No signature"], ["standard", "Signature required"], ["adult", "Adult signature required"]].map(([v, t]) =>
+                h("option", { value: v, selected: s.signature === v }, t)));
+            sel.onchange = () => { s.signature = sel.value; s.rates = []; s.rate = null; drawRates(); };
+            return sel;
+          })())),
         h("div", { class: "row", style: { marginTop: "10px" } },
           h("button", { class: "btn sm ghost", onclick: () => { const last = s.parcels.at(-1) ?? {}; s.parcels.push({ ...last, weight: "" }); drawParcels(); } }, icon("plus"), "Add package"),
           h("div", { style: { flex: 1 } }),
@@ -199,7 +226,7 @@ function renderCreate(root, preselect, ticketId) {
         body: {
           orderId: s.order?.id, orderName: s.order?.name, ticketId: ticketId ? Number(ticketId) : undefined,
           to: s.to, parcels: s.parcels, serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName,
-          labelFormat: fmt.value, fulfill: fulfill.checked, notifyCustomer: notify.checked,
+          labelFormat: fmt.value, fulfill: fulfill.checked, notifyCustomer: notify.checked, signature: s.signature || undefined,
         },
       });
       showPurchased(r);

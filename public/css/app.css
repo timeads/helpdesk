@@ -430,6 +430,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ship-orders .o-row.active { background: var(--select); box-shadow: inset 0 0 0 1px var(--note-border); }
 .parcel { display: grid; grid-template-columns: 1.7fr repeat(4, 1fr) 30px; gap: 10px; align-items: end; padding: 12px 0; border-top: 1px solid var(--border); }
 .rates { display: grid; gap: 8px; }
+.rule-line { display: grid; grid-template-columns: 44px 1.3fr 1fr 1.4fr 30px; gap: 8px; align-items: center; }
+.rule-word { font-size: 12px; font-weight: 700; color: var(--ochre-text); text-transform: uppercase; letter-spacing: .06em; }
+@media (max-width: 760px) { .rule-line { grid-template-columns: 1fr 1fr; } .rule-word { grid-column: 1 / -1; } }
 .macro-row { display: grid; gap: 10px; padding: 16px 0; border-top: 1px solid var(--border); }
 .macro-row:first-child { border-top: 0; padding-top: 4px; }
 .rate {

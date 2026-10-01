@@ -41,6 +41,8 @@ export interface Parcel {
   weight: number; // lb
 }
 
+export type Signature = "standard" | "adult" | null | undefined;
+
 export interface Rate {
   serviceCode: string;
   serviceName: string;
@@ -124,15 +126,18 @@ function party(a: Address, residential = false) {
   };
 }
 
-function pkg(p: Parcel, packagingKey: "PackagingType" | "Packaging") {
+function pkg(p: Parcel, packagingKey: "PackagingType" | "Packaging", signature?: Signature) {
   return {
     [packagingKey]: { Code: "02" }, // customer-supplied box
     Dimensions: {
       UnitOfMeasurement: { Code: "IN" },
-      Length: String(Math.ceil(p.length)),
-      Width: String(Math.ceil(p.width)),
-      Height: String(Math.ceil(p.height)),
+      // Envelopes can be 0" deep; UPS needs whole inches ≥ 1
+      Length: String(Math.max(1, Math.ceil(p.length))),
+      Width: String(Math.max(1, Math.ceil(p.width))),
+      Height: String(Math.max(1, Math.ceil(p.height))),
     },
+    // Delivery confirmation: 2 = signature required, 3 = adult signature (US domestic, package level)
+    ...(signature ? { PackageServiceOptions: { DeliveryConfirmation: { DCISType: signature === "adult" ? "3" : "2" } } } : {}),
     PackageWeight: {
       UnitOfMeasurement: { Code: "LBS" },
       Weight: String(Math.max(0.1, Math.round(p.weight * 10) / 10)),
@@ -140,7 +145,7 @@ function pkg(p: Parcel, packagingKey: "PackagingType" | "Packaging") {
   };
 }
 
-export function buildRateRequest(account: string, from: Address, to: Address, parcels: Parcel[]) {
+export function buildRateRequest(account: string, from: Address, to: Address, parcels: Parcel[], signature?: Signature) {
   return {
     RateRequest: {
       Request: { RequestOption: "Shop" },
@@ -151,7 +156,7 @@ export function buildRateRequest(account: string, from: Address, to: Address, pa
         PaymentDetails: { ShipmentCharge: [{ Type: "01", BillShipper: { AccountNumber: account } }] },
         ShipmentRatingOptions: { NegotiatedRatesIndicator: "" },
         NumOfPieces: String(parcels.length),
-        Package: parcels.map((p) => pkg(p, "PackagingType")),
+        Package: parcels.map((p) => pkg(p, "PackagingType", signature)),
       },
     },
   };
@@ -177,8 +182,8 @@ export function parseRates(json: any): Rate[] {
     .sort((a: Rate, b: Rate) => a.total - b.total);
 }
 
-export async function getRates(env: Env, from: Address, to: Address, parcels: Parcel[]): Promise<Rate[]> {
-  const json = await ups(env, "POST", `/api/rating/${API_VERSION}/Shop`, buildRateRequest(env.UPS_ACCOUNT_NUMBER!, from, to, parcels));
+export async function getRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature): Promise<Rate[]> {
+  const json = await ups(env, "POST", `/api/rating/${API_VERSION}/Shop`, buildRateRequest(env.UPS_ACCOUNT_NUMBER!, from, to, parcels, signature));
   return parseRates(json);
 }
 
@@ -188,7 +193,7 @@ export function buildShipRequest(
   to: Address,
   parcels: Parcel[],
   serviceCode: string,
-  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string },
+  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string; signature?: Signature },
 ) {
   return {
     ShipmentRequest: {
@@ -202,7 +207,7 @@ export function buildShipRequest(
         Service: { Code: serviceCode },
         ShipmentRatingOptions: { NegotiatedRatesIndicator: "" },
         ...(opts.reference ? { ReferenceNumber: { Value: trunc(opts.reference, 35) } } : {}),
-        Package: parcels.map((p) => pkg(p, "Packaging")),
+        Package: parcels.map((p) => pkg(p, "Packaging", opts.signature)),
       },
       LabelSpecification: {
         LabelImageFormat: { Code: opts.labelFormat },
@@ -242,7 +247,7 @@ export async function createShipment(
   to: Address,
   parcels: Parcel[],
   serviceCode: string,
-  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string },
+  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string; signature?: Signature },
 ): Promise<ShipResult> {
   const json = await ups(
     env,

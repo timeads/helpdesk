@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { fulfillOrder, getOrder, searchOrders, shopifyConfigured } from "../lib/shopify";
-import { createShipment, getRates, trackingUrl, upsConfigured, voidShipment, type Address, type Parcel } from "../lib/ups";
+import { createShipment, getRates, trackingUrl, upsConfigured, voidShipment, type Address, type Parcel, type Signature } from "../lib/ups";
+import { RULE_FIELDS, evaluateRules, type ShippingRule } from "../lib/rules";
+import type { ShopifyOrder } from "../lib/shopify";
+import { requireAdmin } from "../lib/auth";
 import { HttpError, base64UrlDecodeBytes, getSetting } from "../lib/util";
 import { demoOrders } from "../lib/demo";
 
@@ -16,10 +19,23 @@ export async function shipFrom(env: AppEnv["Bindings"]): Promise<Address> {
 function validParcels(parcels: Parcel[]): Parcel[] {
   if (!Array.isArray(parcels) || !parcels.length) throw new HttpError(400, "Add at least one package");
   return parcels.map((p, i) => {
-    const n = { length: +p.length, width: +p.width, height: +p.height, weight: +p.weight };
-    if (Object.values(n).some((v) => !(v > 0))) throw new HttpError(400, `Package ${i + 1} needs dimensions and a weight`);
+    const n = { length: +p.length, width: +p.width, height: +p.height || 0, weight: +p.weight };
+    // Height may be 0 for flat envelopes; length, width and weight must be set
+    if (!(n.length > 0 && n.width > 0 && n.weight > 0) || n.height < 0) throw new HttpError(400, `Package ${i + 1} needs dimensions and a weight`);
     return n;
   });
+}
+
+const validSignature = (s: unknown): Signature => (s === "standard" || s === "adult" ? s : null);
+
+async function loadRules(env: AppEnv["Bindings"]): Promise<ShippingRule[]> {
+  const { results } = await env.DB.prepare("SELECT * FROM shipping_rules ORDER BY position, id").all<any>();
+  return results.map((r) => ({ ...r, enabled: !!r.enabled, conditions: JSON.parse(r.conditions), actions: JSON.parse(r.actions) }));
+}
+
+async function withSuggestions(env: AppEnv["Bindings"], orders: ShopifyOrder[]) {
+  const rules = await loadRules(env);
+  return orders.map((o) => ({ ...o, suggestion: evaluateRules(o, rules) }));
 }
 
 function validAddress(a: Address): Address {
@@ -44,27 +60,63 @@ shipping.get("/orders", async (c) => {
       .all<{ order_id: string }>();
     results.forEach((r) => labelled.add(r.order_id));
   }
-  return c.json({ orders: orders.map((o) => ({ ...o, hasLabel: labelled.has(o.id) })) });
+  const suggested = await withSuggestions(c.env, orders);
+  return c.json({ orders: suggested.map((o) => ({ ...o, hasLabel: labelled.has(o.id) })) });
 });
 
 shipping.get("/orders/:id", async (c) => {
   const order = await getOrder(c.env, decodeURIComponent(c.req.param("id")));
-  return c.json({ order });
+  const [withRules] = await withSuggestions(c.env, [order]);
+  return c.json({ order: withRules });
 });
 
 shipping.get("/presets", async (c) => {
-  const { results } = await c.env.DB.prepare("SELECT * FROM package_presets ORDER BY name").all();
+  const { results } = await c.env.DB.prepare("SELECT * FROM package_presets ORDER BY is_default DESC, name").all();
   return c.json({ presets: results });
 });
 
 shipping.post("/presets", async (c) => {
-  const p = await c.req.json<{ name: string; length: number; width: number; height: number; weight: number }>();
+  const p = await c.req.json<{ name: string; type?: string; length: number; width: number; height: number; weight: number }>();
   if (!p.name?.trim()) throw new HttpError(400, "Name the box");
   const [v] = validParcels([{ ...p, weight: p.weight || 0.01 }]);
-  await c.env.DB.prepare("INSERT INTO package_presets (name, length, width, height, weight) VALUES (?, ?, ?, ?, ?)")
-    .bind(p.name.trim(), v.length, v.width, v.height, +p.weight || 0)
+  const type = ["box", "envelope", "soft"].includes(p.type ?? "") ? p.type : "box";
+  await c.env.DB.prepare("INSERT INTO package_presets (name, type, length, width, height, weight) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(p.name.trim(), type, v.length, v.width, v.height, +p.weight || 0)
     .run();
   return c.json({ ok: true });
+});
+
+shipping.post("/presets/:id{[0-9]+}/default", async (c) => {
+  const id = Number(c.req.param("id"));
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE package_presets SET is_default = 0"),
+    c.env.DB.prepare("UPDATE package_presets SET is_default = 1 WHERE id = ?").bind(id),
+  ]);
+  return c.json({ ok: true });
+});
+
+// ---- Shipping rules (Redo "automations")
+shipping.get("/rules", async (c) => c.json({ rules: await loadRules(c.env), fields: RULE_FIELDS }));
+
+shipping.put("/rules", async (c) => {
+  requireAdmin(c);
+  const { rules } = await c.req.json<{ rules: Omit<ShippingRule, "id">[] }>();
+  if (!Array.isArray(rules)) throw new HttpError(400, "Expected a list of rules");
+  const clean = rules.map((r, i) => {
+    if (!r.name?.trim()) throw new HttpError(400, `Rule ${i + 1} needs a name`);
+    const conditions = (r.conditions ?? []).filter((x) => x.field in RULE_FIELDS && RULE_FIELDS[x.field].ops.includes(x.op) && String(x.value ?? "").trim());
+    const actions = (r.actions ?? []).filter((a) => (a.type === "set_package" || a.type === "require_signature") && String(a.value ?? "").trim());
+    if (!conditions.length) throw new HttpError(400, `“${r.name}” needs at least one complete condition`);
+    if (!actions.length) throw new HttpError(400, `“${r.name}” needs at least one action`);
+    return { name: r.name.trim(), enabled: r.enabled ? 1 : 0, position: i + 1, conditions: JSON.stringify(conditions), actions: JSON.stringify(actions) };
+  });
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM shipping_rules"),
+    ...clean.map((r) =>
+      c.env.DB.prepare("INSERT INTO shipping_rules (name, enabled, position, conditions, actions) VALUES (?, ?, ?, ?, ?)").bind(r.name, r.enabled, r.position, r.conditions, r.actions),
+    ),
+  ]);
+  return c.json({ rules: await loadRules(c.env) });
 });
 
 shipping.delete("/presets/:id{[0-9]+}", async (c) => {
@@ -73,8 +125,8 @@ shipping.delete("/presets/:id{[0-9]+}", async (c) => {
 });
 
 shipping.post("/rates", async (c) => {
-  const body = await c.req.json<{ to: Address; parcels: Parcel[] }>();
-  const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels));
+  const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string }>();
+  const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels), validSignature(body.signature));
   return c.json({ rates });
 });
 
@@ -91,18 +143,21 @@ shipping.post("/labels", async (c) => {
     labelFormat?: "GIF" | "ZPL";
     fulfill?: boolean;
     notifyCustomer?: boolean;
+    signature?: string;
   }>();
+  const signature = validSignature(body.signature);
   const parcels = validParcels(body.parcels);
   const to = validAddress(body.to);
   const labelFormat = body.labelFormat === "ZPL" ? "ZPL" : "GIF";
   const result = await createShipment(c.env, await shipFrom(c.env), to, parcels, body.serviceCode, {
     reference: body.orderName,
     labelFormat,
+    signature,
   });
 
   const row = await c.env.DB.prepare(
-    `INSERT INTO shipments (order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format, cost, currency, packages, ship_to, agent_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    `INSERT INTO shipments (order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format, cost, currency, packages, ship_to, agent_id, signature)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
   )
     .bind(
       body.orderId ?? null,
@@ -119,6 +174,7 @@ shipping.post("/labels", async (c) => {
       JSON.stringify(parcels),
       JSON.stringify(to),
       me.id,
+      signature,
     )
     .first<{ id: number }>();
 
