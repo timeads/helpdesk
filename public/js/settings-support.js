@@ -16,6 +16,7 @@ function saveBtn(fn, label = "Save") {
 
 /** Minimal CSV parser (quoted fields, commas and newlines inside quotes). */
 export function parseCsv(text) {
+  text = text.replace(/^\ufeff/, "");
   const rows = [];
   let row = [], cell = "", q = false;
   for (let i = 0; i < text.length; i++) {

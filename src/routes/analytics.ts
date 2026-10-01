@@ -19,10 +19,10 @@ analytics.get("/", async (c) => {
 
   const shippingTotals = (from: string, to: string) =>
     db.prepare(
-      `SELECT COUNT(*) AS labels, COALESCE(SUM(cost), 0) AS spend, COALESCE(SUM(shipping_paid), 0) AS collected,
+      `SELECT SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END) AS labels, COUNT(*) AS orders, COALESCE(SUM(cost), 0) AS spend, COALESCE(SUM(shipping_paid), 0) AS collected,
               COALESCE(SUM(CASE WHEN shipping_paid IS NOT NULL THEN shipping_paid - cost END), 0) AS margin,
               COALESCE(SUM(CASE WHEN list_cost IS NOT NULL THEN list_cost - cost END), 0) AS saved,
-              AVG(cost) AS avg_cost,
+              SUM(cost) / NULLIF(SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END), 0) AS avg_cost,
               AVG(CASE WHEN order_created_at IS NOT NULL THEN (julianday(created_at) - julianday(order_created_at)) * 24 END) AS hours_to_ship,
               SUM(CASE WHEN shipping_paid IS NOT NULL AND shipping_paid < cost THEN 1 ELSE 0 END) AS losers,
               SUM(scan_verified) AS verified
@@ -34,17 +34,17 @@ analytics.get("/", async (c) => {
     shippingTotals(since, now),
     shippingTotals(prevSince, since),
     db.prepare(
-      `SELECT strftime('%Y-%m-%d', created_at, 'weekday 0', '-6 days') AS week, COUNT(*) AS labels, SUM(cost) AS spend,
+      `SELECT strftime('%Y-%m-%d', created_at, 'weekday 0', '-6 days') AS week, SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END) AS labels, COUNT(*) AS orders, SUM(cost) AS spend,
               COALESCE(SUM(shipping_paid), 0) AS collected, COALESCE(SUM(CASE WHEN shipping_paid IS NOT NULL THEN shipping_paid - cost END), 0) AS margin
        FROM shipments WHERE status = 'purchased' AND created_at >= ? GROUP BY week ORDER BY week`,
     ).bind(since),
     db.prepare(
-      `SELECT service_name, COUNT(*) AS labels, SUM(cost) AS spend, AVG(cost) AS avg_cost,
+      `SELECT service_name, SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END) AS labels, COUNT(*) AS orders, SUM(cost) AS spend, SUM(cost) / NULLIF(SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END), 0) AS avg_cost,
               COALESCE(SUM(CASE WHEN shipping_paid IS NOT NULL THEN shipping_paid - cost END), 0) AS margin
        FROM shipments WHERE status = 'purchased' AND created_at >= ? GROUP BY service_name ORDER BY labels DESC`,
     ).bind(since),
     db.prepare(
-      `SELECT COALESCE(dest_state, '—') AS state, COUNT(*) AS labels, AVG(cost) AS avg_cost
+      `SELECT COALESCE(dest_state, '—') AS state, SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END) AS labels, COUNT(*) AS orders, SUM(cost) / NULLIF(SUM(CASE WHEN json_valid(packages) AND json_array_length(packages) > 0 THEN json_array_length(packages) ELSE 1 END), 0) AS avg_cost
        FROM shipments WHERE status = 'purchased' AND created_at >= ? GROUP BY dest_state ORDER BY labels DESC LIMIT 8`,
     ).bind(since),
     db.prepare(`SELECT COUNT(*) AS n FROM shipments WHERE status = 'voided' AND created_at >= ?`).bind(since),

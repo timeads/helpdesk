@@ -3,6 +3,7 @@ import { navigate } from "./app.js";
 import { h, mount, icon, money, shortDate, relTime, fullTime, toast, busy, spinner, skeletonRows } from "./ui.js";
 import { labelFormat, openPackingSlips, printLabels, printSettings, reserveWindow } from "./printing.js";
 import { renderScan } from "./scan.js";
+import { parseCsv } from "./settings-support.js";
 
 const VIEWS = [
   ["ready", "Ready to ship"],
@@ -670,13 +671,127 @@ ${tracking[i] ? `<div class="tn">UPS ${esc(tracking[i])}</div>` : ""}</div>`).jo
 // ---------------------------------------------------------------- Batches
 
 async function renderBatches(root) {
+  const importEl = h("div");
+  const listEl = h("div");
+  mount(root, importEl, listEl);
+  renderBatchList(listEl, importEl);
+}
+
+const num = (v) => {
+  const t = String(v ?? "").replace(/[$,\s]/g, "");
+  if (!t || t === "-") return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Redo export rows (one per box) → orders with their boxes. */
+function redoOrders(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const name = (r["order"] ?? "").trim();
+    if (!name) continue;
+    if (!by.has(name)) by.set(name, { order: name, customer: r["customer"] ?? "", orderDate: r["order date"] ?? "", boxes: [] });
+    by.get(name).boxes.push({
+      tracking: (r["tracking number"] ?? "").trim(), status: r["delivery status"] ?? "", shipped: r["shipped date"] ?? "",
+      selection: r["shipping selection"] ?? "", rate: num(r["rate"]), paid: num(r["shipping paid by customer"]), margin: num(r["shipping margin"]),
+    });
+  }
+  return [...by.values()];
+}
+
+function importCard(el, imported, reload) {
+  const go = h("button", { class: "btn" }, icon("download"), "Import Redo shipping export (CSV)");
+  go.onclick = async () => {
+    const i = h("input", { type: "file", accept: ".csv,text/csv", hidden: true });
+    document.body.append(i);
+    i.onchange = async () => {
+      const file = i.files[0];
+      i.remove();
+      if (!file) return;
+      const rows = parseCsv(await file.text());
+      if (!rows.length || !("tracking number" in rows[0]) || !("rate" in rows[0])) return toast("That doesn't look like a Redo shipping export (needs Order, Tracking number and Rate columns)", true);
+      const orders = redoOrders(rows);
+      const year = new Date().getFullYear();
+      const thisYear = orders.filter((o) => o.boxes.some((b) => b.shipped.endsWith(String(year))) || (!o.boxes.some((b) => b.shipped) && o.orderDate.endsWith(String(year))));
+      if (!confirm(`${rows.length} rows · ${orders.length} orders (${thisYear.length} from ${year}).\n\nImport the ${year} orders? Each order's boxes are added up and the customer's shipping payment is counted once, checked against Shopify. Re-importing the same file updates them.`)) return;
+      await runImport(el, thisYear, reload);
+    };
+    i.click();
+  };
+  mount(el, h("section", { class: "card" },
+    h("div", { class: "row", style: { justifyContent: "space-between" } },
+      h("div", {}, h("h2", {}, "Shipping history from Redo"),
+        imported?.orders
+          ? h("p", { class: "muted small", style: { margin: 0 } }, `${imported.orders} orders imported (${shortDate(imported.first)} – ${shortDate(imported.last)}) · labels ${money(imported.cost, "USD")} · collected ${money(imported.paid, "USD")} · margin `,
+            h("b", { class: imported.paid - imported.cost >= 0 ? "pos" : "neg" }, marginText(imported.paid - imported.cost)),
+            h("span", {}, ` (Redo reported ${marginText(imported.reported)})`))
+          : h("p", { class: "muted small", style: { margin: 0 } }, "Import past labels so analytics cover the whole year. Split orders are counted correctly: every box's label cost, the customer's shipping once.")),
+      go)));
+}
+
+async function runImport(el, orders, reload) {
+  const bar = h("div", { class: "progress" }, h("i", { style: { width: "0%" } }));
+  const status = h("div", { class: "small" });
+  mount(el, h("section", { class: "card", role: "status" }, h("div", { class: "row" }, spinner(), h("b", {}, "Importing Redo history…")), bar, status));
+  const results = [];
+  let skipped = 0;
+  let failed = 0;
+  const CHUNK = 40;
+  for (let i = 0; i < orders.length; i += CHUNK) {
+    status.textContent = `${Math.min(i + CHUNK, orders.length)} of ${orders.length} orders`;
+    try {
+      const r = await api("/shipping/import/redo", { method: "POST", body: { orders: orders.slice(i, i + CHUNK) } });
+      results.push(...r.results);
+      skipped += r.skipped;
+    } catch (e) {
+      failed += Math.min(CHUNK, orders.length - i);
+      toast(`Batch ${i / CHUNK + 1}: ${e.message}`, true);
+    }
+    bar.firstChild.style.width = `${Math.round(((i + CHUNK) / orders.length) * 100)}%`;
+  }
+  const sum = (f) => results.reduce((n, r) => n + f(r), 0);
+  const counted = results.filter((r) => !r.voided);
+  const cost = sum((r) => (r.voided ? 0 : r.cost));
+  const paid = sum((r) => (r.voided ? 0 : r.paid));
+  const reported = sum((r) => r.reportedMargin);
+  const split = results.filter((r) => r.boxes > 1);
+  const fromShopify = results.filter((r) => r.paidSource === "shopify").length;
+  const noted = results.filter((r) => r.notes.length);
+  const download = () => {
+    const lines = [["order", "boxes", "label_cost", "customer_paid_shipping", "paid_source", "true_margin", "redo_margin", "difference", "notes"].join(",")];
+    for (const r of results) lines.push([r.order, r.boxes, r.cost.toFixed(2), r.paid.toFixed(2), r.paidSource, r.margin.toFixed(2), r.reportedMargin.toFixed(2), (r.reportedMargin - r.margin).toFixed(2), `"${r.notes.join("; ").replace(/"/g, "'")}"`].join(","));
+    const a = h("a", { href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })), download: "redo-shipping-check.csv" });
+    a.click();
+  };
+  mount(el, h("section", { class: "card fade-in" },
+    h("h2", {}, `Imported ${counted.length} orders`),
+    h("div", { class: "kpis", style: { margin: "12px 0" } },
+      h("div", { class: "kpi" }, h("div", { class: "kpi-label" }, "Label spend"), h("div", { class: "kpi-value" }, money(cost, "USD")), h("div", { class: "kpi-sub" }, `${sum((r) => r.boxes)} boxes`)),
+      h("div", { class: "kpi" }, h("div", { class: "kpi-label" }, "Shipping collected"), h("div", { class: "kpi-value" }, money(paid, "USD")), h("div", { class: "kpi-sub" }, `${fromShopify} of ${results.length} checked in Shopify`)),
+      h("div", { class: "kpi" }, h("div", { class: "kpi-label" }, "True margin"), h("div", { class: "kpi-value " + (paid - cost >= 0 ? "pos" : "neg") }, marginText(paid - cost)), h("div", { class: "kpi-sub" }, "payment counted once per order")),
+      h("div", { class: "kpi" }, h("div", { class: "kpi-label" }, "Redo reported"), h("div", { class: "kpi-value" }, marginText(reported)), h("div", { class: "kpi-sub" }, `overstated by ${money(reported - (paid - cost), "USD")}`))),
+    split.length ? [h("h3", { class: "section" }, `${split.length} orders shipped in more than one box`),
+      h("div", { class: "tbl-wrap", style: { maxHeight: "360px", overflowY: "auto" } }, h("table", { class: "tbl" },
+        h("thead", {}, h("tr", {}, ["Order", "Boxes", "Labels", "Customer paid", "True margin", "Redo said"].map((x) => h("th", { class: x === "Order" ? null : "num" }, x)))),
+        h("tbody", {}, split.sort((a, b) => (b.reportedMargin - b.margin) - (a.reportedMargin - a.margin)).map((r) => h("tr", { title: r.notes.join("\n") || null },
+          h("td", {}, h("b", {}, r.order)), h("td", { class: "num" }, r.boxes), h("td", { class: "num" }, money(r.cost, "USD")), h("td", { class: "num" }, money(r.paid, "USD")),
+          h("td", { class: "num margin " + (r.margin >= 0 ? "pos" : "neg") }, marginText(r.margin)), h("td", { class: "num muted" }, marginText(r.reportedMargin)))))))] : null,
+    noted.length ? h("details", { style: { marginTop: "12px" } }, h("summary", { class: "small" }, `${noted.length} orders with notes (refunded shipping, cancelled or shared labels)`),
+      h("ul", { class: "small" }, noted.slice(0, 200).map((r) => h("li", {}, h("b", {}, r.order), " — ", r.notes.join("; "))))) : null,
+    h("p", { class: "small muted" }, `${skipped} orders had no label in Redo and were skipped.`, failed ? ` ${failed} couldn't be imported — run the import again to retry.` : "",
+      results.length - fromShopify ? ` ${results.length - fromShopify} orders weren't found in Shopify (manual orders, or older than 60 days if the app lacks the read_all_orders scope) — Redo's payment was used, counted once.` : ""),
+    h("div", { class: "row" }, h("button", { class: "btn", onclick: download }, icon("download"), "Download the check (CSV)"), h("button", { class: "btn ghost", onclick: reload }, "Done"))));
+}
+
+async function renderBatchList(root, importEl) {
   mount(root, h("div", { class: "card" }, skeletonRows(4)));
-  let batches;
+  let batches, imported;
   try {
-    ({ batches } = await api("/shipping/batches"));
+    ({ batches, imported } = await api("/shipping/batches"));
   } catch (e) {
     return mount(root, h("div", { class: "notice bad" }, e.message));
   }
+  importCard(importEl, imported, () => renderBatchList(root, importEl));
   if (!batches.length) return mount(root, h("div", { class: "card empty" }, h("h2", {}, "No labels yet"), h("p", {}, "Every label you buy — one at a time or in bulk — shows up here for reprinting or voiding.")));
   const { labels } = await api("/shipping/labels");
   const byId = new Map(labels.map((l) => [String(l.id), l]));
@@ -692,7 +807,7 @@ async function renderBatches(root) {
           if (!confirm("Void this label with UPS? You won't be charged for it.")) return;
           await api(`/shipping/labels/${l.id}/void`, { method: "POST" });
           toast("Label voided");
-          renderBatches(root);
+          renderBatchList(root, importEl);
         });
         return h("tr", {},
           h("td", {}, l.order_name || "—"),

@@ -11,6 +11,7 @@ import { code128Svg } from "../lib/code128";
 import { requireAdmin } from "../lib/auth";
 import { HttpError, base64UrlDecodeBytes, getSetting, setSetting } from "../lib/util";
 import { demoOrders } from "../lib/demo";
+import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
 
 const shipping = new Hono<AppEnv>();
@@ -305,7 +306,7 @@ shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT s.id, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
-     FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id ORDER BY s.created_at DESC LIMIT 200`,
+     FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL ORDER BY s.created_at DESC LIMIT 200`,
   ).all<any>();
   return c.json({
     labels: results.map((r) => ({ ...r, tracking_numbers: JSON.parse(r.tracking_numbers), ship_to: JSON.parse(r.ship_to) })),
@@ -346,9 +347,19 @@ async function labelRows(env: Env, q: { ids?: string; batch?: string }) {
   return results;
 }
 
+/** Import a Redo shipping export (the browser parses the CSV and sends ~40 orders per call). */
+shipping.post("/import/redo", async (c) => {
+  requireAdmin(c);
+  const { orders } = await c.req.json<{ orders: RedoOrder[] }>();
+  if (!Array.isArray(orders) || !orders.length) throw new HttpError(400, "No orders in this batch");
+  if (orders.length > 60) throw new HttpError(400, "Send at most 60 orders per batch");
+  return c.json(await importRedoOrders(c.env, orders, c.get("agent").id));
+});
+
 shipping.get("/labels/print", async (c) => {
   const rows = await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") });
   if (!rows.length) throw new HttpError(404, "No labels found");
+  if (rows.every((r: any) => r.labels === "[]")) throw new HttpError(404, "These were imported from Redo — reprint them in Redo or UPS");
   const gif = rows.filter((r) => r.label_format !== "ZPL").flatMap((r) => JSON.parse(r.labels) as string[]);
   const zpl = rows.filter((r) => r.label_format === "ZPL").flatMap((r) => JSON.parse(r.labels) as string[]);
   if (c.req.query("format") === "zpl") return c.text(zplOf(zpl));
@@ -365,6 +376,7 @@ shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
     .first<{ labels: string; label_format: string; tracking_numbers: string; order_name: string | null }>();
   if (!s) throw new HttpError(404, "Label not found");
   const labels: string[] = JSON.parse(s.labels);
+  if (!labels.length) throw new HttpError(404, "Imported from Redo — reprint it in Redo or UPS");
   if (s.label_format === "ZPL") {
     if (c.req.query("format") === "zpl") return c.text(zplOf(labels));
     return new Response(zplOf(labels), {
@@ -379,6 +391,7 @@ shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
   const s = await c.env.DB.prepare("SELECT shipment_id, status FROM shipments WHERE id = ?").bind(id).first<{ shipment_id: string; status: string }>();
   if (!s) throw new HttpError(404, "Label not found");
   if (s.status === "voided") return c.json({ ok: true });
+  if (!s.shipment_id) throw new HttpError(409, "Imported from Redo — void it in Redo or UPS");
   await voidShipment(c.env, s.shipment_id);
   await c.env.DB.prepare("UPDATE shipments SET status = 'voided' WHERE id = ?").bind(id).run();
   return c.json({ ok: true });
@@ -391,10 +404,16 @@ shipping.get("/batches", async (c) => {
             SUM(CASE WHEN s.status = 'purchased' THEN s.cost ELSE 0 END) AS cost,
             SUM(CASE WHEN s.status = 'voided' THEN 1 ELSE 0 END) AS voided,
             GROUP_CONCAT(s.order_name, ', ') AS orders, GROUP_CONCAT(s.id) AS ids, MAX(a.name) AS agent_name
-     FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id
+     FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL
      GROUP BY COALESCE(s.batch_id, 'label-' || s.id) ORDER BY MIN(s.created_at) DESC LIMIT 100`,
   ).all<any>();
-  return c.json({ batches: results });
+  const imported = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS orders, MIN(created_at) AS first, MAX(created_at) AS last,
+            SUM(CASE WHEN status = 'purchased' THEN cost ELSE 0 END) AS cost, SUM(COALESCE(shipping_paid, 0)) AS paid,
+            SUM(COALESCE(reported_margin, 0)) AS reported
+     FROM shipments WHERE source = 'redo'`,
+  ).first();
+  return c.json({ batches: results, imported });
 });
 
 // ---- Packing slips
