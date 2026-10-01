@@ -25,6 +25,8 @@ const POLICIES = [
   ["rule", "Rules, else cheapest"],
   ["cheapest", "Cheapest"],
   ["fastest", "Fastest"],
+  ["usps:GroundAdvantage", "USPS Ground Advantage"],
+  ["usps:Priority", "USPS Priority Mail"],
   ["03", "UPS Ground"],
   ["12", "UPS 3 Day Select"],
   ["02", "UPS 2nd Day Air"],
@@ -58,7 +60,7 @@ export function renderShipping(main) {
   mount(main, h("div", { class: "page" },
     h("header", { class: "page-head" }, h("div", { class: "inner" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
-        h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, UPS labels, packing slips and the packing station.")),
+        h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, UPS and USPS labels, packing slips and the packing station.")),
         h("div", { class: "row" }, printerChip, blank)),
       h("nav", { class: "tabs-line", "aria-label": "Shipping" },
         tabLink("queue", "/shipping", "Orders"), tabLink("scan", "/shipping/scan", "Scan & pack"), tabLink("batches", "/shipping/batches", "Label batches")))),
@@ -67,8 +69,8 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     const n = [];
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
-    if (!st.ups) n.push(h("div", { class: "notice info" }, "UPS isn't connected yet. Add your UPS keys in Settings → Credentials to get rates and buy labels."));
-    else if (st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Credentials when ready."));
+    if (!st.ups && !st.usps) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or USPS (EasyPost) keys in Settings → Credentials to get rates and buy labels."));
+    else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Credentials when ready."));
     mount(notices, n.length ? h("div", { class: "stack", style: { marginBottom: "16px" } }, n) : null);
   }).catch(() => {});
 
@@ -91,9 +93,12 @@ export function renderShipping(main) {
 
 let queueApi = null; // lets the slideout refresh the queue after buying a label
 
+/** UPS numbers start with 1Z; everything else here is USPS. */
+const trackHref = (n) => (/^1Z/i.test(n) ? `https://www.ups.com/track?tracknum=${n}` : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}`);
+
 const SOURCE_LABEL = { rule: "by rule", learned: "remembered", "learned-similar": "remembered (similar order)" };
 
-// ---- Live UPS quotes for queue rows (cached per order + package, a few at a time)
+// ---- Live carrier quotes for queue rows (cached per order + package, a few at a time)
 const quoteCache = new Map();
 const quoteKey = (o) => `${o.id}|${JSON.stringify(o.plan.parcels ?? [o.plan.parcel])}|${o.plan.signature ?? ""}`;
 function pickRate(rates, policy, plan) {
@@ -177,7 +182,7 @@ function renderQueue(root, params) {
     allBox.onchange = () => { rows.forEach((o) => (allBox.checked ? st.selected.add(o.id) : st.selected.delete(o.id))); draw(); };
     mount(tableWrap, h("div", { class: "tbl-wrap" }, h("table", { class: "tbl queue" },
       h("thead", {}, h("tr", {}, h("th", { class: "chk" }, allBox),
-        ["Order", "Customer", "Items", "Weight", "Box", "Customer chose", "Paid", "UPS quote · margin", "Ship to", ""].map((x) => h("th", { class: x === "Paid" ? "num" : null }, x)))),
+        ["Order", "Customer", "Items", "Weight", "Box", "Customer chose", "Paid", "Best quote · margin", "Ship to", ""].map((x) => h("th", { class: x === "Paid" ? "num" : null }, x)))),
       h("tbody", {}, rows.map((o) => {
         const box = h("input", { type: "checkbox", checked: st.selected.has(o.id), "aria-label": `Select ${o.name}` });
         box.onclick = (e) => e.stopPropagation();
@@ -226,7 +231,7 @@ function renderQueue(root, params) {
     if (!r) return mount(td, h("span", { class: "small muted" }, "Service not offered"));
     const m = o.shippingPaid - r.total;
     td.title = q.rates.map((x) => `${x.serviceName}: ${money(x.total, "USD")} → ${marginText(o.shippingPaid - x.total)}`).join("\n");
-    mount(td, h("div", { class: "q-line" }, h("span", { class: "small" }, r.serviceName.replace(/^UPS /, "")), h("b", {}, money(r.total, "USD"))),
+    mount(td, h("div", { class: "q-line" }, h("span", { class: "small" }, r.serviceName.replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority")), h("b", {}, money(r.total, "USD"))),
       h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`));
   }
   const refreshQuotes = (rows) => loadQuotes(rows, (o) => { fillQuote(o); if (st.selected.has(o.id)) drawBulk(visible()); });
@@ -402,7 +407,7 @@ function buildLabelForm(root, o, presets, opts) {
   };
   async function fetchRates() {
     const my = ++seq;
-    if (!s.rates.length) mount(ratesEl, h("div", { class: "rates-card" }, h("div", { class: "row small muted" }, spinner(), "Getting UPS rates…")));
+    if (!s.rates.length) mount(ratesEl, h("div", { class: "rates-card" }, h("div", { class: "row small muted" }, spinner(), "Getting rates…")));
     try {
       const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels.map(cleanParcel), signature: s.signature || undefined } });
       if (my !== seq) return;
@@ -574,7 +579,7 @@ function buildLabelForm(root, o, presets, opts) {
   function drawRates() {
     if (!s.rates.length) {
       return mount(ratesEl, ready() ? null : h("div", { class: "notice", style: { marginTop: "16px" } },
-        s.parcels.some((p) => !(+p.weight > 0)) ? "Enter the weight to see UPS rates and your margin." : "Finish the address and box size to see UPS rates."));
+        s.parcels.some((p) => !(+p.weight > 0)) ? "Enter the weight to see rates and your margin." : "Finish the address and box size to see rates."));
     }
     const cheapest = Math.min(...s.rates.map((r) => r.total));
     const timed = s.rates.filter((r) => r.days);
@@ -648,7 +653,7 @@ function buildLabelForm(root, o, presets, opts) {
       h("h2", {}, split() ? `${s.parcels.length} labels bought` : "Label bought"),
       h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}${paid !== null ? ` · margin ${marginText(paid - r.cost)}` : ""}`),
       r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
-        h("a", { href: `https://www.ups.com/track?tracknum=${n}`, target: "_blank", rel: "noopener" }, n))),
+        h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n))),
       r.fulfillError ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, `The label is fine, but marking the order fulfilled in Shopify failed: ${r.fulfillError}`) : null,
       h("div", { class: "row", style: { marginTop: "16px" } },
         h("button", { class: "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
@@ -662,6 +667,9 @@ function buildLabelForm(root, o, presets, opts) {
 
 const sameService = (chosen, service) => {
   const a = chosen.toLowerCase();
+  // A checkout option only means USPS when it says so; generic names ("Standard") mean UPS, your default carrier
+  if (/^usps/i.test(service) !== /usps|postal|ground advantage|priority mail/.test(a)) return false;
+  if (/^usps/i.test(service)) return a.includes(service.toLowerCase().replace(/^usps\s+/, "").replace(" mail", ""));
   const b = service.toLowerCase().replace(/^ups\s+/, "");
   return a.includes(b) || (b.includes("ground") && /ground|standard/.test(a)) || (b.includes("2nd day") && /2.?day|two.?day|express/.test(a)) || (b.includes("next day") && /next.?day|overnight/.test(a));
 };
@@ -677,7 +685,7 @@ function printBoxSlips(o, boxes, tracking) {
 li { margin: 3pt 0; } .tn { font-family: monospace; font-size: 11pt; margin-top: 10pt; }</style>
 ${boxes.map((b, i) => `<div class="page"><h1>Box ${i + 1} of ${boxes.length}</h1><h2>${esc(o.name)} · ${esc(o.shippingAddress?.name ?? "")}</h2>
 <ul>${(b.contents ?? []).map((c) => `<li><b>${c.qty} ×</b> ${esc(c.title)}</li>`).join("") || "<li>(no items assigned)</li>"}</ul>
-${tracking[i] ? `<div class="tn">UPS ${esc(tracking[i])}</div>` : ""}</div>`).join("")}
+${tracking[i] ? `<div class="tn">${/^1Z/i.test(tracking[i]) ? "UPS" : "USPS"} ${esc(tracking[i])}</div>` : ""}</div>`).join("")}
 <script>onload = () => print()</script>`);
   w.document.close();
 }
@@ -818,7 +826,7 @@ async function renderBatchList(root, importEl) {
         if (!l) return null;
         const voidBtn = h("button", { class: "btn sm ghost danger" }, "Void");
         voidBtn.onclick = busy(voidBtn, async () => {
-          if (!confirm("Void this label with UPS? You won't be charged for it.")) return;
+          if (!confirm(l.carrier === "USPS" ? "Void this USPS label? EasyPost refunds the postage to your wallet (USPS takes up to a few weeks)." : "Void this label with UPS? You won't be charged for it.")) return;
           await api(`/shipping/labels/${l.id}/void`, { method: "POST" });
           toast("Label voided");
           renderBatchList(root, importEl);
@@ -827,7 +835,7 @@ async function renderBatchList(root, importEl) {
           h("td", {}, l.order_name || "—"),
           h("td", {}, l.ship_to?.name, h("div", { class: "small muted" }, [l.ship_to?.city, l.ship_to?.state].filter(Boolean).join(", "))),
           h("td", {}, l.service_name, l.status === "voided" ? h("span", { class: "badge bad", style: { marginLeft: "6px" } }, "Voided") : null),
-          h("td", { class: "mono" }, l.tracking_numbers.map((n) => h("div", {}, h("a", { href: `https://www.ups.com/track?tracknum=${n}`, target: "_blank", rel: "noopener" }, n)))),
+          h("td", { class: "mono" }, l.tracking_numbers.map((n) => h("div", {}, h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n)))),
           h("td", { class: "num" }, l.cost != null ? money(l.cost, l.currency) : ""),
           h("td", {}, l.status !== "voided" ? h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, "Print") : null, l.status !== "voided" ? voidBtn : null));
       })))));

@@ -20,6 +20,7 @@ export interface Env {
   UPS_CLIENT_SECRET?: string;
   UPS_ACCOUNT_NUMBER?: string;
   ANTHROPIC_API_KEY?: string;
+  EASYPOST_API_KEY?: string;
   DEV_LOGIN_EMAIL?: string;
   DEMO_DATA?: string;
   RAW_ENV?: Env; // env before app-entered credentials were applied

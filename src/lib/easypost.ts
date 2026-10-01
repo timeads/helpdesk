@@ -1,0 +1,157 @@
+// USPS through EasyPost (EasyPost's own USPS account, paid from the EasyPost wallet).
+// One box = one EasyPost shipment; several boxes = an EasyPost order (one label per box).
+import type { Env } from "../env";
+import type { Address, Parcel, Rate, ShipResult, Signature } from "./ups";
+import { HttpError } from "./util";
+
+const API = "https://api.easypost.com/v2";
+
+export const USPS_SERVICES: Record<string, string> = {
+  GroundAdvantage: "USPS Ground Advantage",
+  Priority: "USPS Priority Mail",
+  Express: "USPS Priority Mail Express",
+  ParcelSelect: "USPS Parcel Select",
+  MediaMail: "USPS Media Mail",
+  LibraryMail: "USPS Library Mail",
+};
+export const isUspsCode = (code: string) => code.startsWith("usps:");
+export const easypostConfigured = (env: Env) => !!env.EASYPOST_API_KEY;
+
+async function ep<T = any>(env: Env, method: string, path: string, body?: unknown): Promise<T> {
+  if (!env.EASYPOST_API_KEY) throw new HttpError(409, "Add your EasyPost API key in Settings → Credentials → USPS");
+  const res = await fetch(API + path, {
+    method,
+    headers: { authorization: `Basic ${btoa(`${env.EASYPOST_API_KEY}:`)}`, "content-type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = json?.error?.message ?? `${res.status}`;
+    const detail = (json?.error?.errors ?? []).map((e: any) => e.message ?? e).filter(Boolean).join("; ");
+    throw new HttpError(res.status === 401 ? 502 : 422, `USPS (EasyPost): ${msg}${detail ? ` — ${detail}` : ""}`);
+  }
+  return json as T;
+}
+
+const address = (a: Address) => ({
+  name: a.name || undefined,
+  company: a.company || undefined,
+  street1: a.address1,
+  street2: a.address2 || undefined,
+  city: a.city,
+  state: a.state,
+  zip: a.zip,
+  country: a.country || "US",
+  phone: a.phone || undefined,
+  email: a.email || undefined,
+  residential: a.residential ?? undefined,
+});
+
+const parcel = (p: Parcel) => ({
+  length: Math.max(1, p.length),
+  width: Math.max(1, p.width),
+  height: Math.max(0.25, p.height || 0.25),
+  weight: Math.max(0.1, Math.round(p.weight * 16 * 10) / 10), // ounces
+});
+
+const options = (signature: Signature, labelFormat: "GIF" | "ZPL", reference?: string) => ({
+  label_format: labelFormat === "ZPL" ? "ZPL" : "PNG",
+  label_size: "4x6",
+  ...(signature === "adult" ? { delivery_confirmation: "ADULT_SIGNATURE" } : signature === "standard" ? { delivery_confirmation: "SIGNATURE" } : {}),
+  ...(reference ? { print_custom_1: reference.slice(0, 35) } : {}),
+});
+
+function toRates(raw: any[]): Rate[] {
+  return (raw ?? [])
+    .filter((r) => r.carrier === "USPS" && USPS_SERVICES[r.service])
+    .map((r) => ({
+      carrier: "USPS",
+      serviceCode: `usps:${r.service}`,
+      serviceName: USPS_SERVICES[r.service],
+      total: Number(r.rate),
+      listTotal: Number(r.retail_rate ?? r.list_rate ?? r.rate),
+      currency: r.currency ?? "USD",
+      days: r.delivery_days ?? r.est_delivery_days ?? null,
+    }))
+    .sort((a, b) => a.total - b.total);
+}
+
+/** USPS can only be quoted for US addresses here (international needs customs forms — not built yet). */
+const domestic = (to: Address) => (to.country || "US").toUpperCase() === "US";
+
+async function create(env: Env, from: Address, to: Address, parcels: Parcel[], signature: Signature, labelFormat: "GIF" | "ZPL", reference?: string) {
+  const opts = options(signature, labelFormat, reference);
+  if (parcels.length === 1) {
+    const s = await ep(env, "POST", "/shipments", { shipment: { to_address: address(to), from_address: address(from), parcel: parcel(parcels[0]), options: opts, reference } });
+    return { kind: "shipment" as const, id: s.id as string, rates: s.rates as any[] };
+  }
+  const o = await ep(env, "POST", "/orders", {
+    order: { to_address: address(to), from_address: address(from), reference, options: opts, shipments: parcels.map((p) => ({ parcel: parcel(p), options: opts })) },
+  });
+  return { kind: "order" as const, id: o.id as string, rates: o.rates as any[] };
+}
+
+export async function getUspsRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature): Promise<Rate[]> {
+  if (!domestic(to)) return [];
+  const c = await create(env, from, to, parcels, signature, "GIF");
+  return toRates(c.rates);
+}
+
+async function download(url: string): Promise<string> {
+  const res = await fetch(url);
+  if (!res.ok) throw new HttpError(502, `Couldn't download the USPS label (${res.status})`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** Buys a USPS label (or one per box). shipmentId is stored as "ep:<id>,<id>" for refunds. */
+export async function buyUsps(
+  env: Env,
+  from: Address,
+  to: Address,
+  parcels: Parcel[],
+  serviceCode: string,
+  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; signature?: Signature },
+): Promise<ShipResult & { format: "PNG" | "ZPL" }> {
+  if (!domestic(to)) throw new HttpError(422, "USPS labels are US-only for now");
+  const service = serviceCode.replace(/^usps:/, "");
+  const c = await create(env, from, to, parcels, opts.signature, opts.labelFormat, opts.reference);
+  const shipments: any[] = [];
+  if (c.kind === "shipment") {
+    const rate = c.rates.find((r) => r.carrier === "USPS" && r.service === service);
+    if (!rate) throw new HttpError(422, `${USPS_SERVICES[service] ?? service} isn't available for this package`);
+    shipments.push(await ep(env, "POST", `/shipments/${c.id}/buy`, { rate: { id: rate.id } }));
+  } else {
+    const o = await ep(env, "POST", `/orders/${c.id}/buy`, { carrier: "USPS", service });
+    shipments.push(...(o.shipments ?? []));
+  }
+  const zpl = opts.labelFormat === "ZPL";
+  const labels: string[] = [];
+  for (const s of shipments) {
+    const url = zpl ? s.postage_label?.label_zpl_url ?? s.postage_label?.label_url : s.postage_label?.label_url;
+    if (url) labels.push(await download(url));
+  }
+  return {
+    shipmentId: `ep:${shipments.map((s) => s.id).join(",")}`,
+    trackingNumbers: shipments.map((s) => s.tracking_code).filter(Boolean),
+    labels,
+    cost: Math.round(shipments.reduce((n, s) => n + Number(s.selected_rate?.rate ?? 0), 0) * 100) / 100,
+    currency: shipments[0]?.selected_rate?.currency ?? "USD",
+    format: zpl ? "ZPL" : "PNG",
+  };
+}
+
+/** Asks USPS for a refund of every label in the shipment (USPS refunds take a couple of weeks). */
+export async function refundUsps(env: Env, shipmentId: string) {
+  for (const id of shipmentId.replace(/^ep:/, "").split(",").filter(Boolean)) {
+    await ep(env, "POST", `/shipments/${id}/refund`);
+  }
+}
+
+export async function testEasypost(env: Env) {
+  await ep(env, "GET", "/shipments?page_size=1");
+}
+
+export const uspsTrackingUrl = (n: string) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(n)}`;

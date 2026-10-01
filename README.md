@@ -86,6 +86,12 @@ Mode starts on **test**, so labels aren't billed. When a test label prints corre
 
 > Labels are US-domestic for now. International shipments need customs forms, which aren't built yet.
 
+### 4b. (Optional) USPS through EasyPost
+
+1. Create an account at [easypost.com](https://www.easypost.com) and add a payment method. ACH (bank) avoids the 3.75% card fee on wallet top-ups.
+2. Go to **Account → API Keys** and copy the **Production** key (starts with `EZAK`).
+3. In the app: **Settings → Credentials → USPS (EasyPost)**, paste it, **Save**. USPS Ground Advantage, Priority Mail and Priority Mail Express then show next to UPS everywhere rates appear, each with its margin. USPS labels are US-only for now.
+
 ### 5. (Optional) AI drafts
 
 Create a key at [console.anthropic.com](https://console.anthropic.com) and add some credit. Then paste the key into **Settings → Credentials → AI drafts** and pick a model. Each draft costs roughly 1–2¢ on the default model; `claude-haiku-4-5` is cheaper still.

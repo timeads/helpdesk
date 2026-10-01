@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "../env";
 import { findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
-import { getRates, upsConfigured, voidShipment, type Address, type Parcel, type Signature } from "../lib/ups";
+import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
+import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers";
+import { easypostConfigured } from "../lib/easypost";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
   addressFromOrder, buyLabel, chooseRate, isInternational, isPaymentPending, isPriority, itemCount, itemsWeightLb,
@@ -113,7 +115,7 @@ const VIEWS: Record<string, (o: Described) => boolean> = {
 };
 
 shipping.get("/status", async (c) =>
-  c.json({ ups: upsConfigured(c.env), shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
+  c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
 );
 
 /** The fulfillment queue: every open, unshipped order with its plan, plus per-view counts. */
@@ -222,7 +224,7 @@ shipping.put("/rules", async (c) => {
 // ---- Rates and labels
 shipping.post("/rates", async (c) => {
   const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string }>();
-  if (demo(c.env) && !upsConfigured(c.env)) {
+  if (demo(c.env) && !anyCarrier(c.env)) {
     // Local preview only: plausible made-up prices so the screens can be tried without UPS keys
     const lb = validParcels(body.parcels).reduce((n, p) => n + Math.max(p.weight, (p.length * p.width * p.height) / 139), 0);
     const n = body.parcels.length;
@@ -230,7 +232,13 @@ shipping.post("/rates", async (c) => {
       const total = Math.round((base * n + perLb * lb) * 100) / 100;
       return { serviceCode, serviceName, total, listTotal: Math.round(total * 1.35 * 100) / 100, currency: "USD", days };
     };
-    return c.json({ rates: [mk("03", "UPS Ground", 7.4, 0.62, 4), mk("12", "UPS 3 Day Select", 11.2, 1.1, 3), mk("02", "UPS 2nd Day Air", 16.5, 1.9, 2), mk("13", "UPS Next Day Air Saver", 29, 3.2, 1)] });
+    const usps = (code: string, name: string, base: number, perLb: number, days: number) => ({ ...mk(code, name, base, perLb, days), carrier: "USPS" });
+    const rates = [
+      { ...mk("03", "UPS Ground", 7.4, 0.62, 4), carrier: "UPS" }, { ...mk("12", "UPS 3 Day Select", 11.2, 1.1, 3), carrier: "UPS" },
+      { ...mk("02", "UPS 2nd Day Air", 16.5, 1.9, 2), carrier: "UPS" }, { ...mk("13", "UPS Next Day Air Saver", 29, 3.2, 1), carrier: "UPS" },
+      usps("usps:GroundAdvantage", "USPS Ground Advantage", 5.9, 0.7, 4), usps("usps:Priority", "USPS Priority Mail", 8.4, 0.9, 2), usps("usps:Express", "USPS Priority Mail Express", 27, 1.6, 1),
+    ];
+    return c.json({ rates: rates.sort((a, b) => a.total - b.total) });
   }
   const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels), validSignature(body.signature));
   return c.json({ rates });
@@ -318,7 +326,7 @@ shipping.post("/labels/auto", async (c) => {
 
 shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT s.id, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
+    `SELECT s.id, s.carrier, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
      FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL ORDER BY s.created_at DESC LIMIT 200`,
   ).all<any>();
@@ -331,19 +339,24 @@ function zplOf(labels: string[]): string {
   return labels.map((l) => new TextDecoder().decode(base64UrlDecodeBytes(l.replace(/\+/g, "-").replace(/\//g, "_")))).join("\n");
 }
 
-function labelPage(title: string, gifs: string[]) {
-  // UPS GIF labels are landscape; rotate each onto a 4×6 page
-  const pages = gifs.map((l) => `<div class="page"><img src="data:image/gif;base64,${l}" alt="UPS label"></div>`).join("");
+function labelPage(title: string, labels: { data: string; format: string }[]) {
+  // UPS GIF labels are landscape and get rotated onto the 4×6 page; USPS PNG labels are already 4×6 portrait
+  const pages = labels
+    .map((l) => (l.format === "PNG"
+      ? `<div class="page"><img class="portrait" src="data:image/png;base64,${l.data}" alt="USPS label"></div>`
+      : `<div class="page"><img class="landscape" src="data:image/gif;base64,${l.data}" alt="UPS label"></div>`))
+    .join("");
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <style>
 @page { size: 4in 6in; margin: 0; }
 html, body { margin: 0; padding: 0; background: #fff; }
 .page { width: 4in; height: 6in; overflow: hidden; position: relative; page-break-after: always; }
-.page img { position: absolute; top: 0; left: 4in; width: 6in; height: 4in; transform-origin: 0 0; transform: rotate(90deg); }
+.page img.landscape { position: absolute; top: 0; left: 4in; width: 6in; height: 4in; transform-origin: 0 0; transform: rotate(90deg); }
+.page img.portrait { width: 4in; height: 6in; object-fit: contain; display: block; }
 .bar { font: 14px system-ui, sans-serif; padding: 12px; display: flex; gap: 8px; align-items: center; }
 @media print { .bar { display: none; } }
 </style></head><body>
-<div class="bar"><button onclick="print()">Print</button> <span>${gifs.length} label${gifs.length === 1 ? "" : "s"} · 4×6 in, margins none, scale 100%</span></div>
+<div class="bar"><button onclick="print()">Print</button> <span>${labels.length} label${labels.length === 1 ? "" : "s"} · 4×6 in, margins none, scale 100%</span></div>
 ${pages}
 <script>addEventListener('load', () => setTimeout(() => print(), 300));</script>
 </body></html>`;
@@ -403,7 +416,7 @@ shipping.get("/labels/print", async (c) => {
   const rows = await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") });
   if (!rows.length) throw new HttpError(404, "No labels found");
   if (rows.every((r: any) => r.labels === "[]")) throw new HttpError(404, "These were imported from Redo — reprint them in Redo or UPS");
-  const gif = rows.filter((r) => r.label_format !== "ZPL").flatMap((r) => JSON.parse(r.labels) as string[]);
+  const gif = rows.filter((r) => r.label_format !== "ZPL").flatMap((r) => (JSON.parse(r.labels) as string[]).map((data) => ({ data, format: r.label_format as string })));
   const zpl = rows.filter((r) => r.label_format === "ZPL").flatMap((r) => JSON.parse(r.labels) as string[]);
   if (c.req.query("format") === "zpl") return c.text(zplOf(zpl));
   if (!gif.length && zpl.length) {
@@ -426,7 +439,7 @@ shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
       headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="ups-${JSON.parse(s.tracking_numbers)[0]}.zpl"` },
     });
   }
-  return c.html(labelPage(`Label ${s.order_name ?? ""}`, labels));
+  return c.html(labelPage(`Label ${s.order_name ?? ""}`, labels.map((data) => ({ data, format: s.label_format }))));
 });
 
 shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
@@ -435,7 +448,7 @@ shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
   if (!s) throw new HttpError(404, "Label not found");
   if (s.status === "voided") return c.json({ ok: true });
   if (!s.shipment_id) throw new HttpError(409, "Imported from Redo — void it in Redo or UPS");
-  await voidShipment(c.env, s.shipment_id);
+  await voidLabel(c.env, s.shipment_id);
   await c.env.DB.prepare("UPDATE shipments SET status = 'voided' WHERE id = ?").bind(id).run();
   return c.json({ ok: true });
 });

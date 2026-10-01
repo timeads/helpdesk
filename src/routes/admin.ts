@@ -9,6 +9,7 @@ import { HttpError, deleteSetting, getSetting, setSetting } from "../lib/util";
 import { CREDENTIAL_FIELDS, describeCredentials, saveCredentials, withCredentials } from "../lib/credentials";
 import { shopify } from "../lib/shopify";
 import { testUps } from "../lib/ups";
+import { easypostConfigured, testEasypost } from "../lib/easypost";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SUPPORT, RULE_ACTIONS, RULE_FIELDS, STATUSES, TRIGGERS, loadSupportRules, supportSettings, type SupportSettings } from "../lib/support";
 import { MACRO_VARIABLES } from "../lib/macros";
@@ -315,6 +316,7 @@ admin.get("/settings", async (c) => {
         : { connected: false, configured: !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET), email: c.env.SUPPORT_EMAIL },
       shopify: { connected: shopifyConfigured(c.env), shop: c.env.SHOPIFY_SHOP },
       ups: { connected: upsConfigured(c.env), env: c.env.UPS_ENV },
+      usps: { connected: easypostConfigured(c.env) },
       ai: { connected: aiConfigured(c.env), model: c.env.AI_MODEL },
     },
     signature: await getSetting(c.env, "signature", ""),
@@ -387,6 +389,11 @@ admin.post("/credentials/test/:group", async (c) => {
       if (!upsConfigured(env)) throw new Error("Add the Client ID, Client secret and account number.");
       await testUps(env);
       return c.json({ ok: true, message: `UPS accepted the keys (${env.UPS_ENV === "production" ? "live" : "test"} mode)` });
+    }
+    if (group === "usps") {
+      if (!easypostConfigured(env)) throw new Error("Add your EasyPost production API key.");
+      await testEasypost(env);
+      return c.json({ ok: true, message: env.EASYPOST_API_KEY!.startsWith("EZTK") ? "EasyPost accepted the key — this is a TEST key, labels won't be real" : "Connected to EasyPost — USPS rates will show next to UPS" });
     }
     if (group === "ai") {
       if (!aiConfigured(env)) throw new Error("Add an Anthropic API key.");

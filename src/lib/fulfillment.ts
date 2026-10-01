@@ -3,7 +3,8 @@ import type { Agent, Env } from "../env";
 import type { ShopifyOrder } from "./shopify";
 import { fulfillOrder } from "./shopify";
 import { evaluateRules, type RuleResult, type ShippingRule } from "./rules";
-import { createShipment, getRates, trackingUrl, type Address, type Parcel, type Rate, type Signature } from "./ups";
+import { type Address, type Parcel, type Rate, type Signature } from "./ups";
+import { getAllRates, purchase, trackingUrlFor } from "./carriers";
 import { HttpError, getSetting } from "./util";
 
 export interface Preset {
@@ -274,7 +275,7 @@ export function addressFromOrder(o: ShopifyOrder): Address {
 
 /** Pick a rate by policy: "cheapest", "fastest", or a UPS service code (falls back to cheapest). */
 export function chooseRate(rates: Rate[], policy: string | null | undefined): Rate {
-  if (!rates.length) throw new HttpError(422, "UPS returned no rates for this package");
+  if (!rates.length) throw new HttpError(422, "No carrier returned a rate for this package");
   const byPrice = [...rates].sort((a, b) => a.total - b.total);
   if (policy === "fastest") {
     const timed = rates.filter((r) => r.days !== null).sort((a, b) => a.days! - b.days! || a.total - b.total);
@@ -309,20 +310,21 @@ export interface BuyInput {
 /** Buys the label, records it (with analytics fields), learns the box, and fulfills in Shopify. */
 export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
   const o = input.order;
-  const result = await createShipment(env, await shipFrom(env), input.to, input.parcels, input.rate.serviceCode, {
+  const result = await purchase(env, await shipFrom(env), input.to, input.parcels, input.rate.serviceCode, {
     reference: o?.name,
     labelFormat: input.labelFormat,
     signature: input.signature,
   });
   const row = await env.DB.prepare(
-    `INSERT INTO shipments (order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format,
+    `INSERT INTO shipments (carrier, order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format,
        cost, currency, packages, ship_to, agent_id, signature, batch_id, shipping_paid, order_total, order_created_at, requested_service,
        list_cost, item_count, dest_state, dest_country, scan_verified)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
   )
     .bind(
+      result.carrier,
       o?.id ?? null, o?.name ?? null, input.ticketId ?? null, input.rate.serviceCode, input.rate.serviceName, result.shipmentId,
-      JSON.stringify(result.trackingNumbers), JSON.stringify(result.labels), input.labelFormat, result.cost, result.currency,
+      JSON.stringify(result.trackingNumbers), JSON.stringify(result.labels), result.format, result.cost, result.currency,
       JSON.stringify(input.parcels), JSON.stringify(input.to), agent.id, input.signature ?? null, input.batchId ?? null,
       o ? shippingPaid(o) : null, o ? Number(o.totalPriceSet.shopMoney.amount) : null, o?.createdAt ?? null,
       o ? requestedService(o) : null, input.rate.listTotal ?? null, o ? itemCount(o) : null, input.to.state || null,
@@ -337,13 +339,13 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
   let fulfillError: string | null = null;
   if (input.fulfill && o && result.trackingNumbers[0]) {
     try {
-      await fulfillOrder(env, o.id, { company: "UPS", number: result.trackingNumbers[0], url: trackingUrl(result.trackingNumbers[0]) }, input.notifyCustomer);
+      await fulfillOrder(env, o.id, { company: result.carrier, number: result.trackingNumbers[0], url: trackingUrlFor(result.carrier, result.trackingNumbers[0]) }, input.notifyCustomer);
       await env.DB.prepare("UPDATE shipments SET fulfilled = 1 WHERE id = ?").bind(row!.id).run();
     } catch (e) {
       fulfillError = (e as Error).message;
     }
   }
-  return { id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: input.labelFormat, fulfillError };
+  return { id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: result.format, carrier: result.carrier, fulfillError };
 }
 
-export { getRates };
+export { getAllRates as getRates };

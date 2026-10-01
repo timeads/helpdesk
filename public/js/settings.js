@@ -115,6 +115,7 @@ function connections(s, isAdmin, inner) {
 const GROUPS = [
   { id: "shopify", title: "Shopify", desc: "From the Helpdesk app you created in Shopify. Use a Client ID + secret (Dev Dashboard) or an Admin API token (older custom apps)." },
   { id: "ups", title: "UPS", desc: "From your app at developer.ups.com. Keep Mode on “test” until a test label prints correctly." },
+  { id: "usps", title: "USPS (EasyPost)", desc: "From easypost.com → Account → API Keys. Use the Production key; postage is paid from your EasyPost wallet (fund it by ACH to avoid the card fee)." },
   { id: "ai", title: "AI drafts", desc: "Optional. A key from console.anthropic.com turns on “Draft with AI” (about 1–2¢ per draft)." },
 ];
 
@@ -358,7 +359,7 @@ function shipping(s, presets, inner) {
         pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset)));
 }
 
-const SERVICE_CHOICES = [["cheapest", "Cheapest rate"], ["fastest", "Fastest rate"], ["03", "UPS Ground"], ["12", "UPS 3 Day Select"], ["02", "UPS 2nd Day Air"], ["59", "UPS 2nd Day Air A.M."], ["13", "UPS Next Day Air Saver"], ["01", "UPS Next Day Air"], ["14", "UPS Next Day Air Early"], ["93", "UPS Ground Saver"]];
+const SERVICE_CHOICES = [["cheapest", "Cheapest rate"], ["fastest", "Fastest rate"], ["usps:GroundAdvantage", "USPS Ground Advantage"], ["usps:Priority", "USPS Priority Mail"], ["usps:Express", "USPS Priority Mail Express"], ["03", "UPS Ground"], ["12", "UPS 3 Day Select"], ["02", "UPS 2nd Day Air"], ["59", "UPS 2nd Day Air A.M."], ["13", "UPS Next Day Air Saver"], ["01", "UPS Next Day Air"], ["14", "UPS Next Day Air Early"], ["93", "UPS Ground Saver"]];
 
 const OP_LABELS = { eq: "is", gt: "is more than", lt: "is less than", includes_any: "includes any of", excludes: "excludes", contains: "contains" };
 

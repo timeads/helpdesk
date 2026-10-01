@@ -6,7 +6,7 @@ import { decrypt, deleteSetting, encrypt, getSetting, setSetting } from "./util"
 export interface CredentialField {
   key: keyof Env & string;
   label: string;
-  group: "shopify" | "ups" | "ai";
+  group: "shopify" | "ups" | "usps" | "ai";
   secret: boolean; // never sent back to the browser
   options?: string[];
   placeholder?: string;
@@ -22,6 +22,7 @@ export const CREDENTIAL_FIELDS: CredentialField[] = [
   { key: "UPS_CLIENT_SECRET", label: "Client secret", group: "ups", secret: true },
   { key: "UPS_ACCOUNT_NUMBER", label: "UPS account number", group: "ups", secret: false, placeholder: "6 characters" },
   { key: "UPS_ENV", label: "Mode", group: "ups", secret: false, options: ["test", "production"] },
+  { key: "EASYPOST_API_KEY", label: "EasyPost production API key", group: "usps", secret: true, placeholder: "EZAK…", help: "EasyPost → Account → API Keys → Production" },
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", group: "ai", secret: true, placeholder: "sk-ant-…" },
   { key: "AI_MODEL", label: "Model", group: "ai", secret: false, options: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"] },
 ];
@@ -30,6 +31,7 @@ const STORE_KEY = "credentials";
 const TOKEN_CACHES: Record<CredentialField["group"], string[]> = {
   shopify: ["shopify_access"],
   ups: ["ups_access_test", "ups_access_production"],
+  usps: [],
   ai: [],
 };
 

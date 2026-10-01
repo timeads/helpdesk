@@ -48,6 +48,7 @@ export interface Parcel {
 export type Signature = "standard" | "adult" | null | undefined;
 
 export interface Rate {
+  carrier?: string; // "UPS" | "USPS"
   serviceCode: string;
   serviceName: string;
   total: number;
