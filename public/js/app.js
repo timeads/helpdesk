@@ -11,7 +11,7 @@ let mainEl, navEl, cleanup = null;
 
 const VIEWS = [
   { id: "mine", label: "Your tickets", short: "Mine", icon: "user" },
-  { id: "unassigned", label: "Unassigned", short: "Unassigned", icon: "question" },
+  { id: "unassigned", label: "Unassigned", short: "Unassigned", icon: "question", desktopOnly: true },
   { id: "open", label: "Open", short: "Open", icon: "inbox" },
   { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock" },
   { id: "snoozed", label: "Snoozed", short: "Snoozed", icon: "moon", minor: true },
@@ -81,7 +81,7 @@ function renderNav() {
     item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " dash-item"),
     h("div", { class: "nav-scroll" },
       h("div", { class: "nav-label" }, "Tickets"),
-      VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : state.counts[v.id], v.minor ? " closed-view" : "")),
+      VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : state.counts[v.id], v.minor || v.desktopOnly ? " closed-view" : "")),
       h("button", { class: "nav-item nav-more closed-view", "aria-expanded": String(moreOpen), onclick: () => {
         moreOpen = !moreOpen;
         try { localStorage.setItem("nav:more", moreOpen ? "1" : "0"); } catch { /* ignore */ }
