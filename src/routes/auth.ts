@@ -21,7 +21,25 @@ function startFlow(c: any, purpose: "login" | "mailbox") {
   return c.redirect(googleAuthUrl(c.env, c.req.url, state, { mailbox: purpose === "mailbox" }));
 }
 
-auth.get("/login", (c) => startFlow(c, "login"));
+/** Setup check: which required settings this deployment can see (yes/no only — never values). */
+auth.get("/status", (c) => {
+  const has = (v?: string) => !!(v && v.trim());
+  return c.json({
+    SESSION_SECRET: has(c.env.SESSION_SECRET),
+    GOOGLE_CLIENT_ID: has(c.env.GOOGLE_CLIENT_ID),
+    GOOGLE_CLIENT_SECRET: has(c.env.GOOGLE_CLIENT_SECRET),
+    database: !!c.env.DB,
+    redirectUri: new URL("/auth/google/callback", c.req.url).toString(),
+  });
+});
+
+auth.get("/login", (c) => {
+  const missing = ["SESSION_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"].filter((k) => !(c.env as any)[k]);
+  if (missing.length) {
+    return c.redirect("/?error=" + encodeURIComponent(`This deployment can't see ${missing.join(", ")}. Add ${missing.length > 1 ? "them" : "it"} as Secret-type variables on the helpdesk Worker (not as build variables), then deploy.`));
+  }
+  return startFlow(c, "login");
+});
 
 auth.get("/mailbox", async (c) => {
   const agent = await currentAgent(c);
