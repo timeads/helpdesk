@@ -29,7 +29,7 @@ const REDO: ShippingRule[] = [
 describe("shipping rules (Redo automations)", () => {
   it("puts a lone AK5 machine in the Standard box and asks for a signature over $250", () => {
     const r = evaluateRules(order([{ title: "AK5 - Cut & Loop Tufting Machine", quantity: 1 }], "329.00"), REDO);
-    expect(r).toEqual({ packageName: "Standard", signature: "standard", matched: ["Tufting machine only > standard box", "Signature required over $250"] });
+    expect(r).toEqual({ packageName: "Standard", signature: "standard", service: null, hold: null, matched: ["Tufting machine only > standard box", "Signature required over $250"] });
   });
   it("does not apply the box rule when other items ship with the machine", () => {
     const r = evaluateRules(order([{ title: "AK5 - Cut & Loop Tufting Machine", quantity: 1 }, { title: "Yarn", quantity: 2 }], "120"), REDO);

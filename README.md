@@ -110,6 +110,22 @@ In the Worker's **Settings → Build**:
 
 Every deploy then uploads those three to the running app (`scripts/write-secrets.mjs` → `wrangler deploy --secrets-file`), so a deploy can never leave the app without them. The build log lists the *names* of the secrets it included, never the values.
 
+## Shipping day to day
+
+- **Shipping → Orders** lists every open, unshipped Shopify order (oldest first) with saved views: Ready to ship, Priority, Payment pending, On hold, International, All open. Tick orders to **buy labels in bulk** (by rule, cheapest, fastest or a specific UPS service), **print packing slips**, or **hold / release**. Click an order for the full label builder: every UPS service with its price, what the customer paid, and the margin.
+- **Shipping rules** (Settings) pick the box, signature, service, or hold an order. When no rule applies, the box and weight you used last time for the same items are reused (package learning).
+- **Scan & pack**: scan the barcode on the packing slip, scan each item (SKU or barcode), then **Verify & print label**.
+- **Label batches**: every label run is a batch you can reprint or void.
+- **Analytics**: label spend vs shipping collected, margin, negotiated savings, order-to-ship time, service mix, destinations, plus support volume and first-reply time.
+
+### Printing straight to the Zebra
+
+1. On the packing computer, install **Zebra Browser Print** (free, from zebra.com) and set the ZT220 as its default printer.
+2. Open https://localhost:9101/ssl_support once and accept it.
+3. In the helpdesk: **Settings → Printing on this computer → Zebra thermal printer**, then **Print test label**.
+
+Labels then print with no dialog. The setting is per computer; packing slips use the normal print dialog (4×6 or Letter).
+
 ## Everyday use
 
 | Key | Action |

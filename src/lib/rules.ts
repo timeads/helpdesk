@@ -7,9 +7,11 @@ export interface RuleCondition {
   value: string;
 }
 export interface RuleAction {
-  type: "set_package" | "require_signature";
-  value: string; // package name | "standard" | "adult"
+  type: "set_package" | "require_signature" | "set_service" | "place_hold";
+  value: string; // package name | "standard"/"adult" | "cheapest"/"fastest"/UPS service code | hold note
 }
+
+export const RULE_ACTIONS: RuleAction["type"][] = ["set_package", "require_signature", "set_service", "place_hold"];
 export interface ShippingRule {
   id: number;
   name: string;
@@ -20,6 +22,8 @@ export interface ShippingRule {
 export interface RuleResult {
   packageName: string | null;
   signature: "standard" | "adult" | null;
+  service: string | null; // "cheapest" | "fastest" | UPS service code
+  hold: string | null; // note, when a rule holds the order
   matched: string[];
 }
 
@@ -77,7 +81,7 @@ export function conditionMatches(order: ShopifyOrder, c: RuleCondition): boolean
 
 /** First matching enabled rule wins for each kind of action. */
 export function evaluateRules(order: ShopifyOrder, rules: ShippingRule[]): RuleResult {
-  const out: RuleResult = { packageName: null, signature: null, matched: [] };
+  const out: RuleResult = { packageName: null, signature: null, service: null, hold: null, matched: [] };
   for (const r of rules) {
     if (!r.enabled || !r.conditions.length) continue;
     if (!r.conditions.every((c) => conditionMatches(order, c))) continue;
@@ -89,6 +93,14 @@ export function evaluateRules(order: ShopifyOrder, rules: ShippingRule[]): RuleR
       }
       if (a.type === "require_signature" && !out.signature && (a.value === "standard" || a.value === "adult")) {
         out.signature = a.value;
+        used = true;
+      }
+      if (a.type === "set_service" && !out.service && a.value) {
+        out.service = a.value;
+        used = true;
+      }
+      if (a.type === "place_hold" && out.hold === null) {
+        out.hold = a.value || r.name;
         used = true;
       }
     }

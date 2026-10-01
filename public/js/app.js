@@ -3,6 +3,7 @@ import { h, mount, icon, initials, toast } from "./ui.js";
 import { renderInbox } from "./inbox.js";
 import { renderShipping } from "./shipping.js";
 import { renderSettings } from "./settings.js";
+import { renderAnalytics } from "./analytics.js";
 
 export const state = { me: null, appName: "Support", agents: [], counts: {} };
 const root = document.getElementById("app");
@@ -59,6 +60,7 @@ function renderNav() {
     VIEWS.map((v) => item(`/?view=${v.id}`, v.nav ?? v.label, v.short, v.icon, inInbox && view === v.id, state.counts[v.id], v.id === "closed" ? " closed-view" : "")),
     h("div", { class: "nav-label" }, "Store"),
     item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), undefined, " ship-view"),
+    item("/analytics", "Analytics", "Stats", "chart", path.startsWith("/analytics"), undefined, " ship-view"),
     item("/settings", "Settings", "Settings", "settings", path.startsWith("/settings")),
     h("div", { class: "spacer" }),
     h("div", { class: "me" },
@@ -78,7 +80,7 @@ let section = null;
 function route() {
   renderNav();
   const path = location.pathname;
-  const next = path.startsWith("/shipping") ? "shipping" : path.startsWith("/settings") ? "settings" : "inbox";
+  const next = path.startsWith("/shipping") ? "shipping" : path.startsWith("/settings") ? "settings" : path.startsWith("/analytics") ? "analytics" : "inbox";
   // Moving between tickets keeps the inbox mounted; anything else re-renders
   if (next !== "inbox" || section !== "inbox") {
     if (cleanup) cleanup();
@@ -87,6 +89,7 @@ function route() {
   }
   section = next;
   if (next === "shipping") cleanup = renderShipping(mainEl);
+  else if (next === "analytics") cleanup = renderAnalytics(mainEl);
   else if (next === "settings") cleanup = renderSettings(mainEl);
   else cleanup = renderInbox(mainEl);
 }

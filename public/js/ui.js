@@ -94,6 +94,7 @@ export const icons = {
   send: P('<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>'),
   plus: P('<path d="M12 5v14M5 12h14"/>'),
   logout: P('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
+  chart: P('<path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/>'),
   info: P('<circle cx="12" cy="12" r="9.5"/><path d="M12 11v5M12 8h.01"/>'),
 };
 

@@ -8,6 +8,7 @@ import authRoutes from "./routes/auth";
 import ticketRoutes from "./routes/tickets";
 import shippingRoutes from "./routes/shipping";
 import adminRoutes from "./routes/admin";
+import analyticsRoutes from "./routes/analytics";
 
 const app = new Hono<AppEnv>();
 
@@ -23,6 +24,7 @@ const api = new Hono<AppEnv>();
 api.use("*", requireAgent);
 api.route("/tickets", ticketRoutes);
 api.route("/shipping", shippingRoutes);
+api.route("/analytics", analyticsRoutes);
 api.route("/", adminRoutes);
 app.route("/api", api);
 

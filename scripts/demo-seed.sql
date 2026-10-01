@@ -38,3 +38,10 @@ Thanks for tufting with us,
  ('Workshop gift cards', 'Hi {{first_name}},
 
 Yes! Gift cards can be used for any workshop — just enter the code at checkout when you book.');
+
+-- Sample shipments for the analytics page (fake)
+INSERT INTO shipments (order_id, order_name, service_code, service_name, shipment_id, tracking_numbers, labels, cost, currency, packages, ship_to, status, fulfilled, agent_id, created_at, shipping_paid, order_total, order_created_at, requested_service, list_cost, item_count, dest_state, dest_country) VALUES
+ ('gid://shopify/Order/8001', '#0991', '03', 'UPS Ground', '1ZDEMO1', '["1ZDEMO1"]', '[]', 9.62, 'USD', '[]', '{"name":"A","state":"MI"}', 'purchased', 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now','-20 days'), 12.00, 120, strftime('%Y-%m-%dT%H:%M:%fZ','now','-21 days'), 'Standard', 12.34, 3, 'MI', 'US'),
+ ('gid://shopify/Order/8002', '#0995', '03', 'UPS Ground', '1ZDEMO2', '["1ZDEMO2"]', '[]', 12.47, 'USD', '[]', '{"name":"B","state":"NY"}', 'purchased', 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now','-13 days'), 33.00, 416, strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days'), 'Standard Large', 15.10, 11, 'NY', 'US'),
+ ('gid://shopify/Order/8003', '#1001', '02', 'UPS 2nd Day Air', '1ZDEMO3', '["1ZDEMO3"]', '[]', 20.28, 'USD', '[]', '{"name":"C","state":"CA"}', 'purchased', 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now','-6 days'), 18.00, 89, strftime('%Y-%m-%dT%H:%M:%fZ','now','-6 days','-5 hours'), 'Express', 24.90, 2, 'CA', 'US'),
+ ('gid://shopify/Order/8004', '#1003', '03', 'UPS Ground', '1ZDEMO4', '["1ZDEMO4"]', '[]', 8.90, 'USD', '[]', '{"name":"D","state":"PA"}', 'purchased', 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days'), 9.50, 64, strftime('%Y-%m-%dT%H:%M:%fZ','now','-3 days'), 'Standard', 10.20, 4, 'PA', 'US');

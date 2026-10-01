@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { state } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows } from "./ui.js";
+import { printSettings, savePrintSettings, testZebra, zebraPrinter } from "./printing.js";
 
 export function renderSettings(main) {
   const inner = h("div", { class: "page-inner", style: { maxWidth: "880px" } }, h("div", { class: "card" }, skeletonRows(4)));
@@ -26,12 +27,14 @@ async function load(inner) {
     return mount(inner, h("div", { class: "notice bad" }, e.message));
   }
   const isAdmin = state.me.role === "admin";
+  if (location.hash) setTimeout(() => document.querySelector(location.hash)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   inner.oninput = markDirty;
   inner.onchange = markDirty;
   if (new URLSearchParams(location.search).get("connected") === "gmail") toast("Gmail connected — importing recent mail");
   mount(inner,
     connections(s, isAdmin, inner),
     isAdmin && creds ? credentials(creds.fields, inner) : null,
+    printing(),
     profile(),
     team(agents, isAdmin, inner),
     savedReplies(macros, inner),
@@ -158,6 +161,48 @@ function credentials(fields, inner) {
       h("div", { class: "row" }, save, test, result));
   });
   return card("Credentials", "Paste the keys for each service here. They're encrypted before they're stored, and saved secrets are never shown again — only their last four characters.", ...sections);
+}
+
+function printing() {
+  const ps = printSettings();
+  const status = h("div", { class: "small", role: "status" });
+  const radio = (name, value, label, desc) => {
+    const r = h("input", { type: "radio", name, value, checked: ps[name] === value });
+    r.onchange = () => { savePrintSettings({ [name]: value }); toast("Saved for this computer"); };
+    return h("label", { class: "check" }, r, h("span", {}, h("b", {}, label), desc ? h("div", { class: "small muted" }, desc) : null));
+  };
+  const find = h("button", { class: "btn" }, "Find Zebra printer");
+  find.onclick = busy(find, async () => {
+    status.replaceChildren(h("span", { class: "muted" }, "Looking…"));
+    try {
+      const d = await zebraPrinter();
+      status.replaceChildren(h("span", { class: "badge good" }, `Found ${d.name || "printer"}`));
+    } catch (e) {
+      status.replaceChildren(h("span", { class: "badge bad", style: { height: "auto", whiteSpace: "normal", padding: "3px 9px" } }, e.message));
+    }
+  });
+  const test = h("button", { class: "btn" }, "Print test label");
+  test.onclick = busy(test, async () => {
+    try {
+      const d = await testZebra();
+      status.replaceChildren(h("span", { class: "badge good" }, `Sent a test label to ${d.name || "the printer"}`));
+    } catch (e) {
+      status.replaceChildren(h("span", { class: "badge bad", style: { height: "auto", whiteSpace: "normal", padding: "3px 9px" } }, e.message));
+    }
+  });
+  return h("section", { class: "card", id: "printing" }, h("h2", {}, "Printing on this computer"),
+    h("p", { class: "muted" }, "Saved in this browser only, so the packing computer and your laptop can print differently."),
+    h("div", { class: "stack" },
+      h("h3", { class: "section", style: { margin: 0 } }, "Shipping labels"),
+      radio("labels", "zebra", "Zebra thermal printer", "Labels print straight to the Zebra with no dialog. Needs Zebra Browser Print (free) installed and running on this computer."),
+      radio("labels", "browser", "Browser print dialog", "Opens a 4×6 label page — print it to any printer."),
+      h("div", { class: "row" }, find, test, status),
+      h("p", { class: "small muted", style: { margin: 0 } },
+        "Setup: install Zebra Browser Print from ", h("a", { href: "https://www.zebra.com/us/en/support-downloads/software/printer-software/browser-print.html", target: "_blank", rel: "noopener" }, "zebra.com"),
+        ", set your ZT220 as its default printer, then open ", h("a", { href: "https://localhost:9101/ssl_support", target: "_blank", rel: "noopener" }, "localhost:9101/ssl_support"), " once and accept it so this page can talk to it."),
+      h("h3", { class: "section", style: { margin: "6px 0 0" } }, "Packing slips"),
+      radio("slips", "4x6", "4×6", "Same stock as labels"),
+      radio("slips", "letter", "Letter (8.5×11)", "Office printer")));
 }
 
 function profile() {
@@ -292,6 +337,8 @@ function shipping(s, presets, inner) {
         pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset)));
 }
 
+const SERVICE_CHOICES = [["cheapest", "Cheapest rate"], ["fastest", "Fastest rate"], ["03", "UPS Ground"], ["12", "UPS 3 Day Select"], ["02", "UPS 2nd Day Air"], ["59", "UPS 2nd Day Air A.M."], ["13", "UPS Next Day Air Saver"], ["01", "UPS Next Day Air"], ["14", "UPS Next Day Air Early"], ["93", "UPS Ground Saver"]];
+
 const OP_LABELS = { eq: "is", gt: "is more than", lt: "is less than", includes_any: "includes any of", excludes: "excludes", contains: "contains" };
 
 function shippingRules(data, presets, inner) {
@@ -311,12 +358,15 @@ function shippingRules(data, presets, inner) {
   };
   const actionRow = (rule, a, i) => {
     const type = h("select", { class: "input" },
-      [["set_package", "Use box"], ["require_signature", "Require signature"]].map(([v, t]) => h("option", { value: v, selected: a.type === v }, t)));
-    const value = a.type === "set_package"
-      ? h("select", { class: "input" }, h("option", { value: "" }, "Choose a box…"), presets.map((p) => h("option", { value: p.name, selected: a.value === p.name }, p.name)))
-      : h("select", { class: "input" }, [["standard", "Signature required"], ["adult", "Adult signature"]].map(([v, t]) => h("option", { value: v, selected: a.value === v }, t)));
-    type.onchange = () => { a.type = type.value; a.value = a.type === "require_signature" ? "standard" : ""; draw(); };
+      [["set_package", "Use box"], ["require_signature", "Require signature"], ["set_service", "Ship with"], ["place_hold", "Hold the order"]].map(([v, t]) => h("option", { value: v, selected: a.type === v }, t)));
+    let value;
+    if (a.type === "set_package") value = h("select", { class: "input" }, h("option", { value: "" }, "Choose a box…"), presets.map((p) => h("option", { value: p.name, selected: a.value === p.name }, p.name)));
+    else if (a.type === "require_signature") value = h("select", { class: "input" }, [["standard", "Signature required"], ["adult", "Adult signature"]].map(([v, t]) => h("option", { value: v, selected: a.value === v }, t)));
+    else if (a.type === "set_service") value = h("select", { class: "input" }, SERVICE_CHOICES.map(([v, t]) => h("option", { value: v, selected: a.value === v }, t)));
+    else value = h("input", { class: "input", value: a.value, placeholder: "Note shown on the hold (optional)" });
+    type.onchange = () => { a.type = type.value; a.value = { require_signature: "standard", set_service: "cheapest" }[a.type] ?? ""; draw(); };
     value.onchange = () => (a.value = value.value);
+    value.oninput = () => (a.value = value.value);
     const rm = h("button", { class: "btn sm ghost icon-only", "aria-label": "Remove action", onclick: () => { rule.actions.splice(i, 1); draw(); } }, icon("x"));
     return h("div", { class: "rule-line" }, h("span", { class: "rule-word" }, i === 0 ? "Then" : "and"), type, value, h("span"), rm);
   };
@@ -344,12 +394,21 @@ function shippingRules(data, presets, inner) {
     rules.push({ name: "", enabled: true, conditions: [{ field: "product_names", op: "includes_any", value: "" }], actions: [{ type: "set_package", value: "" }] });
     draw();
   };
+  const learning = { parcel: true, weight: true, ...(data.learning ?? {}) };
+  const learnBox = (key, label) => {
+    const c = h("input", { type: "checkbox", checked: learning[key] });
+    c.onchange = () => (learning[key] = c.checked);
+    return h("label", { class: "check" }, c, label);
+  };
   const save = saveButton(async () => {
-    await api("/shipping/rules", { method: "PUT", body: { rules } });
+    await api("/shipping/rules", { method: "PUT", body: { rules, learning } });
     reload(inner);
   }, "Save rules");
-  return card("Shipping rules", "Applied when you open an order on the Shipping screen: they pre-pick the box and signature, which you can still change. Earlier rules win.",
-    listEl, h("div", { class: "row", style: { marginTop: "8px" } }, save, add));
+  return card("Shipping rules", "Applied to every order in the queue: they pick the box, signature and service, or hold the order. You can still change anything per order. Earlier rules win.",
+    listEl, h("div", { class: "row", style: { marginTop: "8px" } }, save, add),
+    h("h3", { class: "section" }, "Package learning"),
+    h("p", { class: "muted small", style: { margin: "0 0 8px" } }, "When no rule picks a box, reuse what you chose the last time the exact same items shipped."),
+    h("div", { class: "stack" }, learnBox("parcel", "Remember the box"), learnBox("weight", "Remember the weight")));
 }
 
 function aiGuidance(s) {

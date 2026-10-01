@@ -67,38 +67,40 @@ export function adminCustomerUrl(env: Env, gid: string) {
 
 const ADDRESS = `name company address1 address2 city province provinceCode zip country countryCodeV2 phone`;
 
-// Product weights (variant → inventoryItem) need read_products; everything else works without it.
-const WEIGHT_FIELDS = `variant { inventoryItem { measurement { weight { value unit } } } }`;
+// Shopify caps each query at 1000 "cost" points, roughly one per object returned. Order lists
+// therefore fetch a lean shape in small pages; product details (weight, barcode) come from a
+// second batched lookup by variant ID, which also needs read_products and is skipped without it.
+const PAGE = 10;
 
 const ORDER_FIELDS_TEMPLATE = `
-  id name createdAt cancelledAt closed note email phone
+  id name createdAt cancelledAt closed note email phone tags
   displayFinancialStatus displayFulfillmentStatus
   totalPriceSet { shopMoney { amount currencyCode } }
+  totalShippingPriceSet { shopMoney { amount currencyCode } }
   shippingAddress { ${ADDRESS} }
   shippingLines(first: 1) { nodes { title } }
-  lineItems(first: 30) {
+  lineItems(first: __LINES__) {
     nodes {
       id title variantTitle quantity sku
-      originalUnitPriceSet { shopMoney { amount currencyCode } }
       image { url(transform: { maxWidth: 120 }) }
-      __WEIGHT__
+      __VARIANT__
     }
   }
-  fulfillments(first: 10) {
+  fulfillments(first: 3) {
     status createdAt displayStatus
-    trackingInfo(first: 5) { company number url }
+    trackingInfo(first: 3) { company number url }
   }
 `;
 
-const ORDER_FIELDS = ORDER_FIELDS_TEMPLATE.replace("__WEIGHT__", WEIGHT_FIELDS);
-const ORDER_FIELDS_NO_WEIGHT = ORDER_FIELDS_TEMPLATE.replace("__WEIGHT__", "");
+const orderFields = (lines: number, variant: boolean) =>
+  ORDER_FIELDS_TEMPLATE.replace("__LINES__", String(lines)).replace("__VARIANT__", variant ? "variant { id }" : "");
 
-/** Runs an order query; if only product access is missing, retries without weights. */
-async function withOrderFields<T>(run: (fields: string) => Promise<T>): Promise<T> {
+/** Runs an order query; if product access is missing, retries without variant fields. */
+async function withOrderFields<T>(lines: number, run: (fields: string) => Promise<T>): Promise<T> {
   try {
-    return await run(ORDER_FIELDS);
+    return await run(orderFields(lines, true));
   } catch (e) {
-    if (e instanceof ShopifyAccessError && /read_products|variant/i.test(e.message)) return run(ORDER_FIELDS_NO_WEIGHT);
+    if (e instanceof ShopifyAccessError && /read_products|variant/i.test(e.message)) return run(orderFields(lines, false));
     throw e;
   }
 }
@@ -112,9 +114,11 @@ export interface ShopifyOrder {
   note: string | null;
   email: string | null;
   phone: string | null;
+  tags: string[];
   displayFinancialStatus: string | null;
   displayFulfillmentStatus: string;
   totalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+  totalShippingPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
   shippingAddress: Record<string, string | null> | null;
   shippingLines: { nodes: { title: string }[] };
   lineItems: {
@@ -124,9 +128,12 @@ export interface ShopifyOrder {
       variantTitle: string | null;
       quantity: number;
       sku: string | null;
-      originalUnitPriceSet: { shopMoney: { amount: string; currencyCode: string } };
       image: { url: string } | null;
-      variant?: { inventoryItem: { measurement: { weight: { value: number; unit: string } | null } } | null } | null;
+      variant?: {
+        id: string;
+        barcode?: string | null;
+        inventoryItem?: { measurement: { weight: { value: number; unit: string } | null } } | null;
+      } | null;
     }[];
   };
   fulfillments: {
@@ -139,20 +146,61 @@ export interface ShopifyOrder {
 }
 
 function decorate(env: Env, o: ShopifyOrder): ShopifyOrder {
-  return { ...o, adminUrl: adminOrderUrl(env, o.id) };
+  return { ...o, tags: o.tags ?? [], adminUrl: adminOrderUrl(env, o.id) };
+}
+
+/** Adds barcode + weight to each line's variant with one batched lookup per 50 variants. */
+async function enrichVariants(env: Env, orders: ShopifyOrder[]): Promise<ShopifyOrder[]> {
+  const ids = [...new Set(orders.flatMap((o) => o.lineItems.nodes.map((l) => l.variant?.id).filter(Boolean) as string[]))];
+  if (!ids.length) return orders;
+  const info = new Map<string, { barcode: string | null; inventoryItem: any }>();
+  try {
+    for (let i = 0; i < ids.length; i += 50) {
+      const data = await shopify<{ nodes: ({ id: string; barcode: string | null; inventoryItem: any } | null)[] }>(
+        env,
+        `query Variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id barcode inventoryItem { measurement { weight { value unit } } } } } }`,
+        { ids: ids.slice(i, i + 50) },
+      );
+      for (const n of data.nodes) if (n?.id) info.set(n.id, n);
+    }
+  } catch {
+    return orders; // weights and barcodes are conveniences
+  }
+  for (const o of orders) for (const l of o.lineItems.nodes) if (l.variant?.id && info.has(l.variant.id)) l.variant = { ...l.variant, ...info.get(l.variant.id)! };
+  return orders;
 }
 
 function quoteSearch(v: string) {
   return `"${v.replace(/["\\]/g, "")}"`;
 }
 
+/** Pages through an orders search, PAGE at a time (keeps each request under the cost cap). */
+async function pagedOrders(env: Env, query: string, max: number, oldestFirst = false): Promise<ShopifyOrder[]> {
+  const out: ShopifyOrder[] = [];
+  let after: string | null = null;
+  while (out.length < max) {
+    const data: { orders: { nodes: ShopifyOrder[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await withOrderFields(20, (fields) =>
+      shopify(
+        env,
+        `query Orders($q: String!, $after: String, $n: Int!) {
+          orders(first: $n, after: $after, query: $q, sortKey: CREATED_AT, reverse: ${oldestFirst ? "false" : "true"}) {
+            nodes { ${fields} } pageInfo { hasNextPage endCursor }
+          }
+        }`,
+        { q: query, after, n: Math.min(PAGE, max - out.length) },
+      ),
+    );
+    out.push(...data.orders.nodes.map((o) => decorate(env, o)));
+    if (!data.orders.pageInfo.hasNextPage) break;
+    after = data.orders.pageInfo.endCursor;
+  }
+  return out;
+}
+
 export async function customerProfile(env: Env, email: string) {
-  const data = await withOrderFields((fields) => shopify<{
-    customers: { nodes: any[] };
-    orders: { nodes: ShopifyOrder[] };
-  }>(
+  const data = await shopify<{ customers: { nodes: any[] } }>(
     env,
-    `query Customer($cq: String!, $oq: String!) {
+    `query Customer($cq: String!) {
       customers(first: 1, query: $cq) {
         nodes {
           id displayName email phone note tags createdAt
@@ -161,45 +209,66 @@ export async function customerProfile(env: Env, email: string) {
           defaultAddress { ${ADDRESS} }
         }
       }
-      orders(first: 20, query: $oq, sortKey: CREATED_AT, reverse: true) { nodes { ${fields} } }
     }`,
-    { cq: `email:${quoteSearch(email)}`, oq: `email:${quoteSearch(email)}` },
-  ));
+    { cq: `email:${quoteSearch(email)}` },
+  );
+  const orders = await pagedOrders(env, `email:${quoteSearch(email)}`, 10);
   const customer = data.customers.nodes[0] ?? null;
   return {
     customer: customer ? { ...customer, adminUrl: adminCustomerUrl(env, customer.id) } : null,
-    orders: data.orders.nodes.map((o) => decorate(env, o)),
+    orders,
   };
 }
 
-/** Orders for the shipping screen: unfulfilled by default, or a search by order number / name / email. */
+export const OPEN_TO_SHIP = "status:open AND (fulfillment_status:unfulfilled OR fulfillment_status:partial)";
+
+/** Everything waiting to ship (oldest first), with product weights and barcodes. */
+export async function queueOrders(env: Env, max = 60) {
+  return enrichVariants(env, await pagedOrders(env, OPEN_TO_SHIP, max, true));
+}
+
+/** Orders for the shipping screen: open & unshipped by default, or a search by order number / name / email. */
 export async function searchOrders(env: Env, search: string) {
   const s = search.trim();
-  let query = "fulfillment_status:unfulfilled AND status:open";
+  let query = OPEN_TO_SHIP;
   if (s) {
-    if (/^#?\d+$/.test(s)) query = `name:${quoteSearch("#" + s.replace("#", ""))}`;
+    if (/^#?[\w-]*\d[\w-]*$/.test(s) && !s.includes("@")) query = `name:${quoteSearch(s.startsWith("#") ? s : "#" + s)}`;
     else if (s.includes("@")) query = `email:${quoteSearch(s)}`;
     else query = s.replace(/["\\]/g, "");
   }
-  const data = await withOrderFields((fields) => shopify<{ orders: { nodes: ShopifyOrder[] } }>(
-    env,
-    `query Orders($q: String!) { orders(first: 50, query: $q, sortKey: CREATED_AT, reverse: true) { nodes { ${fields} } } }`,
-    { q: query },
-  ));
-  return data.orders.nodes.map((o) => decorate(env, o));
+  return enrichVariants(env, await pagedOrders(env, query, s ? 20 : 60, !s));
 }
 
 export async function getOrder(env: Env, id: string) {
-  const data = await withOrderFields((fields) => shopify<{ order: ShopifyOrder | null }>(
-    env,
-    `query Order($id: ID!) { order(id: $id) { ${fields} } }`,
-    { id },
-  ));
+  const data = await withOrderFields(50, (fields) =>
+    shopify<{ order: ShopifyOrder | null }>(env, `query Order($id: ID!) { order(id: $id) { ${fields} } }`, { id }),
+  );
   if (!data.order) throw new HttpError(404, "Order not found");
-  return decorate(env, data.order);
+  const [o] = await enrichVariants(env, [decorate(env, data.order)]);
+  return o;
 }
 
-/** Mark every open fulfillment order on this order as shipped with the given tracking. */
+/** Several orders by ID (packing slips, bulk actions), 10 per request to stay under the cost cap. */
+export async function ordersByIds(env: Env, ids: string[]): Promise<ShopifyOrder[]> {
+  const out: ShopifyOrder[] = [];
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    const data = await withOrderFields(25, (fields) =>
+      shopify<{ nodes: (ShopifyOrder | null)[] }>(env, `query Orders($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${fields} } } }`, { ids: chunk }),
+    );
+    out.push(...data.nodes.filter((n): n is ShopifyOrder => !!n?.id).map((o) => decorate(env, o)));
+  }
+  return enrichVariants(env, out);
+}
+
+/** Finds an order by its name as printed/scanned (e.g. "#68762-TG", "68762-TG" or "68762"). */
+export async function findOrderByName(env: Env, raw: string) {
+  const name = raw.trim().replace(/^#?/, "#");
+  const found = await pagedOrders(env, `name:${quoteSearch(name)}`, 1);
+  if (!found.length) throw new HttpError(404, `No order ${name}`);
+  return getOrder(env, found[0].id);
+}
+
 export async function fulfillOrder(
   env: Env,
   orderId: string,
