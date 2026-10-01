@@ -18,6 +18,8 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Request logs in the Cloudflare dashboard (Observability tab)
+  "observability": { "enabled": true },
   // Pull new mail from Gmail every minute
   "triggers": { "crons": ["* * * * *"] },
   "vars": {
