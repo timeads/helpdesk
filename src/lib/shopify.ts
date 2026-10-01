@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { HttpError, cachedToken } from "./util";
+import { HttpError, cachedToken, deleteSetting } from "./util";
 
 export function shopifyConfigured(env: Env) {
   return !!(env.SHOPIFY_SHOP && (env.SHOPIFY_ADMIN_TOKEN || (env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET)));
@@ -25,15 +25,33 @@ async function token(env: Env): Promise<string> {
   });
 }
 
-export async function shopify<T = any>(env: Env, query: string, variables: Record<string, unknown> = {}): Promise<T> {
+export class ShopifyAccessError extends HttpError {}
+
+export async function shopify<T = any>(env: Env, query: string, variables: Record<string, unknown> = {}, retried = false): Promise<T> {
   const res = await fetch(`https://${env.SHOPIFY_SHOP}/admin/api/${env.SHOPIFY_API_VERSION}/graphql.json`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-shopify-access-token": await token(env) },
     body: JSON.stringify({ query, variables }),
   });
-  if (!res.ok) throw new HttpError(502, `Shopify ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const j = (await res.json()) as { data?: T; errors?: { message: string }[] };
-  if (j.errors?.length) throw new HttpError(502, "Shopify: " + j.errors.map((e) => e.message).join("; "));
+  const denied = res.status === 401 || res.status === 403;
+  let j: { data?: T; errors?: { message: string }[] } = {};
+  if (!denied) {
+    if (!res.ok) throw new HttpError(502, `Shopify ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    j = await res.json();
+  }
+  const messages = [...new Set((j.errors ?? []).map((e) => e.message))];
+  const accessProblem = denied || messages.some((m) => /access denied|required access/i.test(m));
+  // A cached client-credentials token keeps the scopes it was issued with (up to 24h).
+  // After scopes change in Shopify, drop it and try once more with a fresh token.
+  if (accessProblem && !retried && !env.SHOPIFY_ADMIN_TOKEN) {
+    await deleteSetting(env, "shopify_access");
+    return shopify<T>(env, query, variables, true);
+  }
+  if (denied) throw new ShopifyAccessError(502, `Shopify rejected the app's access (${res.status}). Check the app is installed on the store.`);
+  if (messages.length) {
+    const msg = "Shopify: " + messages.join("; ");
+    throw accessProblem ? new ShopifyAccessError(502, msg) : new HttpError(502, msg);
+  }
   return j.data as T;
 }
 
@@ -49,7 +67,10 @@ export function adminCustomerUrl(env: Env, gid: string) {
 
 const ADDRESS = `name company address1 address2 city province provinceCode zip country countryCodeV2 phone`;
 
-const ORDER_FIELDS = `
+// Product weights (variant → inventoryItem) need read_products; everything else works without it.
+const WEIGHT_FIELDS = `variant { inventoryItem { measurement { weight { value unit } } } }`;
+
+const ORDER_FIELDS_TEMPLATE = `
   id name createdAt cancelledAt closed note email phone
   displayFinancialStatus displayFulfillmentStatus
   totalPriceSet { shopMoney { amount currencyCode } }
@@ -60,7 +81,7 @@ const ORDER_FIELDS = `
       id title variantTitle quantity sku
       originalUnitPriceSet { shopMoney { amount currencyCode } }
       image { url(transform: { maxWidth: 120 }) }
-      variant { inventoryItem { measurement { weight { value unit } } } }
+      __WEIGHT__
     }
   }
   fulfillments(first: 10) {
@@ -68,6 +89,19 @@ const ORDER_FIELDS = `
     trackingInfo(first: 5) { company number url }
   }
 `;
+
+const ORDER_FIELDS = ORDER_FIELDS_TEMPLATE.replace("__WEIGHT__", WEIGHT_FIELDS);
+const ORDER_FIELDS_NO_WEIGHT = ORDER_FIELDS_TEMPLATE.replace("__WEIGHT__", "");
+
+/** Runs an order query; if only product access is missing, retries without weights. */
+async function withOrderFields<T>(run: (fields: string) => Promise<T>): Promise<T> {
+  try {
+    return await run(ORDER_FIELDS);
+  } catch (e) {
+    if (e instanceof ShopifyAccessError && /read_products|variant/i.test(e.message)) return run(ORDER_FIELDS_NO_WEIGHT);
+    throw e;
+  }
+}
 
 export interface ShopifyOrder {
   id: string;
@@ -92,7 +126,7 @@ export interface ShopifyOrder {
       sku: string | null;
       originalUnitPriceSet: { shopMoney: { amount: string; currencyCode: string } };
       image: { url: string } | null;
-      variant: { inventoryItem: { measurement: { weight: { value: number; unit: string } | null } } | null } | null;
+      variant?: { inventoryItem: { measurement: { weight: { value: number; unit: string } | null } } | null } | null;
     }[];
   };
   fulfillments: {
@@ -113,7 +147,7 @@ function quoteSearch(v: string) {
 }
 
 export async function customerProfile(env: Env, email: string) {
-  const data = await shopify<{
+  const data = await withOrderFields((fields) => shopify<{
     customers: { nodes: any[] };
     orders: { nodes: ShopifyOrder[] };
   }>(
@@ -127,10 +161,10 @@ export async function customerProfile(env: Env, email: string) {
           defaultAddress { ${ADDRESS} }
         }
       }
-      orders(first: 20, query: $oq, sortKey: CREATED_AT, reverse: true) { nodes { ${ORDER_FIELDS} } }
+      orders(first: 20, query: $oq, sortKey: CREATED_AT, reverse: true) { nodes { ${fields} } }
     }`,
     { cq: `email:${quoteSearch(email)}`, oq: `email:${quoteSearch(email)}` },
-  );
+  ));
   const customer = data.customers.nodes[0] ?? null;
   return {
     customer: customer ? { ...customer, adminUrl: adminCustomerUrl(env, customer.id) } : null,
@@ -147,20 +181,20 @@ export async function searchOrders(env: Env, search: string) {
     else if (s.includes("@")) query = `email:${quoteSearch(s)}`;
     else query = s.replace(/["\\]/g, "");
   }
-  const data = await shopify<{ orders: { nodes: ShopifyOrder[] } }>(
+  const data = await withOrderFields((fields) => shopify<{ orders: { nodes: ShopifyOrder[] } }>(
     env,
-    `query Orders($q: String!) { orders(first: 50, query: $q, sortKey: CREATED_AT, reverse: true) { nodes { ${ORDER_FIELDS} } } }`,
+    `query Orders($q: String!) { orders(first: 50, query: $q, sortKey: CREATED_AT, reverse: true) { nodes { ${fields} } } }`,
     { q: query },
-  );
+  ));
   return data.orders.nodes.map((o) => decorate(env, o));
 }
 
 export async function getOrder(env: Env, id: string) {
-  const data = await shopify<{ order: ShopifyOrder | null }>(
+  const data = await withOrderFields((fields) => shopify<{ order: ShopifyOrder | null }>(
     env,
-    `query Order($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`,
+    `query Order($id: ID!) { order(id: $id) { ${fields} } }`,
     { id },
-  );
+  ));
   if (!data.order) throw new HttpError(404, "Order not found");
   return decorate(env, data.order);
 }
