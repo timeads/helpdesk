@@ -856,6 +856,12 @@ textarea.grow-input { resize: none; overflow: hidden; min-height: 38px; line-hei
 
 .tbl td.nowrap { white-space: nowrap; }
 
+/* Customs */
+.customs { margin-top: 12px; padding: 14px; }
+.customs-tbl td, .customs-tbl th { padding: 6px 6px; vertical-align: middle; }
+.customs-tbl .input { height: 32px; min-height: 32px; padding: 4px 8px; font-size: 13px; }
+.customs-tbl td:first-child { min-width: 120px; max-width: 180px; }
+
 /* Address checks */
 .addr-check:empty { display: none; }
 .addr-note { display: block; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 10px; background: var(--sunken); color: var(--text-2); }
@@ -865,7 +871,7 @@ textarea.grow-input { resize: none; overflow: hidden; min-height: 38px; line-hei
 .addr-note.bad { background: var(--brick-soft); color: var(--brick); }
 .addr-note .suggest { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 6px; color: var(--text); }
 .addr-note .cand { justify-content: flex-start; text-align: left; height: auto; padding: 6px 10px; white-space: normal; color: var(--text); }
-.addr-pill { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 600; margin-top: 3px; }
+.addr-pill { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 600; margin-top: 3px; white-space: nowrap; }
 .addr-pill svg { width: 12px; height: 12px; }
 .addr-pill.good { color: var(--mint-ink); }
 .addr-pill.warn { color: var(--ochre-text); }

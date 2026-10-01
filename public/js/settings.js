@@ -10,7 +10,7 @@ export function renderSettings(main) {
     h("header", { class: "page-head" }, h("div", { class: "inner", style: { maxWidth: "880px", paddingBottom: "4px" } },
       h("h1", {}, "Settings"),
       h("p", { class: "sub" }, "Connections, team, support automation and shipping defaults."),
-      h("nav", { class: "settings-nav", "aria-label": "Settings sections" }, [["connections", "Connections"], ["team", "Team"], ["support", "Tickets"], ["macros", "Macros"], ["tags", "Tags"], ["views", "Views"], ["rules", "Rules"], ["knowledge", "AI knowledge"], ["email", "Email"], ["shipping", "Shipping"], ["printing", "Printing"]]
+      h("nav", { class: "settings-nav", "aria-label": "Settings sections" }, [["connections", "Connections"], ["team", "Team"], ["support", "Tickets"], ["macros", "Macros"], ["tags", "Tags"], ["views", "Views"], ["rules", "Rules"], ["knowledge", "AI knowledge"], ["email", "Email"], ["shipping", "Shipping"], ["customs", "Customs"], ["printing", "Printing"]]
         .map(([id, label]) => h("a", { href: `#${id}`, onclick: (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); history.replaceState(null, "", `#${id}`); } }, label))))),
     inner));
   load(inner);
@@ -50,6 +50,7 @@ async function load(inner) {
     isAdmin ? mailRules(s) : null,
     isAdmin ? shipping(s, presets, inner) : null,
     isAdmin && rulesData ? shippingRules(rulesData, presets, inner) : null,
+    isAdmin ? customsCard(s) : null,
   );
 }
 
@@ -285,6 +286,34 @@ function mailRules(s) {
         signature: sig.value,
         mailRules: { blockedSenders: blocked.value.split("\n"), skipAutomated: skip.checked, archiveOnClose: archive.checked, importDays: Number(days.value) },
       } })))));
+}
+
+function customsCard(s) {
+  const c = { ...s.customs };
+  const f = (label, key, attrs = {}) => {
+    const i = h("input", { class: "input", value: c[key] ?? "", ...attrs });
+    i.oninput = () => (c[key] = i.value);
+    return h("label", { class: "field" }, label, i);
+  };
+  const sel = (label, key, options) => {
+    const el = h("select", { class: "input" }, options.map(([v, t]) => h("option", { value: v, selected: c[key] === v }, t)));
+    el.onchange = () => (c[key] = el.value);
+    return h("label", { class: "field" }, label, el);
+  };
+  return h("section", { class: "card", id: "customs" }, h("h2", {}, "International & customs"),
+    h("p", { class: "muted" }, "Used to fill in the customs list for orders going abroad. Each product's description, HS code and country of origin are remembered once you've entered them on a label, and HS codes set on products in Shopify are used first."),
+    h("div", { class: "stack" },
+      h("div", { class: "grid2" },
+        f("Customs signer (your name)", "signer", { placeholder: "Tim Eads" }),
+        f("Default item description", "description", { maxlength: 35 })),
+      h("div", { class: "grid3" },
+        f("Default HS code", "hsCode", { inputmode: "numeric", placeholder: "Optional", maxlength: 10 }),
+        f("Default country of origin", "origin", { maxlength: 2 }),
+        sel("Contents", "contents", [["merchandise", "Merchandise (sold)"], ["gift", "Gift"], ["sample", "Sample"], ["returned_goods", "Returned goods"], ["other", "Other"]])),
+      h("div", { class: "grid2" },
+        sel("Duties & taxes paid by", "dutiesPaidBy", [["recipient", "Customer (on delivery)"], ["sender", "Us (UPS bills our account)"]]),
+        sel("If a package can't be delivered", "nonDelivery", [["return", "Return to us"], ["abandon", "Abandon"]])),
+      h("div", {}, saveButton(() => api("/settings", { method: "PUT", body: { customs: c } })))));
 }
 
 function backfillBox(s) {

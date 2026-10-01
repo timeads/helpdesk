@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { HttpError, cachedToken } from "./util";
+import type { Customs } from "./customs";
 
 const API_VERSION = "v2409";
 
@@ -150,7 +151,37 @@ function pkg(p: Parcel, packagingKey: "PackagingType" | "Packaging", signature?:
   };
 }
 
-export function buildRateRequest(account: string, from: Address, to: Address, parcels: Parcel[], signature?: Signature) {
+export const isInternationalAddress = (to: Address) => (to.country || "US").toUpperCase() !== "US";
+const customsValue = (c?: Customs) => (c ? c.items.reduce((n, i) => n + i.qty * i.unitValue, 0) : 0);
+/** UPS wants the invoice total for US → Canada / Puerto Rico shipments, also when rating. */
+const invoiceLineTotal = (to: Address, c?: Customs) =>
+  c && ["CA", "PR"].includes((to.country || "").toUpperCase())
+    ? { InvoiceLineTotal: { CurrencyCode: "USD", MonetaryValue: String(Math.max(1, Math.ceil(customsValue(c)))) } }
+    : {};
+
+function internationalForms(to: Address, c: Customs) {
+  const reason = { gift: "GIFT", sample: "SAMPLE", returned_goods: "RETURN" }[c.contents as string] ?? "SALE";
+  const d = new Date();
+  return {
+    InternationalForms: {
+      FormType: "01", // commercial invoice (UPS Paperless Invoice when enabled on the account)
+      InvoiceDate: `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`,
+      ReasonForExport: reason,
+      CurrencyCode: "USD",
+      Contacts: { SoldTo: party(to, to.residential ?? true) },
+      Product: c.items.filter((i) => i.qty > 0).map((i) => ({
+        Description: [trunc(i.description, 35)],
+        ...(i.hsCode ? { CommodityCode: i.hsCode } : {}),
+        OriginCountryCode: i.origin || "US",
+        Unit: { Number: String(i.qty), Value: i.unitValue.toFixed(2), UnitOfMeasurement: { Code: "PCS", Description: "Pieces" } },
+        ...(i.unitWeightLb > 0 ? { ProductWeight: { UnitOfMeasurement: { Code: "LBS" }, Weight: String(Math.max(0.1, Math.round(i.unitWeightLb * i.qty * 10) / 10)) } } : {}),
+      })),
+    },
+  };
+}
+
+export function buildRateRequest(account: string, from: Address, to: Address, parcels: Parcel[], signature?: Signature, customs?: Customs) {
+  if (isInternationalAddress(to)) signature = undefined; // delivery confirmation is US-only
   return {
     RateRequest: {
       Request: { RequestOption: "Shop" },
@@ -161,6 +192,7 @@ export function buildRateRequest(account: string, from: Address, to: Address, pa
         PaymentDetails: { ShipmentCharge: [{ Type: "01", BillShipper: { AccountNumber: account } }] },
         ShipmentRatingOptions: { NegotiatedRatesIndicator: "" },
         NumOfPieces: String(parcels.length),
+        ...invoiceLineTotal(to, customs),
         Package: parcels.map((p) => pkg(p, "PackagingType", signature)),
       },
     },
@@ -187,8 +219,8 @@ export function parseRates(json: any): Rate[] {
     .sort((a: Rate, b: Rate) => a.total - b.total);
 }
 
-export async function getRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature): Promise<Rate[]> {
-  const json = await ups(env, "POST", `/api/rating/${API_VERSION}/Shop`, buildRateRequest(env.UPS_ACCOUNT_NUMBER!, from, to, parcels, signature));
+export async function getRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature, customs?: Customs): Promise<Rate[]> {
+  const json = await ups(env, "POST", `/api/rating/${API_VERSION}/Shop`, buildRateRequest(env.UPS_ACCOUNT_NUMBER!, from, to, parcels, signature, customs));
   return parseRates(json);
 }
 
@@ -198,8 +230,14 @@ export function buildShipRequest(
   to: Address,
   parcels: Parcel[],
   serviceCode: string,
-  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string; signature?: Signature },
+  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string; signature?: Signature; customs?: Customs },
 ) {
+  const intl = isInternationalAddress(to);
+  if (intl && !opts.customs) throw new HttpError(422, "International shipments need customs details");
+  if (intl && !to.phone?.replace(/\D/g, "")) throw new HttpError(422, "UPS needs the recipient's phone number for international shipments");
+  const signature = intl ? undefined : opts.signature;
+  const charges: any[] = [{ Type: "01", BillShipper: { AccountNumber: account } }];
+  if (intl && opts.customs?.dutiesPaidBy === "sender") charges.push({ Type: "02", BillShipper: { AccountNumber: account } });
   return {
     ShipmentRequest: {
       Request: { RequestOption: "nonvalidate" },
@@ -208,11 +246,12 @@ export function buildShipRequest(
         Shipper: { ...party(from), ShipperNumber: account },
         ShipFrom: party(from),
         ShipTo: party(to, to.residential ?? true),
-        PaymentInformation: { ShipmentCharge: [{ Type: "01", BillShipper: { AccountNumber: account } }] },
+        PaymentInformation: { ShipmentCharge: charges },
         Service: { Code: serviceCode },
+        ...(intl ? { ...invoiceLineTotal(to, opts.customs), ShipmentServiceOptions: internationalForms(to, opts.customs!) } : {}),
         ShipmentRatingOptions: { NegotiatedRatesIndicator: "" },
         ...(opts.reference ? { ReferenceNumber: { Value: trunc(opts.reference, 35) } } : {}),
-        Package: parcels.map((p) => pkg(p, "Packaging", opts.signature)),
+        Package: parcels.map((p) => pkg(p, "Packaging", signature)),
       },
       LabelSpecification: {
         LabelImageFormat: { Code: opts.labelFormat },
@@ -229,6 +268,7 @@ export interface ShipResult {
   labels: string[]; // base64
   cost: number;
   currency: string;
+  forms?: { type: string; data: string }[]; // customs paperwork, base64 PDF
 }
 
 export function parseShipResponse(json: any): ShipResult {
@@ -243,6 +283,7 @@ export function parseShipResponse(json: any): ShipResult {
     labels: pkgs.map((p) => p.ShippingLabel?.GraphicImage).filter(Boolean),
     cost: Number(total?.MonetaryValue ?? 0),
     currency: total?.CurrencyCode ?? "USD",
+    forms: asArray<any>(r.Form).map((f) => f?.Image?.GraphicImage).filter(Boolean).map((data: string) => ({ type: "Commercial invoice", data })),
   };
 }
 
@@ -252,7 +293,7 @@ export async function createShipment(
   to: Address,
   parcels: Parcel[],
   serviceCode: string,
-  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string; signature?: Signature },
+  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; description?: string; signature?: Signature; customs?: Customs },
 ): Promise<ShipResult> {
   const json = await ups(
     env,

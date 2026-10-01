@@ -109,7 +109,7 @@ function pickRate(rates, policy, plan) {
   return rates.find((r) => r.serviceCode === want) ?? null;
 }
 function loadQuotes(orders, onEach) {
-  const todo = orders.filter((o) => o.plan.weightKnown && !o.hasLabel && !o.international && !quoteCache.has(quoteKey(o)));
+  const todo = orders.filter((o) => o.plan.weightKnown && !o.hasLabel && !quoteCache.has(quoteKey(o)));
   let i = 0;
   const worker = async () => {
     while (i < todo.length) {
@@ -117,7 +117,7 @@ function loadQuotes(orders, onEach) {
       const key = quoteKey(o);
       quoteCache.set(key, { loading: true });
       try {
-        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: o.plan.parcels ?? [o.plan.parcel], signature: o.plan.signature || undefined } });
+        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: o.plan.parcels ?? [o.plan.parcel], signature: o.plan.signature || undefined, customs: o.international ? await customsFor(o) : undefined } });
         quoteCache.set(key, { rates });
       } catch (e) {
         quoteCache.set(key, { error: e.message });
@@ -126,6 +126,30 @@ function loadQuotes(orders, onEach) {
     }
   };
   return Promise.all([worker(), worker(), worker()]);
+}
+
+/** Customs list for an order: Shopify HS/origin, then remembered per-product details, then defaults. */
+async function customsFor(o) {
+  const key = (l) => (l.sku || `${l.title}${l.variantTitle ? " / " + l.variantTitle : ""}`).toLowerCase();
+  const W = { POUNDS: 1, OUNCES: 1 / 16, KILOGRAMS: 2.20462, GRAMS: 0.00220462 };
+  const { settings, profiles } = await api("/shipping/customs", { method: "POST", body: { keys: o.lineItems.nodes.map(key) } });
+  return {
+    contents: settings.contents, dutiesPaidBy: settings.dutiesPaidBy, nonDelivery: settings.nonDelivery, signer: settings.signer,
+    items: o.lineItems.nodes.map((l) => {
+      const p = profiles[key(l)];
+      const inv = l.variant?.inventoryItem;
+      const w = inv?.measurement?.weight;
+      return {
+        productKey: key(l), lineId: l.id,
+        description: (p?.description || l.title || settings.description).slice(0, 35),
+        hsCode: (inv?.harmonizedSystemCode || p?.hs_code || settings.hsCode || "").replace(/\D/g, ""),
+        origin: (inv?.countryCodeOfOrigin || p?.origin || settings.origin || "US").toUpperCase(),
+        qty: l.quantity,
+        unitValue: Number(l.discountedUnitPriceAfterAllDiscountsSet?.shopMoney.amount ?? 0),
+        unitWeightLb: w && w.value > 0 ? w.value * (W[w.unit] ?? 1) : 0,
+      };
+    }),
+  };
 }
 
 const addrCache = new Map();
@@ -242,7 +266,6 @@ function renderQueue(root, params) {
   function fillQuote(o, td = cells.get(o.id)) {
     if (!td) return;
     if (o.hasLabel) return mount(td, h("span", { class: "muted small" }, "—"));
-    if (o.international) return mount(td, h("span", { class: "muted small" }, "Open to quote"));
     if (!o.plan.weightKnown) return mount(td, h("span", { class: "muted small" }, "Needs weight"));
     const q = quoteCache.get(quoteKey(o));
     if (!q || q.loading) return mount(td, h("span", { class: "skel-inline" }));
@@ -433,11 +456,81 @@ function buildLabelForm(root, o, presets, opts) {
   const reweigh = () => { if (weightsKnown) for (const p of s.parcels) if (p.auto) p.weight = autoWeight(p); };
 
   // ---- Rates load by themselves and refresh when anything that changes the price changes
+  // ---- Customs (international): one line per product, remembered per product once entered
+  const customsEl = h("div");
+  const CONTENTS = [["merchandise", "Merchandise (sold)"], ["gift", "Gift"], ["sample", "Sample"], ["returned_goods", "Returned goods"], ["documents", "Documents"], ["other", "Other"]];
+  const loadCustoms = async () => {
+    if (!o || s.customs) return drawCustoms();
+    try {
+      s.customs = await customsFor(o);
+    } catch (e) {
+      toast(`Couldn't load customs defaults: ${e.message}`, true);
+    }
+    drawCustoms();
+    quote(0);
+  };
+  const customsProblems = () => {
+    const c = s.customs;
+    if (!c) return [];
+    const out = [];
+    c.items.forEach((i, n) => { if (!i.description.trim()) out.push(`Item ${n + 1} needs a description`); });
+    const by = {};
+    for (const i of c.items) by[i.hsCode || "?"] = (by[i.hsCode || "?"] ?? 0) + i.qty * i.unitValue;
+    for (const [code, v] of Object.entries(by)) if (v > 2500) out.push(`Items under HS ${code} total ${money(v, "USD")} — over $2,500 needs an export filing (AES) first`);
+    return out;
+  };
+  function drawCustoms() {
+    if (!isIntl()) return mount(customsEl);
+    const c = s.customs;
+    if (!c) return mount(customsEl, h("div", { class: "notice", style: { marginTop: "16px" } }, o ? "Loading customs details…" : "Customs: open this from an order to fill in the items."));
+    const total = c.items.reduce((n, i) => n + i.qty * i.unitValue, 0);
+    const onEdit = () => { quote(900); drawProblems(); };
+    const sel = (key, options) => {
+      const el = h("select", { class: "input" }, options.map(([v, t]) => h("option", { value: v, selected: c[key] === v }, t)));
+      el.onchange = () => { c[key] = el.value; onEdit(); };
+      return el;
+    };
+    const probEl = h("div");
+    const drawProblems = () => {
+      const p = customsProblems();
+      mount(probEl, p.length ? h("div", { class: "notice bad", style: { marginTop: "10px" } }, p.map((x) => h("div", {}, x))) : null);
+    };
+    drawProblems();
+    mount(customsEl, h("div", { class: "customs card" },
+      h("div", { class: "row", style: { justifyContent: "space-between", marginBottom: "6px" } },
+        h("b", {}, "Customs"), h("span", { class: "small muted" }, `Declared value ${money(total, "USD")}`)),
+      h("p", { class: "small muted", style: { margin: "0 0 10px" } }, "Describe each item plainly (e.g. “Acrylic yarn”, “Tufting gun”). What you enter is remembered for next time. HS codes from Shopify are filled in automatically."),
+      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl customs-tbl" },
+        h("thead", {}, h("tr", {}, ["Item", "Customs description", "HS code", "Made in", "Qty", "Value each"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, c.items.map((i) => {
+          const inp = (key, attrs = {}) => {
+            const el = h("input", { class: "input", value: i[key] ?? "", ...attrs });
+            el.oninput = () => { i[key] = attrs.type === "number" ? Number(el.value) || 0 : key === "origin" ? el.value.toUpperCase() : el.value; onEdit(); };
+            return el;
+          };
+          const line = lines.find((l) => l.id === i.lineId);
+          return h("tr", {},
+            h("td", { class: "small" }, line?.title ?? i.description),
+            h("td", {}, inp("description", { maxlength: 35, placeholder: "e.g. Acrylic yarn" })),
+            h("td", {}, inp("hsCode", { inputmode: "numeric", placeholder: "Optional", maxlength: 10, style: { width: "110px" } })),
+            h("td", {}, inp("origin", { maxlength: 2, style: { width: "56px" } })),
+            h("td", { class: "num" }, i.qty),
+            h("td", {}, inp("unitValue", { type: "number", min: "0", step: "0.01", style: { width: "90px" } })));
+        })))),
+      h("div", { class: "grid3", style: { marginTop: "10px" } },
+        h("label", { class: "field" }, "Contents", sel("contents", CONTENTS)),
+        h("label", { class: "field" }, "Duties & taxes paid by", sel("dutiesPaidBy", [["recipient", "Customer (on delivery)"], ["sender", "Us (UPS bills our account)"]])),
+        h("label", { class: "field" }, "If it can't be delivered", sel("nonDelivery", [["return", "Return to us"], ["abandon", "Abandon"]]))),
+      probEl));
+  }
+
   const ratesEl = h("div");
   let seq = 0;
   let timer;
-  const ready = () => ["name", "address1", "city", "state", "zip", "country"].every((k) => String(s.to[k] ?? "").trim())
-    && s.parcels.every((p) => +p.length > 0 && +p.width > 0 && +p.weight > 0);
+  const isIntl = () => (s.to.country || "US").trim().toUpperCase() !== "US";
+  const ready = () => ["name", "address1", "city", "country", ...(["US", "CA"].includes((s.to.country || "US").toUpperCase()) ? ["state", "zip"] : [])].every((k) => String(s.to[k] ?? "").trim())
+    && s.parcels.every((p) => +p.length > 0 && +p.width > 0 && +p.weight > 0)
+    && (!isIntl() || !!s.customs);
   const quote = (delay = 600) => {
     clearTimeout(timer);
     if (s.rate) s.wantCode = s.rate.serviceCode;
@@ -449,7 +542,7 @@ function buildLabelForm(root, o, presets, opts) {
     const my = ++seq;
     if (!s.rates.length) mount(ratesEl, h("div", { class: "rates-card" }, h("div", { class: "row small muted" }, spinner(), "Getting rates…")));
     try {
-      const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels.map(cleanParcel), signature: s.signature || undefined } });
+      const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels.map(cleanParcel), signature: s.signature || undefined, customs: isIntl() ? s.customs : undefined } });
       if (my !== seq) return;
       s.rates = rates;
       const want = s.wantCode ?? plan?.service;
@@ -476,7 +569,7 @@ function buildLabelForm(root, o, presets, opts) {
   const field = (label, key, attrs = {}) => {
     const input = h("input", { class: "input", value: s.to[key] ?? "", ...attrs });
     inputs[key] = input;
-    input.addEventListener("input", () => { s.to[key] = input.value; quote(900); verifySoon(1200); });
+    input.addEventListener("input", () => { s.to[key] = input.value; if (key === "country") loadCustoms(); quote(900); verifySoon(1200); });
     return h("label", { class: "field" }, label, input);
   };
 
@@ -669,6 +762,7 @@ function buildLabelForm(root, o, presets, opts) {
       h("label", { class: "field", style: { minWidth: "220px" } }, "Delivery signature", sigSel),
       h("button", { class: "btn sm", style: { alignSelf: "end" }, onclick: addBox }, icon("plus"), "Add a box")),
     allocEl,
+    customsEl,
     ratesEl);
 
   function drawRates() {
@@ -689,7 +783,9 @@ function buildLabelForm(root, o, presets, opts) {
     drawBuy();
     buy.onclick = busy(buy, async () => {
       if (!s.rate) return;
-      if (s.addr?.status === "invalid" && !confirm("The carrier couldn't find this address. Buy the label anyway?")) return;
+      if (isIntl() && customsProblems().length) { toast(customsProblems()[0], true); customsEl.scrollIntoView({ behavior: "smooth" }); return; }
+      if (isIntl() && !s.to.phone?.trim()) { toast("Add the customer's phone number — carriers need it for international shipments", true); inputs.phone?.focus(); return; }
+            if (s.addr?.status === "invalid" && !confirm("The carrier couldn't find this address. Buy the label anyway?")) return;
       if (s.addr?.status === "corrected" && !confirm("There's a suggested correction for this address you haven't used. Buy with the address as typed?")) return;
       if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
         && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
@@ -702,6 +798,7 @@ function buildLabelForm(root, o, presets, opts) {
             presetId: s.parcels.length === 1 && s.parcels[0].preset ? Number(s.parcels[0].preset) : undefined,
             serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal,
             labelFormat: labelFormat(), fulfill: fulfill.checked, notifyCustomer: notify.checked, signature: s.signature || undefined, batchId: newBatchId(),
+            customs: isIntl() ? s.customs : undefined,
           },
         });
         await printLabels({ ids: [r.id] }, win).catch((e) => toast(e.message, true));
@@ -752,6 +849,8 @@ function buildLabelForm(root, o, presets, opts) {
       r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
         h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n))),
       r.fulfillError ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, `The label is fine, but marking the order fulfilled in Shopify failed: ${r.fulfillError}`) : null,
+      r.forms ? h("div", { class: "notice", style: { marginTop: "12px" } }, `Customs paperwork: print ${r.forms > 1 ? "these" : "this"} and put 3 copies in a clear pouch on the box (skip if UPS Paperless Invoice is on for your account).`,
+        h("div", { class: "row", style: { marginTop: "8px" } }, Array.from({ length: r.forms }, (_, n) => h("a", { class: "btn sm", href: `/api/shipping/labels/${r.id}/forms/${n}`, target: "_blank", rel: "noopener" }, icon("printer"), r.forms > 1 ? `Customs form ${n + 1}` : "Print customs form")))) : null,
       h("div", { class: "row", style: { marginTop: "16px" } },
         h("button", { class: "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
         split() && o ? h("button", { class: "btn", onclick: () => printBoxSlips(o, boxes, r.trackingNumbers) }, "Box contents slips") : null,
@@ -761,6 +860,7 @@ function buildLabelForm(root, o, presets, opts) {
 
   quote(0);
   verifySoon(0);
+  if (isIntl()) loadCustoms();
 }
 
 const sameService = (chosen, service) => {
@@ -935,7 +1035,9 @@ async function renderBatchList(root, importEl) {
           h("td", {}, l.service_name, l.status === "voided" ? h("span", { class: "badge bad", style: { marginLeft: "6px" } }, "Voided") : null),
           h("td", { class: "mono" }, l.tracking_numbers.map((n) => h("div", {}, h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n)))),
           h("td", { class: "num" }, l.cost != null ? money(l.cost, l.currency) : ""),
-          h("td", {}, l.status !== "voided" ? h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, "Print") : null, l.status !== "voided" ? voidBtn : null));
+          h("td", { style: { whiteSpace: "nowrap" } }, l.status !== "voided" ? h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, "Print") : null,
+            l.forms ? Array.from({ length: l.forms }, (_, n) => h("a", { class: "btn sm ghost", href: `/api/shipping/labels/${l.id}/forms/${n}`, target: "_blank", rel: "noopener" }, l.forms > 1 ? `Customs ${n + 1}` : "Customs")) : null,
+            l.status !== "voided" ? voidBtn : null));
       })))));
       const toggle = h("button", { class: "btn sm ghost" }, "Details");
       toggle.onclick = () => { detail.hidden = !detail.hidden; toggle.textContent = detail.hidden ? "Details" : "Hide"; };

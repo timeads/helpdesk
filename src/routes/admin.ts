@@ -13,6 +13,7 @@ import { easypostConfigured, testEasypost } from "../lib/easypost";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SUPPORT, RULE_ACTIONS, RULE_FIELDS, STATUSES, TRIGGERS, loadSupportRules, supportSettings, type SupportSettings } from "../lib/support";
 import { MACRO_VARIABLES } from "../lib/macros";
+import { DEFAULT_CUSTOMS, customsSettings, type CustomsSettings } from "../lib/customs";
 
 const admin = new Hono<AppEnv>();
 
@@ -325,12 +326,26 @@ admin.get("/settings", async (c) => {
     aiGuidance: await getSetting(c.env, "ai_guidance", ""),
     support: await supportSettings(c.env),
     backfill: await getSetting<BackfillJob | null>(c.env, "backfill", null),
+    customs: await customsSettings(c.env),
   });
 });
 
 admin.put("/settings", async (c) => {
   requireAdmin(c);
-  const body = await c.req.json<{ signature?: string; mailRules?: Partial<MailRules>; shipFrom?: unknown; aiGuidance?: string; support?: Partial<SupportSettings> }>();
+  const body = await c.req.json<{ signature?: string; mailRules?: Partial<MailRules>; shipFrom?: unknown; aiGuidance?: string; support?: Partial<SupportSettings>; customs?: Partial<CustomsSettings> }>();
+  if (body.customs) {
+    const cur = await customsSettings(c.env);
+    const n = { ...cur, ...body.customs };
+    await setSetting(c.env, "customs", {
+      description: String(n.description ?? "").slice(0, 35) || DEFAULT_CUSTOMS.description,
+      hsCode: String(n.hsCode ?? "").replace(/\D/g, "").slice(0, 10),
+      origin: String(n.origin ?? "US").toUpperCase().slice(0, 2) || "US",
+      signer: String(n.signer ?? "").slice(0, 60),
+      contents: ["merchandise", "gift", "sample", "returned_goods", "documents", "other"].includes(n.contents) ? n.contents : "merchandise",
+      dutiesPaidBy: n.dutiesPaidBy === "sender" ? "sender" : "recipient",
+      nonDelivery: n.nonDelivery === "abandon" ? "abandon" : "return",
+    } satisfies CustomsSettings);
+  }
   if (body.support) {
     const cur = await supportSettings(c.env);
     const s = { ...cur, ...body.support };

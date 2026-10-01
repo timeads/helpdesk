@@ -82,6 +82,7 @@ const ORDER_FIELDS_TEMPLATE = `
   lineItems(first: __LINES__) {
     nodes {
       id title variantTitle quantity sku
+      discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
       image { url(transform: { maxWidth: 120 }) }
       __VARIANT__
     }
@@ -129,10 +130,15 @@ export interface ShopifyOrder {
       quantity: number;
       sku: string | null;
       image: { url: string } | null;
+      discountedUnitPriceAfterAllDiscountsSet?: { shopMoney: { amount: string } };
       variant?: {
         id: string;
         barcode?: string | null;
-        inventoryItem?: { measurement: { weight: { value: number; unit: string } | null } } | null;
+        inventoryItem?: {
+          measurement: { weight: { value: number; unit: string } | null };
+          harmonizedSystemCode?: string | null;
+          countryCodeOfOrigin?: string | null;
+        } | null;
       } | null;
     }[];
   };
@@ -154,15 +160,19 @@ async function enrichVariants(env: Env, orders: ShopifyOrder[]): Promise<Shopify
   const ids = [...new Set(orders.flatMap((o) => o.lineItems.nodes.map((l) => l.variant?.id).filter(Boolean) as string[]))];
   if (!ids.length) return orders;
   const info = new Map<string, { barcode: string | null; inventoryItem: any }>();
-  try {
+  const run = async (customs: boolean) => {
     for (let i = 0; i < ids.length; i += 50) {
       const data = await shopify<{ nodes: ({ id: string; barcode: string | null; inventoryItem: any } | null)[] }>(
         env,
-        `query Variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id barcode inventoryItem { measurement { weight { value unit } } } } } }`,
+        `query Variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id barcode inventoryItem { measurement { weight { value unit } } ${customs ? "harmonizedSystemCode countryCodeOfOrigin" : ""} } } } }`,
         { ids: ids.slice(i, i + 50) },
       );
       for (const n of data.nodes) if (n?.id) info.set(n.id, n);
     }
+  };
+  try {
+    // Customs codes come along when the app may read them; weights and barcodes either way
+    await run(true).catch(() => run(false));
   } catch {
     return orders; // weights and barcodes are conveniences
   }

@@ -5,6 +5,7 @@ import { fulfillOrder } from "./shopify";
 import { evaluateRules, type RuleResult, type ShippingRule } from "./rules";
 import { type Address, type Parcel, type Rate, type Signature } from "./ups";
 import { getAllRates, purchase, trackingUrlFor } from "./carriers";
+import { saveProfiles, type Customs } from "./customs";
 import { HttpError, getSetting } from "./util";
 
 export interface Preset {
@@ -305,6 +306,7 @@ export interface BuyInput {
   notifyCustomer: boolean;
   batchId?: string | null;
   scanVerified?: boolean;
+  customs?: Customs;
 }
 
 /** Buys the label, records it (with analytics fields), learns the box, and fulfills in Shopify. */
@@ -314,14 +316,16 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
     reference: o?.name,
     labelFormat: input.labelFormat,
     signature: input.signature,
+    customs: input.customs,
   });
   const row = await env.DB.prepare(
-    `INSERT INTO shipments (carrier, order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format,
+    `INSERT INTO shipments (forms, carrier, order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format,
        cost, currency, packages, ship_to, agent_id, signature, batch_id, shipping_paid, order_total, order_created_at, requested_service,
        list_cost, item_count, dest_state, dest_country, scan_verified)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
   )
     .bind(
+      JSON.stringify(result.forms ?? []),
       result.carrier,
       o?.id ?? null, o?.name ?? null, input.ticketId ?? null, input.rate.serviceCode, input.rate.serviceName, result.shipmentId,
       JSON.stringify(result.trackingNumbers), JSON.stringify(result.labels), result.format, result.cost, result.currency,
@@ -334,6 +338,7 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
 
   // Remember how this was packed for the next order with the same items (single or multi-box)
   if (o) await learnPacking(env, o, input.parcels, input.presetId ?? null).catch((e) => console.error("learn packing", e));
+  if (input.customs) await saveProfiles(env, input.customs).catch((e) => console.error("customs profiles", e));
   if (o) await env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id).run();
 
   let fulfillError: string | null = null;
@@ -345,7 +350,7 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
       fulfillError = (e as Error).message;
     }
   }
-  return { id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: result.format, carrier: result.carrier, fulfillError };
+  return { id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: result.format, carrier: result.carrier, forms: (result.forms ?? []).length, fulfillError };
 }
 
 export { getAllRates as getRates };

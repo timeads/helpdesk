@@ -3,14 +3,15 @@ import type { Env } from "../env";
 import { createShipment, getRates as getUpsRates, trackingUrl as upsTrackingUrl, upsConfigured, voidShipment, type Address, type Parcel, type Rate, type Signature } from "./ups";
 import { buyUsps, easypostConfigured, getUspsRates, isUspsCode, refundUsps, uspsTrackingUrl } from "./easypost";
 import { HttpError } from "./util";
+import type { Customs } from "./customs";
 
 export const anyCarrier = (env: Env) => upsConfigured(env) || easypostConfigured(env);
 
 /** Every service from every connected carrier, cheapest first. One carrier failing doesn't hide the other. */
-export async function getAllRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature): Promise<Rate[]> {
+export async function getAllRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature, customs?: Customs): Promise<Rate[]> {
   const jobs: Promise<Rate[]>[] = [];
-  if (upsConfigured(env)) jobs.push(getUpsRates(env, from, to, parcels, signature).then((r) => r.map((x) => ({ ...x, carrier: "UPS" }))));
-  if (easypostConfigured(env)) jobs.push(getUspsRates(env, from, to, parcels, signature));
+  if (upsConfigured(env)) jobs.push(getUpsRates(env, from, to, parcels, signature, customs).then((r) => r.map((x) => ({ ...x, carrier: "UPS" }))));
+  if (easypostConfigured(env)) jobs.push(getUspsRates(env, from, to, parcels, signature, customs));
   if (!jobs.length) throw new HttpError(409, "Connect UPS or USPS in Settings → Credentials to get rates");
   const settled = await Promise.allSettled(jobs);
   const rates = settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
@@ -28,11 +29,14 @@ export async function purchase(
   to: Address,
   parcels: Parcel[],
   serviceCode: string,
-  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; signature?: Signature },
+  opts: { reference?: string; labelFormat: "GIF" | "ZPL"; signature?: Signature; customs?: Customs },
 ) {
-  if (isUspsCode(serviceCode)) return { carrier: "USPS", ...(await buyUsps(env, from, to, parcels, serviceCode, opts)) };
+  if (isUspsCode(serviceCode)) {
+    const r = await buyUsps(env, from, to, parcels, serviceCode, opts);
+    return { carrier: "USPS", ...r, forms: r.forms ?? [] };
+  }
   const r = await createShipment(env, from, to, parcels, serviceCode, opts);
-  return { carrier: "UPS", ...r, format: opts.labelFormat as "GIF" | "ZPL" | "PNG" };
+  return { carrier: "UPS", ...r, forms: r.forms ?? [], format: opts.labelFormat as "GIF" | "ZPL" | "PNG" };
 }
 
 export async function voidLabel(env: Env, shipmentId: string) {

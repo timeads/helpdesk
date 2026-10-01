@@ -84,7 +84,7 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 
 Mode starts on **test**, so labels aren't billed. When a test label prints correctly, switch Mode to **production** in the same place.
 
-> Labels are US-domestic for now. International shipments need customs forms, which aren't built yet.
+> **International:** orders going abroad get a customs list (plain description, HS code, country of origin, value per item) filled from the order. HS codes and origin set on products in Shopify are used first, and whatever you enter is remembered per product. UPS gets a commercial invoice (printable PDF next to the label, or paperless if UPS Paperless Invoice is on for your account); USPS international goes through EasyPost with its customs form. Defaults (signer, duties paid by, contents type) are in **Settings → International & customs**. Shipments over $2,500 per HS code need an export filing (AES) first and are stopped.
 
 ### 4b. (Optional) USPS through EasyPost
 

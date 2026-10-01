@@ -5,6 +5,8 @@ import { upsConfigured, type Address, type Parcel, type Signature } from "../lib
 import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
 import { checkAddress } from "../lib/address";
+import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles } from "../lib/customs";
+import { isInternationalAddress } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
   addressFromOrder, buyLabel, chooseRate, isInternational, isPaymentPending, isPriority, itemCount, itemsWeightLb,
@@ -222,6 +224,25 @@ shipping.put("/rules", async (c) => {
   return c.json({ rules: await loadRules(c.env) });
 });
 
+// ---- Customs (international)
+/** Defaults and remembered per-product customs details, for building the customs list in the browser. */
+shipping.post("/customs", async (c) => {
+  const { keys } = await c.req.json<{ keys: string[] }>();
+  const profiles = await loadProfiles(c.env, (keys ?? []).slice(0, 200).map(String));
+  return c.json({ settings: await customsSettings(c.env), profiles: Object.fromEntries(profiles) });
+});
+
+/** Customs paperwork for a label (commercial invoice / CN23), as a PDF. */
+shipping.get("/labels/:id{[0-9]+}/forms/:n{[0-9]+}", async (c) => {
+  const row = await c.env.DB.prepare("SELECT forms, order_name FROM shipments WHERE id = ?").bind(Number(c.req.param("id"))).first<{ forms: string; order_name: string | null }>();
+  const forms = JSON.parse(row?.forms || "[]") as { type: string; data: string }[];
+  const f = forms[Number(c.req.param("n"))];
+  if (!f) throw new HttpError(404, "No customs form");
+  return new Response(base64UrlDecodeBytes(f.data.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")), {
+    headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${(row?.order_name ?? "label").replace(/[^\w-]/g, "")}-customs-${Number(c.req.param("n")) + 1}.pdf"` },
+  });
+});
+
 // ---- Address verification
 shipping.post("/verify-address", async (c) => {
   const { address, fresh } = await c.req.json<{ address: Address; fresh?: boolean }>();
@@ -238,7 +259,8 @@ shipping.post("/verify-address", async (c) => {
 
 // ---- Rates and labels
 shipping.post("/rates", async (c) => {
-  const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string }>();
+  const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string; customs?: unknown }>();
+  const customs = cleanCustoms(body.customs);
   if (demo(c.env) && !anyCarrier(c.env)) {
     // Local preview only: plausible made-up prices so the screens can be tried without UPS keys
     const lb = validParcels(body.parcels).reduce((n, p) => n + Math.max(p.weight, (p.length * p.width * p.height) / 139), 0);
@@ -248,6 +270,13 @@ shipping.post("/rates", async (c) => {
       return { serviceCode, serviceName, total, listTotal: Math.round(total * 1.35 * 100) / 100, currency: "USD", days };
     };
     const usps = (code: string, name: string, base: number, perLb: number, days: number) => ({ ...mk(code, name, base, perLb, days), carrier: "USPS" });
+    if ((body.to.country || "US").toUpperCase() !== "US") {
+      if (!customs) return c.json({ rates: [] });
+      return c.json({ rates: [
+        { ...mk("11", "UPS Standard", 18, 1.4, 5), carrier: "UPS" }, { ...mk("65", "UPS Worldwide Saver", 42, 3.1, 2), carrier: "UPS" },
+        usps("usps:FirstClassPackageInternationalService", "USPS First-Class Package International", 16, 2.2, 10), usps("usps:PriorityMailInternational", "USPS Priority Mail International", 38, 2.6, 7),
+      ].sort((a, b) => a.total - b.total) });
+    }
     const rates = [
       { ...mk("03", "UPS Ground", 7.4, 0.62, 4), carrier: "UPS" }, { ...mk("12", "UPS 3 Day Select", 11.2, 1.1, 3), carrier: "UPS" },
       { ...mk("02", "UPS 2nd Day Air", 16.5, 1.9, 2), carrier: "UPS" }, { ...mk("13", "UPS Next Day Air Saver", 29, 3.2, 1), carrier: "UPS" },
@@ -255,7 +284,7 @@ shipping.post("/rates", async (c) => {
     ];
     return c.json({ rates: rates.sort((a, b) => a.total - b.total) });
   }
-  const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels), validSignature(body.signature));
+  const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels), validSignature(body.signature), customs);
   return c.json({ rates });
 });
 
@@ -276,12 +305,22 @@ shipping.post("/labels", async (c) => {
     signature?: string;
     batchId?: string;
     scanVerified?: boolean;
+    customs?: unknown;
   }>();
   const order = body.orderId ? (demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) ?? null : await getOrder(c.env, body.orderId)) : null;
+  const to = validAddress(body.to);
+  let customs = cleanCustoms(body.customs);
+  if (isInternationalAddress(to)) {
+    if (!customs && order) customs = await buildCustoms(c.env, order);
+    if (!customs) throw new HttpError(422, "International shipments need customs details");
+    const problems = customsProblems(customs);
+    if (problems.length) throw new HttpError(422, problems.join(" · "));
+  }
   const r = await buyLabel(c.env, c.get("agent"), {
+    customs: isInternationalAddress(to) ? customs : undefined,
     order,
     ticketId: body.ticketId,
-    to: validAddress(body.to),
+    to,
     parcels: validParcels(body.parcels),
     presetId: body.presetId,
     rate: { serviceCode: body.serviceCode, serviceName: body.serviceName, listTotal: body.listTotal },
@@ -311,6 +350,11 @@ shipping.post("/labels/auto", async (c) => {
   if (!plan.weightKnown) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
   let to = validAddress(addressFromOrder(order));
   // Don't buy a label for an address the carrier can't find or wants to correct
+  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, order) : undefined;
+  if (customs) {
+    const problems = customsProblems(customs);
+    if (problems.length) throw new HttpError(422, `${order.name}: ${problems[0]} — open it to fix the customs list`);
+  }
   const check = await checkAddress(c.env, to);
   if (check.status === "invalid") throw new HttpError(422, `${order.name}: ${check.message.toLowerCase()} — open it to fix the address`);
   if (check.status === "corrected" || check.status === "ambiguous") throw new HttpError(422, `${order.name}: ${check.message.toLowerCase()} — open it to review`);
@@ -325,7 +369,7 @@ shipping.post("/labels/auto", async (c) => {
       contents: plan.boxes.length > 1 ? Object.entries(b.items).filter(([, q]) => q > 0).map(([id, qty]) => ({ id, title: titles.get(id) ?? "", qty })) : undefined,
     })),
   );
-  const rates = await getRates(c.env, await shipFrom(c.env), to, parcels, plan.signature);
+  const rates = await getRates(c.env, await shipFrom(c.env), to, parcels, plan.signature, customs);
   const policy = !body.policy || body.policy === "rule" ? plan.service ?? "cheapest" : body.policy;
   const rate = chooseRate(rates, policy);
   const r = await buyLabel(c.env, c.get("agent"), {
@@ -340,13 +384,14 @@ shipping.post("/labels/auto", async (c) => {
     notifyCustomer: body.notifyCustomer ?? true,
     batchId: body.batchId ?? null,
     scanVerified: !!body.scanVerified,
+    customs,
   });
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });
 });
 
 shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT s.id, s.carrier, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
+    `SELECT s.id, s.carrier, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
      FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL ORDER BY s.created_at DESC LIMIT 200`,
   ).all<any>();

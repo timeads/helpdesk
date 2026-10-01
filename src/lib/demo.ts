@@ -10,7 +10,7 @@ const address = (name: string, city: string, state: string, zip: string) => ({
 });
 const line = (title: string, variant: string | null, qty: number, price: string, label: string, bg: string, lb: number) => ({
   id: `gid://shopify/LineItem/${title.length}${qty}`, title, variantTitle: variant, quantity: qty, sku: null,
-  originalUnitPriceSet: money(price), image: { url: img(label, bg) },
+  originalUnitPriceSet: money(price), discountedUnitPriceAfterAllDiscountsSet: money(price), image: { url: img(label, bg) },
   variant: { id: `gid://shopify/ProductVariant/${label}`, barcode: `TTW-${label}`, inventoryItem: { measurement: { weight: { value: lb, unit: "POUNDS" } } } },
 });
 

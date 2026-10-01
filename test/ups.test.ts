@@ -52,6 +52,6 @@ describe("UPS requests", () => {
         },
       },
     });
-    expect(r).toEqual({ shipmentId: "1ZSHIP", trackingNumbers: ["1Z999"], labels: ["R0lGOD"], cost: 11.2, currency: "USD" });
+    expect(r).toEqual({ shipmentId: "1ZSHIP", trackingNumbers: ["1Z999"], labels: ["R0lGOD"], cost: 11.2, currency: "USD", forms: [] });
   });
 });
