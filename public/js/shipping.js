@@ -509,6 +509,60 @@ function shipFromPhoneFix(message, done) {
     h("div", { class: "small", style: { marginTop: "6px" } }, "Saved to Settings → Shipping, so you only do this once. Any format works — it's cleaned up for the carriers."));
 }
 
+/**
+ * Voids a label with the carrier and undoes its Shopify fulfillment, after saying what will happen.
+ * Returns true when voided.
+ */
+async function voidLabelFlow(l) {
+  const usps = l.carrier === "USPS";
+  const msg = [
+    usps
+      ? `Void this USPS label${l.order_name ? ` for ${l.order_name}` : ""}? The postage is refunded to your EasyPost wallet (USPS takes about 2–4 weeks; labels must be unused and voided within 30 days).`
+      : `Void this UPS label${l.order_name ? ` for ${l.order_name}` : ""}? UPS cancels it and you're not charged (it must not have been scanned by UPS yet; up to 90 days).`,
+    l.fulfilled ? "The order will be marked unfulfilled in Shopify again so you can ship it with a new label. (The customer isn't emailed.)" : "",
+    "Throw away the printed label so it can't be used.",
+  ].filter(Boolean).join("\n\n");
+  if (!confirm(msg)) return false;
+  const r = await api(`/shipping/labels/${l.id}/void`, { method: "POST" });
+  const parts = [usps ? "Refund requested from USPS" : "Label voided with UPS — no charge"];
+  if (r.shopify === "cancelled") parts.push("order is unfulfilled in Shopify again");
+  else if (r.shopify === "not_found") parts.push("no matching Shopify fulfillment to undo");
+  else if (r.shopify && r.shopify !== "skipped") parts.push(`but undoing the Shopify fulfillment failed (${r.shopify}) — cancel it in Shopify`);
+  toast(parts.join(" · "), r.shopify && !["cancelled", "not_found", "skipped"].includes(r.shopify));
+  queueApi?.reload();
+  return true;
+}
+
+/** "Labels for this order" on the order page: reprint or void what was bought. */
+function orderLabelsCard(o, onChange) {
+  const el = h("section", { class: "card op-card", hidden: true });
+  const load = async () => {
+    const { labels } = await api(`/shipping/labels?order=${encodeURIComponent(o.id)}`).catch(() => ({ labels: [] }));
+    if (!labels.length) { el.hidden = true; return; }
+    el.hidden = false;
+    mount(el,
+      h("div", { class: "op-card-head" }, h("h3", {}, `Labels for this order · ${labels.length}`),
+        h("span", { class: "small muted" }, "Void a label you won't use so you're not charged for it")),
+      h("div", { class: "stack", style: { gap: "8px" } }, labels.map((l) => {
+        const voided = l.status === "voided";
+        const voidBtn = h("button", { class: "btn sm ghost danger" }, "Void");
+        voidBtn.onclick = busy(voidBtn, async () => { if (await voidLabelFlow(l)) { await load(); onChange?.(); } });
+        return h("div", { class: "op-label" + (voided ? " voided" : "") },
+          h("div", { style: { minWidth: 0 } },
+            h("b", {}, l.service_name), " · ", money(l.cost, l.currency),
+            voided ? h("span", { class: "badge bad", style: { marginLeft: "6px" } }, "Voided") : l.fulfilled ? h("span", { class: "badge good", style: { marginLeft: "6px" } }, "Fulfilled in Shopify") : null,
+            h("div", { class: "small muted" }, `${relTime(l.created_at)}${l.agent_name ? ` by ${l.agent_name}` : ""} · `,
+              l.tracking_numbers.map((n, i) => [i ? ", " : "", h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n)]))),
+          voided ? null : h("div", { class: "row", style: { gap: "6px", flexWrap: "nowrap" } },
+            h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), "Print"),
+            voidBtn));
+      })));
+  };
+  load();
+  el.reload = load;
+  return el;
+}
+
 const marginText = (m) => `${m >= 0 ? "+" : "−"}${money(Math.abs(m), "USD")}`;
 
 function buildLabelForm(root, o, presets, opts) {
@@ -934,6 +988,7 @@ function buildLabelForm(root, o, presets, opts) {
     totalWeightEl.textContent = w > 0 ? `Total ${lbOz(w)}${split() ? ` · ${s.parcels.length} boxes` : ""}` : "";
   };
   const items = o?.lineItems.nodes ?? [];
+  const labelsCard = o ? orderLabelsCard(o) : null;
   const notices = [
     o?.hold ? h("div", { class: "notice bad" }, `On hold: ${o.hold}`) : null,
     o?.hasLabel ? h("div", { class: "notice" }, "This order already has a label. Buying another one ships it again.") : null,
@@ -1005,6 +1060,7 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "op-main" },
         buyEl,
         notices.length ? h("div", { class: "stack" }, notices) : null,
+        labelsCard,
         shipTo,
         noteCard,
         packages,
@@ -1063,6 +1119,7 @@ function buildLabelForm(root, o, presets, opts) {
       if (o) drafts.delete(o.id);
       showPurchased(r);
       if (o) o.hasLabel = true;
+      labelsCard?.reload();
       queueApi?.reload();
     } catch (e) {
       win?.close();
@@ -1139,6 +1196,16 @@ function buildLabelForm(root, o, presets, opts) {
         h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
         split() && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id]) }, "Packing slips (one per box)") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
+        (() => {
+          const b = h("button", { class: "btn ghost", title: "Cancel this label so you're not charged" }, "Void label");
+          b.onclick = busy(b, async () => {
+            if (!(await voidLabelFlow({ id: r.id, carrier: r.carrier, order_name: o?.name, fulfilled: !!o && !r.fulfillError }))) return;
+            if (o) o.hasLabel = false;
+            labelsCard?.reload();
+            openOrderPage(o ? queueApi?.find(o.id) ?? o : null, opts);
+          });
+          return b;
+        })(),
         h("button", { class: "btn", onclick: () => closeOrderPage() }, "Done"))));
     buyEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
@@ -1295,10 +1362,7 @@ async function renderBatchList(root, importEl) {
         if (!l) return null;
         const voidBtn = h("button", { class: "btn sm ghost danger" }, "Void");
         voidBtn.onclick = busy(voidBtn, async () => {
-          if (!confirm(l.carrier === "USPS" ? "Void this USPS label? EasyPost refunds the postage to your wallet (USPS takes up to a few weeks)." : "Void this label with UPS? You won't be charged for it.")) return;
-          await api(`/shipping/labels/${l.id}/void`, { method: "POST" });
-          toast("Label voided");
-          renderBatchList(root, importEl);
+          if (await voidLabelFlow(l)) renderBatchList(root, importEl);
         });
         return h("tr", {},
           h("td", {}, l.order_name || "—"),

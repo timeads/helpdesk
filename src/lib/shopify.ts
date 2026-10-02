@@ -293,6 +293,31 @@ export async function findOrderByName(env: Env, raw: string) {
   return getOrder(env, found[0].id);
 }
 
+/**
+ * Cancels the Shopify fulfillment a voided label created, so the order is unfulfilled again.
+ * Without a saved id it's found by tracking number. Returns false when there's nothing to cancel.
+ */
+export async function cancelFulfillment(env: Env, orderId: string, fulfillmentId: string | null, tracking: string[]): Promise<boolean> {
+  let id = fulfillmentId;
+  if (!id) {
+    const data = await shopify<{ order: { fulfillments: { id: string; status: string; trackingInfo: { number: string | null }[] }[] } | null }>(
+      env,
+      `query F($id: ID!) { order(id: $id) { fulfillments(first: 20) { id status trackingInfo(first: 10) { number } } } }`,
+      { id: orderId },
+    );
+    const f = (data.order?.fulfillments ?? []).find((x) => x.status !== "CANCELLED" && x.trackingInfo.some((t) => t.number && tracking.includes(t.number)));
+    id = f?.id ?? null;
+  }
+  if (!id) return false;
+  const res = await shopify<{ fulfillmentCancel: { fulfillment: { id: string; status: string } | null; userErrors: { message: string }[] } }>(
+    env,
+    `mutation C($id: ID!) { fulfillmentCancel(id: $id) { fulfillment { id status } userErrors { message } } }`,
+    { id },
+  );
+  if (res.fulfillmentCancel.userErrors.length) throw new HttpError(422, "Shopify: " + res.fulfillmentCancel.userErrors.map((e) => e.message).join("; "));
+  return true;
+}
+
 export async function fulfillOrder(
   env: Env,
   orderId: string,

@@ -1221,3 +1221,6 @@ body.order-open { overflow: hidden; }
   .manual-status { flex-wrap: wrap; }
 }
 .toast > span { max-width: 560px; }
+.op-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.op-label.voided { opacity: .6; }
+@media (max-width: 760px) { .op-label { flex-wrap: wrap; } }

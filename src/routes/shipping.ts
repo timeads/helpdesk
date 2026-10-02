@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "../env";
-import { findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
+import { cancelFulfillment, findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
@@ -433,8 +433,8 @@ shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT s.id, s.carrier, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
-     FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL ORDER BY s.created_at DESC LIMIT 200`,
-  ).all<any>();
+     FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL AND (? IS NULL OR s.order_id = ?) ORDER BY s.created_at DESC LIMIT 200`,
+  ).bind(c.req.query("order") ?? null, c.req.query("order") ?? null).all<any>();
   return c.json({
     labels: results.map((r) => ({ ...r, tracking_numbers: JSON.parse(r.tracking_numbers), ship_to: JSON.parse(r.ship_to) })),
   });
@@ -627,13 +627,25 @@ shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
 
 shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
   const id = Number(c.req.param("id"));
-  const s = await c.env.DB.prepare("SELECT shipment_id, status FROM shipments WHERE id = ?").bind(id).first<{ shipment_id: string; status: string }>();
+  const s = await c.env.DB.prepare("SELECT shipment_id, status, carrier, order_id, fulfilled, fulfillment_id, tracking_numbers FROM shipments WHERE id = ?").bind(id)
+    .first<{ shipment_id: string; status: string; carrier: string | null; order_id: string | null; fulfilled: number; fulfillment_id: string | null; tracking_numbers: string }>();
   if (!s) throw new HttpError(404, "Label not found");
-  if (s.status === "voided") return c.json({ ok: true });
+  if (s.status === "voided") return c.json({ ok: true, already: true });
   if (!s.shipment_id) throw new HttpError(409, "Imported from Redo — void it in Redo or UPS");
+  // 1. The carrier: UPS cancels it (no charge); USPS starts a refund (paid back to the EasyPost wallet in ~2–4 weeks)
   await voidLabel(c.env, s.shipment_id);
-  await c.env.DB.prepare("UPDATE shipments SET status = 'voided' WHERE id = ?").bind(id).run();
-  return c.json({ ok: true });
+  await c.env.DB.prepare("UPDATE shipments SET status = 'voided', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").bind(id).run();
+  // 2. Shopify: undo the fulfillment so the order can be shipped again
+  let shopify: "cancelled" | "not_found" | "skipped" | string = "skipped";
+  if (s.order_id && s.fulfilled && !demo(c.env)) {
+    try {
+      shopify = (await cancelFulfillment(c.env, s.order_id, s.fulfillment_id, JSON.parse(s.tracking_numbers || "[]"))) ? "cancelled" : "not_found";
+      if (shopify === "cancelled") await c.env.DB.prepare("UPDATE shipments SET fulfilled = 0 WHERE id = ?").bind(id).run();
+    } catch (e) {
+      shopify = (e as Error).message;
+    }
+  }
+  return c.json({ ok: true, carrier: s.carrier ?? (s.shipment_id.startsWith("ep:") ? "USPS" : "UPS"), refund: s.shipment_id.startsWith("ep:") ? "requested" : "voided", shopify });
 });
 
 /** Label batches: every bulk run (and single labels) grouped for reprinting. */
