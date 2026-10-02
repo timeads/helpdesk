@@ -19,6 +19,7 @@ function order(id: number, name: string, daysAgo: number, total: string, fin: st
     id: `gid://shopify/Order/${id}`, name, createdAt: new Date(Date.now() - daysAgo * 86400_000).toISOString(),
     cancelledAt: null, closed: false, note: null, email: null, phone: null, tags: [],
     displayFinancialStatus: fin, displayFulfillmentStatus: ful, totalPriceSet: money(total), totalShippingPriceSet: money(shippingPaid),
+    subtotalPriceSet: money((Number(total) - Number(shippingPaid)).toFixed(2)), totalDiscountsSet: money("0.00"), totalTaxSet: money("0.00"),
     shippingAddress: to, shippingLines: { nodes: [{ title: shipping }] }, lineItems: { nodes: lines },
     fulfillments: tracking ? [{ status: "SUCCESS", createdAt: new Date().toISOString(), displayStatus: "IN_TRANSIT", trackingInfo: [{ company: "UPS", number: tracking, url: `https://www.ups.com/track?tracknum=${tracking}` }] }] : [],
     adminUrl: "#demo",

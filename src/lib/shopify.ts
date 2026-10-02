@@ -77,6 +77,9 @@ const ORDER_FIELDS_TEMPLATE = `
   displayFinancialStatus displayFulfillmentStatus
   totalPriceSet { shopMoney { amount currencyCode } }
   totalShippingPriceSet { shopMoney { amount currencyCode } }
+  subtotalPriceSet { shopMoney { amount } }
+  totalDiscountsSet { shopMoney { amount } }
+  totalTaxSet { shopMoney { amount } }
   shippingAddress { ${ADDRESS} }
   shippingLines(first: 1) { nodes { title } }
   lineItems(first: __LINES__) {
@@ -120,6 +123,9 @@ export interface ShopifyOrder {
   displayFulfillmentStatus: string;
   totalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
   totalShippingPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
+  subtotalPriceSet?: { shopMoney: { amount: string } } | null;
+  totalDiscountsSet?: { shopMoney: { amount: string } } | null;
+  totalTaxSet?: { shopMoney: { amount: string } } | null;
   shippingAddress: Record<string, string | null> | null;
   shippingLines: { nodes: { title: string }[] };
   lineItems: {

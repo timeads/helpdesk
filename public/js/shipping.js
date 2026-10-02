@@ -53,7 +53,7 @@ export function renderShipping(main) {
 
   const body = h("div");
   const notices = h("div");
-  const blank = h("button", { class: "btn sm", onclick: () => openSlideout(null) }, icon("plus"), "Blank label");
+  const blank = h("button", { class: "btn sm", onclick: () => openOrderPage(null) }, icon("plus"), "Blank label");
   const printerChip = h("a", { class: "badge plain", href: "/settings#printing", "data-link": "", title: "Printer for this computer — change in Settings", style: { textDecoration: "none" } },
     icon("printer"), printSettings().labels === "zebra" ? "Zebra printer" : "Browser printing");
   const tabLink = (id, href, label) => h("a", { class: "tab" + (tab === id ? " active" : ""), href, "data-link": "" }, label);
@@ -75,23 +75,23 @@ export function renderShipping(main) {
   }).catch(() => {});
 
   const cleanups = [];
-  if (tab === "scan") cleanups.push(renderScan(body, { openSlideout: (o) => openSlideout(o) }));
+  if (tab === "scan") cleanups.push(renderScan(body, { openSlideout: (o) => openOrderPage(o, { list: [] }) }));
   else if (tab === "batches") renderBatches(body);
   else cleanups.push(renderQueue(body, params));
 
   // A ticket's "Ship" button links here with ?order=
   const preselect = params.get("order");
-  if (preselect) api(`/shipping/orders/${encodeURIComponent(preselect)}`).then(({ order }) => openSlideout(order, { ticketId: params.get("ticket") })).catch((e) => toast(e.message, true));
+  if (preselect) api(`/shipping/orders/${encodeURIComponent(preselect)}`).then(({ order }) => openOrderPage(order, { ticketId: params.get("ticket"), list: queueApi?.list() })).catch((e) => toast(e.message, true));
 
   return () => {
     cleanups.forEach((f) => f && f());
-    closeSlideout();
+    closeOrderPage(true);
   };
 }
 
 // ---------------------------------------------------------------- Queue
 
-let queueApi = null; // lets the slideout refresh the queue after buying a label
+let queueApi = null; // lets the order page refresh the queue after buying a label and step through it
 
 /** UPS numbers start with 1Z; everything else here is USPS. */
 const trackHref = (n) => (/^1Z/i.test(n) ? `https://www.ups.com/track?tracknum=${n}` : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}`);
@@ -191,7 +191,7 @@ function renderQueue(root, params) {
       mount(tableWrap, h("div", { class: "empty" }, h("h2", {}, "Couldn't load orders"), h("p", {}, e.message)));
     }
   };
-  queueApi = { reload: load };
+  queueApi = { reload: load, list: () => visible(), find: (id) => st.orders.find((x) => x.id === id) };
 
   let t;
   search.addEventListener("input", () => {
@@ -231,7 +231,7 @@ function renderQueue(root, params) {
         box.onclick = (e) => e.stopPropagation();
         box.onchange = () => { box.checked ? st.selected.add(o.id) : st.selected.delete(o.id); drawBulk(rows); tr.classList.toggle("sel", box.checked); };
         const a = o.shippingAddress || {};
-        const tr = h("tr", { class: "click" + (st.selected.has(o.id) ? " sel" : ""), tabindex: 0, onclick: () => openSlideout(o), onkeydown: (e) => { if (e.key === "Enter") openSlideout(o); } },
+        const tr = h("tr", { "data-order": o.id, class: "click" + (st.selected.has(o.id) ? " sel" : ""), tabindex: 0, onclick: () => openOrderPage(o), onkeydown: (e) => { if (e.key === "Enter") openOrderPage(o); } },
           h("td", { class: "chk" }, box),
           h("td", { class: "nowrap" }, h("b", {}, o.name), h("div", { class: "small muted", title: fullTime(o.createdAt) }, ago(o.createdAt))),
           h("td", {}, a.name || o.email || "—"),
@@ -378,36 +378,104 @@ function renderQueue(root, params) {
   return () => { queueApi = null; };
 }
 
-// ---------------------------------------------------------------- Slideout (one order)
+// ---------------------------------------------------------------- Order page (one order, full window)
 
-let slide = null;
+let page = null;
 
-function closeSlideout() {
-  if (!slide) return;
-  slide.remove();
-  document.removeEventListener("keydown", slide._esc);
-  slide = null;
+/** Removes ?order= from the address bar without leaving the Shipping page. */
+function dropOrderParam() {
+  const u = new URL(location.href);
+  if (!u.searchParams.has("order")) return;
+  u.searchParams.delete("order");
+  u.searchParams.delete("ticket");
+  history.replaceState(null, "", u.pathname + u.search + u.hash);
 }
 
-async function openSlideout(order, opts = {}) {
-  closeSlideout();
-  const panel = h("div", { class: "slide-body" });
-  slide = h("div", { class: "slideout", role: "dialog", "aria-label": order ? `Ship ${order.name}` : "New label" },
-    h("div", { class: "slide-scrim", onclick: closeSlideout }),
-    h("aside", { class: "slide-panel" },
-      h("div", { class: "slide-head" },
-        h("h2", {}, order ? `Ship ${order.name}` : "New label"),
-        h("button", { class: "btn ghost icon-only", "aria-label": "Close", onclick: closeSlideout }, icon("x"))),
-      panel));
-  slide._esc = (e) => { if (e.key === "Escape") closeSlideout(); };
-  document.addEventListener("keydown", slide._esc);
-  document.body.append(slide);
-  mount(panel, skeletonRows(4));
+function closeOrderPage(keepUrl = false) {
+  if (!page) return;
+  page.el.remove();
+  document.removeEventListener("keydown", page.keys, true);
+  document.body.classList.remove("order-open");
+  const id = page.orderId;
+  page = null;
+  if (keepUrl) return;
+  dropOrderParam();
+  // Back on the queue, land on the row of the order last looked at
+  const tr = [...document.querySelectorAll("tr[data-order]")].find((t) => t.dataset.order === id);
+  if (tr) { tr.focus({ preventScroll: true }); tr.scrollIntoView({ block: "nearest" }); }
+}
+
+const typing = (e) => /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+
+/**
+ * Full-window view of one order: ship-to, packages, service and the order itself, with
+ * previous/next through the orders listed in the queue (↑/↓ or K/J), Esc to close, Ctrl+P to buy.
+ */
+async function openOrderPage(order, opts = {}) {
+  const list = order ? opts.list ?? queueApi?.list() ?? [] : [];
+  const at = order ? list.findIndex((x) => x.id === order.id) : -1;
+  const go = (step) => {
+    const next = list[at + step];
+    if (next) openOrderPage(queueApi?.find(next.id) ?? next, { list }); // the queue's copy is fresher after a purchase
+  };
+  closeOrderPage(true);
+
+  if (order) {
+    const u = new URL(location.href);
+    u.searchParams.set("order", order.id);
+    if (opts.ticketId) u.searchParams.set("ticket", opts.ticketId);
+    else u.searchParams.delete("ticket");
+    history.replaceState(null, "", u.pathname + u.search);
+  }
+
+  const navBtn = (step, ic, label, key) => h("button", { class: "btn sm icon-only", "aria-label": label, title: `${label} (${key})`, disabled: at < 0 || !list[at + step], onclick: () => go(step) }, icon(ic));
+  const body = h("div", { class: "op-body" });
+  const scroller = h("div", { class: "op-scroll" }, body);
+  const el = h("div", { class: "order-page", role: "dialog", "aria-modal": "true", "aria-label": order ? `Order ${order.name}` : "New label" },
+    h("div", { class: "op-bar" },
+      h("nav", { class: "op-crumbs", "aria-label": "Breadcrumb" },
+        h("button", { class: "linkish", onclick: () => closeOrderPage() }, "Shipping"),
+        h("span", { class: "sep" }, "/"),
+        h("span", {}, order ? order.name : "New label")),
+      h("div", { class: "row op-nav" },
+        at >= 0 ? h("span", { class: "small muted op-count" }, `${at + 1} / ${list.length}`) : null,
+        at >= 0 ? navBtn(-1, "up", "Previous order", "↑") : null,
+        at >= 0 ? navBtn(1, "down", "Next order", "↓") : null,
+        h("button", { class: "btn sm", onclick: () => closeOrderPage() }, "Close", h("kbd", {}, "Esc")))),
+    scroller);
+
+  const keys = (e) => {
+    if (e.defaultPrevented) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      page?.buy?.();
+      return;
+    }
+    if (e.key === "Escape") {
+      if (document.querySelector(".pop, .modal")) return; // let an open menu or dialog close first
+      if (typing(e)) return e.target.blur();
+      e.preventDefault();
+      closeOrderPage();
+      return;
+    }
+    if (typing(e) || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); go(-1); }
+    if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); go(1); }
+  };
+  document.addEventListener("keydown", keys, true);
+  document.body.classList.add("order-open");
+  document.body.append(el);
+  page = { el, keys, buy: null, orderId: order?.id };
+  el.tabIndex = -1;
+  el.focus({ preventScroll: true });
+
+  mount(body, skeletonRows(6));
   let presets = [];
   try {
     presets = (await api("/shipping/presets")).presets;
   } catch { /* fine */ }
-  buildLabelForm(panel, order, presets, opts);
+  if (page?.el !== el) return; // moved on while loading
+  buildLabelForm(body, order, presets, { ...opts, list });
 }
 
 const WEIGHT_TO_LB = { POUNDS: 1, OUNCES: 1 / 16, KILOGRAMS: 2.20462, GRAMS: 0.00220462 };
@@ -533,6 +601,7 @@ function buildLabelForm(root, o, presets, opts) {
     && (!isIntl() || !!s.customs);
   const quote = (delay = 600) => {
     clearTimeout(timer);
+    drawTotalWeight();
     if (s.rate) s.wantCode = s.rate.serviceCode;
     if (!ready()) { s.rates = []; s.rate = null; drawRates(); return; }
     ratesEl.classList.add("refreshing");
@@ -717,101 +786,180 @@ function buildLabelForm(root, o, presets, opts) {
     if (note === null) return;
     await api("/shipping/holds", { method: "POST", body: { hold: !o.hold, note, orders: [{ id: o.id, name: o.name }] } });
     toast(o.hold ? "Released" : "On hold");
-    closeSlideout();
+    o.hold = o.hold ? null : note || "On hold";
     queueApi?.reload();
+    openOrderPage(o, opts);
   });
 
-  mount(root,
-    o ? h("div", { class: "slide-summary" },
-      h("div", { class: "row", style: { justifyContent: "space-between" } },
-        h("div", { class: "small muted" }, `${shortDate(o.createdAt)} · ${money(o.totalPriceSet.shopMoney.amount, o.totalPriceSet.shopMoney.currencyCode)} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}`),
-        h("div", { class: "row" },
-          h("button", { class: "btn sm", onclick: () => openPackingSlips([o.id]) }, "Packing slip"),
-          holdBtn,
-          h("a", { class: "btn sm ghost", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Shopify", icon("ext")))),
-      o.hold ? h("div", { class: "notice bad", style: { marginTop: "10px" } }, `On hold: ${o.hold}`) : null,
-      h("div", { class: "paid-line" },
-        h("div", {}, h("div", { class: "lbl" }, "Customer chose"), h("b", {}, o.requestedService || "—")),
-        h("div", {}, h("div", { class: "lbl" }, "Customer paid for shipping"), h("b", {}, money(paid, "USD")))),
-      plan?.rules?.matched?.length ? h("div", { class: "notice info", style: { marginTop: "10px" } }, icon("spark"), " Rules applied: ", plan.rules.matched.join(" · ")) : null,
-      plan?.source === "learned" ? h("div", { class: "notice", style: { marginTop: "10px" } }, icon("spark"), " ",
-        (plan.boxes?.length ?? 1) > 1 ? `Packed like last time these exact items shipped: ${plan.boxes.length} boxes, same split and weights.` : "Box and weight remembered from the last time these exact items shipped.") : null,
-      plan?.source === "learned-similar" ? h("div", { class: "notice", style: { marginTop: "10px" } }, icon("spark"), " Box remembered from an order with the same products in different quantities — check the weight.") : null,
-      split() ? null : h("div", { class: "stack", style: { marginTop: "12px" } }, o.lineItems.nodes.map((l) =>
-        h("div", { class: "line" },
-          l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
-          h("div", { style: { minWidth: 0 } }, h("div", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
-          h("span", { class: "qty" }, `× ${l.quantity}`))))) : h("p", { class: "muted small" }, "Not linked to an order — for replacements, samples, etc."),
-    h("h3", { class: "section" }, "Ship to"),
+  // ---- Layout: summary + buy across the top, ship-to/service | packages, then items/customs; order details on the right
+  const buyEl = h("div", { class: "card op-buy" });
+  const amount = (set) => (set?.shopMoney ? Number(set.shopMoney.amount) : null);
+  const cur = o?.totalPriceSet.shopMoney.currencyCode ?? "USD";
+  const kv = (label, value) => (value === null || value === undefined || value === "" ? null : h("div", { class: "kv" }, h("span", {}, label), h("b", {}, value)));
+  const totalWeightEl = h("span", { class: "small muted" });
+  const drawTotalWeight = () => {
+    const w = s.parcels.reduce((n, p) => n + (+p.weight || 0), 0);
+    totalWeightEl.textContent = w > 0 ? `Total ${lbOz(w)}${split() ? ` · ${s.parcels.length} boxes` : ""}` : "";
+  };
+  const items = o?.lineItems.nodes ?? [];
+  const notices = [
+    o?.hold ? h("div", { class: "notice bad" }, `On hold: ${o.hold}`) : null,
+    o?.hasLabel ? h("div", { class: "notice" }, "This order already has a label. Buying another one ships it again.") : null,
+    plan?.rules?.matched?.length ? h("div", { class: "notice info" }, icon("spark"), " Rules applied: ", plan.rules.matched.join(" · ")) : null,
+    plan?.source === "learned" ? h("div", { class: "notice" }, icon("spark"), " ",
+      (plan.boxes?.length ?? 1) > 1 ? `Packed like last time these exact items shipped: ${plan.boxes.length} boxes, same split and weights.` : "Box and weight remembered from the last time these exact items shipped.") : null,
+    plan?.source === "learned-similar" ? h("div", { class: "notice" }, icon("spark"), " Box remembered from an order with the same products in different quantities — check the weight.") : null,
+  ].filter(Boolean);
+
+  const shipTo = h("section", { class: "card op-card" },
+    h("div", { class: "op-card-head" }, h("h3", {}, "Ship to"), o ? h("span", { class: "small muted" }, "Changes apply to this label only") : null),
     addrEl,
     h("div", { class: "stack" },
       h("div", { class: "grid2" }, field("Name", "name"), field("Company", "company")),
-      h("div", { class: "grid2" }, field("Address", "address1"), field("Apt / suite", "address2")),
-      h("div", { class: "grid4" }, field("City", "city"), field("State", "state", { maxlength: 2 }), field("ZIP", "zip"), field("Country", "country", { maxlength: 2 })),
-      h("div", { class: "grid2" }, field("Phone", "phone"), (() => {
-        const r = h("input", { type: "checkbox", checked: s.to.residential });
-        resBox = r;
-        r.onchange = () => { s.to.residential = r.checked; resTouched = true; quote(0); };
-        return h("label", { class: "check", style: { alignSelf: "end", paddingBottom: "8px" } }, r, "Residential address");
-      })())),
-    h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "baseline" } },
-      h("h3", { class: "section" }, "Packages"),
-      h("span", { class: "small muted" }, "Too much for one box? Add boxes — each gets its own label and tracking number.")),
+      field("Address", "address1"),
+      h("div", { class: "grid2" }, field("Apt / suite", "address2"), field("Phone", "phone")),
+      h("div", { class: "grid-addr" }, field("City", "city"), field("State", "state", { maxlength: 2 }), field("ZIP", "zip"), field("Country", "country", { maxlength: 2 })),
+      h("div", { class: "row", style: { justifyContent: "space-between" } },
+        (() => {
+          const r = h("input", { type: "checkbox", checked: s.to.residential });
+          resBox = r;
+          r.onchange = () => { s.to.residential = r.checked; resTouched = true; quote(0); };
+          return h("label", { class: "check" }, r, "Residential address");
+        })(),
+        h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel))));
+
+  const packages = h("section", { class: "card op-card" },
+    h("div", { class: "op-card-head" }, h("h3", {}, "Packages"), totalWeightEl),
     parcelsEl,
-    h("div", { class: "row", style: { marginTop: "10px" } },
-      h("label", { class: "field", style: { minWidth: "220px" } }, "Delivery signature", sigSel),
-      h("button", { class: "btn sm", style: { alignSelf: "end" }, onclick: addBox }, icon("plus"), "Add a box")),
-    allocEl,
-    customsEl,
-    ratesEl);
+    h("div", { class: "row", style: { marginTop: "10px", justifyContent: "space-between" } },
+      h("button", { class: "btn sm", onclick: addBox }, icon("plus"), "Add another box"),
+      h("span", { class: "small muted" }, "Each box gets its own label and tracking number.")),
+    allocEl);
+
+  const service = h("section", { class: "card op-card" }, ratesEl);
+
+  const noteCard = o?.note ? h("section", { class: "card op-card" }, h("h3", {}, "Order note"), h("p", { class: "op-note" }, o.note)) : null;
+
+  const a = o?.shippingAddress || {};
+  const aside = o ? h("aside", { class: "op-aside" },
+    h("section", { class: "card op-card" },
+      h("h3", {}, "Order summary"),
+      kv("Order", o.name),
+      kv("Placed", fullTime(o.createdAt)),
+      kv("Customer", a.name || null),
+      kv("Email", o.email ? h("a", { href: `mailto:${o.email}` }, o.email) : null),
+      kv("Phone", o.phone || a.phone || null),
+      kv("Payment", o.displayFinancialStatus ? o.displayFinancialStatus.replace(/_/g, " ").toLowerCase() : null),
+      kv("Customer chose", o.requestedService || "—"),
+      o.tags?.length ? h("div", { class: "op-tags" }, o.tags.map((t) => h("span", { class: "badge plain" }, t))) : null,
+      h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
+        h("button", { class: "btn sm", onclick: () => openPackingSlips([o.id]) }, "Packing slip"),
+        holdBtn,
+        h("a", { class: "btn sm ghost", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Shopify", icon("ext")))),
+    h("section", { class: "card op-card" },
+      h("h3", {}, "Payment summary"),
+      kv("Products", amount(o.subtotalPriceSet) !== null ? money(amount(o.subtotalPriceSet) + (amount(o.totalDiscountsSet) ?? 0), cur) : null),
+      amount(o.totalDiscountsSet) ? kv("Discounts", `−${money(amount(o.totalDiscountsSet), cur)}`) : null,
+      kv("Shipping paid", money(paid, cur)),
+      amount(o.totalTaxSet) !== null ? kv("Tax", money(amount(o.totalTaxSet), cur)) : null,
+      h("div", { class: "kv total" }, h("span", {}, "Total"), h("b", {}, money(o.totalPriceSet.shopMoney.amount, cur)))),
+    h("section", { class: "card op-card" },
+      h("h3", {}, `Order items · ${o.itemCount}`),
+      h("div", { class: "stack" }, items.map((l) => {
+        const each = amount(l.discountedUnitPriceAfterAllDiscountsSet);
+        return h("div", { class: "line" },
+          l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
+          h("div", { style: { minWidth: 0 } }, h("div", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
+          h("div", { class: "qty" }, `× ${l.quantity}`, each !== null ? h("div", { class: "small" }, money(each * l.quantity, cur)) : null));
+      })))) : null;
+
+  mount(root,
+    h("div", { class: "op-title" },
+      h("div", { style: { minWidth: 0 } },
+        h("h1", {}, o ? o.name : "New label",
+          o?.priority ? h("span", { class: "badge warn plain" }, "Priority") : null,
+          o?.international ? h("span", { class: "badge plain" }, `International · ${a.countryCodeV2}`) : null,
+          o?.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null),
+        h("div", { class: "small muted" }, o ? `${shortDate(o.createdAt)} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"} · ${money(o.totalPriceSet.shopMoney.amount, cur)}` : "Not linked to an order — for replacements, samples, etc."))),
+    h("div", { class: "op-grid" + (aside ? "" : " solo") },
+      h("div", { class: "op-main" },
+        buyEl,
+        notices.length ? h("div", { class: "stack" }, notices) : null,
+        h("div", { class: "op-cols" },
+          h("div", { class: "op-col" }, shipTo, noteCard),
+          h("div", { class: "op-col" }, packages, service)),
+        customsEl),
+      aside));
+
+  // The bar at the top: chosen service, cost, margin and the buy button (Ctrl+P)
+  function drawBuyBar() {
+    if (s.bought) return;
+    const fulfill = s.fulfillBox ??= h("input", { type: "checkbox", checked: !!o });
+    const notify = s.notifyBox ??= h("input", { type: "checkbox", checked: true });
+    const r = s.rate;
+    const buy = h("button", { class: "btn primary op-buy-btn", disabled: !r },
+      icon("printer"), r ? (split() ? `Buy ${s.parcels.length} labels & print` : "Buy & print label") : "Pick a service", r ? h("kbd", {}, navigator.platform?.startsWith("Mac") ? "⌘P" : "Ctrl+P") : null);
+    buy.onclick = busy(buy, () => purchase(fulfill.checked, notify.checked));
+    if (page) page.buy = () => (r && !buy.disabled ? buy.click() : toast(ready() ? "Pick a service first" : "Finish the address, box and weight first", true));
+    const m = r && paid !== null ? paid - r.total : null;
+    mount(buyEl,
+      h("div", { class: "op-buy-main" },
+        h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Service"), h("b", {}, r ? r.serviceName : "—"),
+          r?.days ? h("div", { class: "small muted" }, `Est. ${r.days} business day${r.days > 1 ? "s" : ""}`) : null),
+        h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, split() ? `Labels (${s.parcels.length})` : "Label"), h("b", {}, r ? money(r.total, r.currency) : "—")),
+        paid !== null ? h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Customer paid"), h("b", {}, money(paid, "USD"))) : null,
+        m !== null ? h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Margin"), h("b", { class: "margin " + (m >= 0 ? "pos" : "neg") }, marginText(m))) : null,
+        buy),
+      h("div", { class: "op-buy-opts" },
+        o ? h("label", { class: "check" }, fulfill, "Mark fulfilled in Shopify") : null,
+        o ? h("label", { class: "check" }, notify, "Email the customer their tracking") : null,
+        h("span", { class: "small muted", style: { marginLeft: "auto" } }, printSettings().labels === "zebra" ? "Prints to your Zebra printer" : "Opens the 4×6 label to print")));
+  }
+
+  async function purchase(fulfill, notify) {
+    if (!s.rate) return;
+    if (isIntl() && customsProblems().length) { toast(customsProblems()[0], true); customsEl.scrollIntoView({ behavior: "smooth" }); return; }
+    if (isIntl() && !s.to.phone?.trim()) { toast("Add the customer's phone number — carriers need it for international shipments", true); inputs.phone?.focus(); return; }
+    if (s.addr?.status === "invalid" && !confirm("The carrier couldn't find this address. Buy the label anyway?")) return;
+    if (s.addr?.status === "corrected" && !confirm("There's a suggested correction for this address you haven't used. Buy with the address as typed?")) return;
+    if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
+      && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
+    const win = reserveWindow();
+    try {
+      const r = await api("/shipping/labels", {
+        method: "POST",
+        body: {
+          orderId: o?.id, ticketId: opts.ticketId ? Number(opts.ticketId) : undefined, to: s.to, parcels: s.parcels.map(cleanParcel),
+          presetId: s.parcels.length === 1 && s.parcels[0].preset ? Number(s.parcels[0].preset) : undefined,
+          serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal,
+          labelFormat: labelFormat(), fulfill, notifyCustomer: notify, signature: s.signature || undefined, batchId: newBatchId(),
+          customs: isIntl() ? s.customs : undefined,
+        },
+      });
+      await printLabels({ ids: [r.id] }, win).catch((e) => toast(e.message, true));
+      showPurchased(r);
+      if (o) o.hasLabel = true;
+      queueApi?.reload();
+    } catch (e) {
+      win?.close();
+      throw e;
+    }
+  }
 
   function drawRates() {
+    drawTotalWeight();
+    drawBuyBar();
     if (!s.rates.length) {
-      return mount(ratesEl, ready() ? null : h("div", { class: "notice", style: { marginTop: "16px" } },
-        s.parcels.some((p) => !(+p.weight > 0)) ? "Enter the weight to see rates and your margin." : "Finish the address and box size to see rates."));
+      return mount(ratesEl, h("div", { class: "op-card-head" }, h("h3", {}, "Service")), ready() ? null : h("div", { class: "notice" },
+        s.parcels.some((p) => !(+p.weight > 0)) ? "Enter the weight to see rates and your margin." : isIntl() && !s.customs ? "Fill in customs to see rates." : "Finish the address and box size to see rates."));
     }
     const cheapest = Math.min(...s.rates.map((r) => r.total));
     const timed = s.rates.filter((r) => r.days);
     const fastestDays = timed.length ? Math.min(...timed.map((r) => r.days)) : null;
     const best = paid !== null ? Math.max(...s.rates.map((r) => paid - r.total)) : null;
-    const fulfill = h("input", { type: "checkbox", checked: !!o });
-    const notify = h("input", { type: "checkbox", checked: true });
-    const buy = h("button", { class: "btn primary", style: { height: "40px", padding: "0 18px" } });
-    const drawBuy = () => buy.replaceChildren(icon("printer"), s.rate
-      ? `Buy ${split() ? `${s.parcels.length} labels` : "& print"} · ${money(s.rate.total, s.rate.currency)}${paid !== null ? ` · ${marginText(paid - s.rate.total)}` : ""}`
-      : "Pick a service");
-    drawBuy();
-    buy.onclick = busy(buy, async () => {
-      if (!s.rate) return;
-      if (isIntl() && customsProblems().length) { toast(customsProblems()[0], true); customsEl.scrollIntoView({ behavior: "smooth" }); return; }
-      if (isIntl() && !s.to.phone?.trim()) { toast("Add the customer's phone number — carriers need it for international shipments", true); inputs.phone?.focus(); return; }
-            if (s.addr?.status === "invalid" && !confirm("The carrier couldn't find this address. Buy the label anyway?")) return;
-      if (s.addr?.status === "corrected" && !confirm("There's a suggested correction for this address you haven't used. Buy with the address as typed?")) return;
-      if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
-        && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
-      const win = reserveWindow();
-      try {
-        const r = await api("/shipping/labels", {
-          method: "POST",
-          body: {
-            orderId: o?.id, ticketId: opts.ticketId ? Number(opts.ticketId) : undefined, to: s.to, parcels: s.parcels.map(cleanParcel),
-            presetId: s.parcels.length === 1 && s.parcels[0].preset ? Number(s.parcels[0].preset) : undefined,
-            serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal,
-            labelFormat: labelFormat(), fulfill: fulfill.checked, notifyCustomer: notify.checked, signature: s.signature || undefined, batchId: newBatchId(),
-            customs: isIntl() ? s.customs : undefined,
-          },
-        });
-        await printLabels({ ids: [r.id] }, win).catch((e) => toast(e.message, true));
-        showPurchased(r);
-        queueApi?.reload();
-      } catch (e) {
-        win?.close();
-        throw e;
-      }
-    });
-    mount(ratesEl, h("div", { class: "rates-card" },
-      h("div", { class: "row", style: { justifyContent: "space-between", marginBottom: "8px" } },
-        h("h3", { class: "section", style: { margin: 0 } }, "Service", split() ? h("span", { class: "small muted", style: { fontWeight: 500 } }, ` · ${s.parcels.length} boxes, one shipment`) : null),
+    mount(ratesEl,
+      h("div", { class: "op-card-head" },
+        h("h3", {}, "Service", split() ? h("span", { class: "small muted", style: { fontWeight: 500 } }, ` · ${s.parcels.length} boxes, one shipment`) : null),
         h("div", { class: "row", style: { gap: "8px" } },
           paid !== null ? h("span", { class: "small muted" }, `Margin = ${money(paid, "USD")} paid − label`) : null,
           h("button", { class: "btn sm ghost icon-only", title: "Refresh rates", "aria-label": "Refresh rates", onclick: () => quote(0) }, icon("refresh")))),
@@ -834,16 +982,20 @@ function buildLabelForm(root, o, presets, opts) {
           h("div", { class: "price-col" },
             h("div", { class: "price" }, money(r.total, r.currency), r.listTotal > r.total ? h("span", { class: "list" }, money(r.listTotal, r.currency)) : null),
             margin !== null ? h("div", { class: "margin " + (margin >= 0 ? "pos" : "neg"), title: margin === best ? "Best margin" : null }, `${marginText(margin)} margin`) : null));
-      })),
-      h("div", { class: "stack", style: { marginTop: "14px" } },
-        o ? h("label", { class: "check" }, fulfill, "Mark the order fulfilled in Shopify with this tracking number") : null,
-        o ? h("label", { class: "check" }, notify, "Email the customer their shipping confirmation (Shopify)") : null),
-      h("div", { class: "buy-bar" }, h("span", { class: "small muted" }, printSettings().labels === "zebra" ? "Prints to your Zebra printer" : "Opens the 4×6 label to print"), buy)));
+      })));
   }
 
   function showPurchased(r) {
+    s.bought = true;
+    if (page) page.buy = () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true));
     const boxes = s.parcels.map(cleanParcel);
-    mount(ratesEl, h("div", { class: "card success-card fade-in" },
+    const nextUp = (() => {
+      const list = opts.list ?? [];
+      const i = o ? list.findIndex((x) => x.id === o.id) : -1;
+      return i >= 0 ? list.slice(i + 1).find((x) => !x.hasLabel && !(queueApi?.find(x.id)?.hasLabel)) : null;
+    })();
+    buyEl.classList.add("done");
+    mount(buyEl, h("div", { class: "success-card fade-in" },
       h("h2", {}, split() ? `${s.parcels.length} labels bought` : "Label bought"),
       h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}${paid !== null ? ` · margin ${marginText(paid - r.cost)}` : ""}`),
       r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
@@ -852,12 +1004,15 @@ function buildLabelForm(root, o, presets, opts) {
       r.forms ? h("div", { class: "notice", style: { marginTop: "12px" } }, `Customs paperwork: print ${r.forms > 1 ? "these" : "this"} and put 3 copies in a clear pouch on the box (skip if UPS Paperless Invoice is on for your account).`,
         h("div", { class: "row", style: { marginTop: "8px" } }, Array.from({ length: r.forms }, (_, n) => h("a", { class: "btn sm", href: `/api/shipping/labels/${r.id}/forms/${n}`, target: "_blank", rel: "noopener" }, icon("printer"), r.forms > 1 ? `Customs form ${n + 1}` : "Print customs form")))) : null,
       h("div", { class: "row", style: { marginTop: "16px" } },
-        h("button", { class: "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
+        nextUp ? h("button", { class: "btn primary", onclick: () => openOrderPage(queueApi?.find(nextUp.id) ?? nextUp, { list: opts.list }) }, "Next order", h("span", { style: { opacity: 0.75 } }, nextUp.name), icon("down")) : null,
+        h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
         split() && o ? h("button", { class: "btn", onclick: () => printBoxSlips(o, boxes, r.trackingNumbers) }, "Box contents slips") : null,
-        opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: closeSlideout }, "Back to ticket") : null,
-        h("button", { class: "btn", onclick: closeSlideout }, "Done"))));
+        opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
+        h("button", { class: "btn", onclick: () => closeOrderPage() }, "Done"))));
+    buyEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  drawRates();
   quote(0);
   verifySoon(0);
   if (isIntl()) loadCustoms();
