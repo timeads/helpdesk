@@ -1175,3 +1175,48 @@ body.order-open { overflow: hidden; }
 .brand-logo { width: 0; min-width: 100%; height: auto; aspect-ratio: 587 / 580; display: block; filter: drop-shadow(0 2px 6px rgba(0,0,0,.25)); }
 @media (max-width: 1240px) { .brand { width: auto; gap: 0; } .sidebar .brand .brand-logo { width: 40px; min-width: 0; } }
 .login-logo { width: 120px; height: auto; display: block; margin: 0 auto 6px; }
+
+/* ---------- Repair manual ---------- */
+.manual-status { display: flex; align-items: center; gap: 14px; padding: 14px 16px; margin-bottom: 16px; }
+.manual-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+.manual-side { position: sticky; top: 12px; display: grid; gap: 10px; max-height: calc(100vh - 24px); overflow: auto; min-width: 0; }
+.manual-group { display: grid; gap: 2px; margin-bottom: 8px; }
+.manual-group .nav-label { color: var(--text-3); padding: 6px 10px 2px; }
+.manual-item { display: grid; gap: 2px; padding: 8px 10px; border-radius: var(--radius-sm); text-decoration: none; color: var(--text); }
+.manual-item:hover { background: var(--sunken); }
+.manual-item.active { background: var(--surface); box-shadow: var(--shadow-sm); border: 1px solid var(--border); padding: 7px 9px; }
+.manual-item-title { font-weight: 600; font-size: 13.5px; line-height: 1.3; }
+.manual-topic { padding: 22px 24px; }
+.manual-back { display: none; align-items: center; gap: 4px; color: var(--text-2); text-decoration: none; margin-bottom: 8px; }
+.lbl-product { font: 700 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ochre-text); margin-bottom: 4px; }
+.manual-topic .manual-title { font: 800 22px/1.25 var(--ui); margin: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.manual-title .badge { font-size: 11.5px; }
+.manual-body { font-size: 14.5px; line-height: 1.6; max-width: 72ch; }
+.manual-body h2, .manual-body h3 { font: 700 15.5px var(--ui); margin: 20px 0 6px; }
+.manual-body h4 { font: 700 14px var(--ui); margin: 14px 0 4px; }
+.manual-body ol, .manual-body ul { padding-left: 22px; margin: 6px 0 10px; }
+.manual-body li { margin: 4px 0; }
+.manual-body p { margin: 6px 0 10px; }
+.manual-body code { background: var(--sunken); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+.manual-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+.manual-section h3 { font: 700 15px var(--ui); margin: 0 0 12px; }
+.manual-media { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.manual-media figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+.manual-media img, .manual-media video { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); background: #000; cursor: zoom-in; }
+.manual-media video { cursor: auto; object-fit: contain; }
+.manual-media .caption { height: 32px; min-height: 32px; font-size: 12.5px; padding: 4px 8px; }
+.manual-cases { display: grid; }
+.manual-case { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 4px; border-top: 1px solid var(--border); color: var(--text); text-decoration: none; }
+.manual-case:hover { background: var(--sunken); }
+.manual-case .badge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manual-empty ol { padding-left: 20px; line-height: 1.6; }
+@media (max-width: 900px) {
+  .manual-layout { grid-template-columns: minmax(0, 1fr); }
+  .manual-side { position: static; max-height: none; }
+  .manual-layout.has-topic .manual-side { display: none; }
+  .manual-layout:not(.has-topic) .manual-detail { display: none; }
+  .manual-back { display: inline-flex; }
+  .manual-topic { padding: 16px; }
+  .manual-case { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .manual-status { flex-wrap: wrap; }
+}

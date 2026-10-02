@@ -772,16 +772,26 @@ tickets.get("/:id{[0-9]+}/messages/:mid{[0-9]+}/attachments/:aid", async (c) => 
   const meta = (JSON.parse(m.attachments) as { id: string; filename: string; mimeType: string }[]).find((a) => a.id === c.req.param("aid"));
   if (!meta) throw new HttpError(404, "Attachment not found");
   const data = await getAttachment(c.env, m.gmail_message_id, meta.id);
-  const inline = /^(image\/|application\/pdf)/.test(meta.mimeType) && c.req.query("download") === undefined;
-  return new Response(base64UrlDecodeBytes(data), {
-    headers: {
-      "content-type": meta.mimeType,
-      "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.filename)}`,
-      "cache-control": "private, max-age=3600",
-      "x-content-type-options": "nosniff",
-      "content-security-policy": "sandbox",
-    },
-  });
+  const inline = /^(image\/|video\/|application\/pdf)/.test(meta.mimeType) && c.req.query("download") === undefined;
+  const bytes = base64UrlDecodeBytes(data);
+  const headers: Record<string, string> = {
+    "content-type": meta.mimeType,
+    "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.filename)}`,
+    "cache-control": "private, max-age=3600",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "sandbox",
+    "accept-ranges": "bytes",
+  };
+  // Videos play in the repair manual; Safari asks for byte ranges
+  const range = /^bytes=(\d*)-(\d*)$/.exec(c.req.header("range") ?? "");
+  if (range && (range[1] || range[2])) {
+    const size = bytes.length;
+    let start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    let end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size || start > end) return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+    return new Response(bytes.slice(start, end + 1), { status: 206, headers: { ...headers, "content-range": `bytes ${start}-${end}/${size}` } });
+  }
+  return new Response(bytes, { headers });
 });
 
 tickets.post("/sync", async (c) => c.json(await syncMailbox(c.env)));

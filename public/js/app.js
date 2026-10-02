@@ -4,6 +4,7 @@ import { renderInbox } from "./inbox.js";
 import { renderShipping } from "./shipping.js";
 import { renderSettings } from "./settings.js";
 import { renderAnalytics } from "./analytics.js";
+import { renderManual } from "./manual.js";
 
 export const state = { me: null, appName: "Support", agents: [], counts: {}, views: [] };
 const root = document.getElementById("app");
@@ -94,6 +95,7 @@ function renderNav() {
       ]) : null),
     h("div", { class: "nav-label" }, "Store"),
     item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), undefined, " ship-view"),
+    item("/manual", "Repair manual", "Manual", "wrench", path.startsWith("/manual"), undefined, " ship-view"),
     item("/settings", "Settings", "Settings", "settings", path.startsWith("/settings")),
     h("div", { class: "spacer" }),
     h("div", { class: "me" },
@@ -123,7 +125,7 @@ let section = null;
 function route() {
   renderNav();
   const path = location.pathname;
-  const next = path.startsWith("/shipping") ? "shipping" : path.startsWith("/settings") ? "settings" : path.startsWith("/dashboard") || path.startsWith("/analytics") ? "analytics" : "inbox";
+  const next = path.startsWith("/shipping") ? "shipping" : path.startsWith("/manual") ? "manual" : path.startsWith("/settings") ? "settings" : path.startsWith("/dashboard") || path.startsWith("/analytics") ? "analytics" : "inbox";
   // Moving between tickets keeps the inbox mounted; anything else re-renders
   if (next !== "inbox" || section !== "inbox") {
     if (cleanup) cleanup();
@@ -134,6 +136,7 @@ function route() {
   if (next === "shipping") cleanup = renderShipping(mainEl);
   else if (next === "analytics") cleanup = renderAnalytics(mainEl);
   else if (next === "settings") cleanup = renderSettings(mainEl);
+  else if (next === "manual") cleanup = renderManual(mainEl);
   else cleanup = renderInbox(mainEl);
 }
 

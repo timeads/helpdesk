@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
 import { HttpError } from "./util";
+import { manualKnowledge } from "./manual";
 
 export const aiConfigured = (env: Env) => !!env.ANTHROPIC_API_KEY;
 
@@ -82,9 +83,10 @@ async function knowledgeText(env: Env): Promise<string> {
     name: string;
     content: string;
   }>();
-  if (!results.length) return "";
+  const repairs = await manualKnowledge(env).catch(() => "");
+  if (!results.length) return repairs;
   await env.DB.prepare(`UPDATE knowledge SET uses = uses + 1 WHERE id IN (${results.map(() => "?").join(",")})`).bind(...results.map((r) => r.id)).run();
-  return results.map((r) => `## ${r.name}\n${r.content}`).join("\n\n").slice(0, 40000);
+  return [results.map((r) => `## ${r.name}\n${r.content}`).join("\n\n").slice(0, 40000), repairs].filter(Boolean).join("\n\n");
 }
 
 export interface Insights {
