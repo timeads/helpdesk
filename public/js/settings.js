@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { state } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
-import { printSettings, savePrintSettings, testZebra, zebraPrinter } from "./printing.js";
+import { printSettings, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
 import { slipCard } from "./settings-slip.js";
 import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
@@ -240,7 +240,17 @@ function printing() {
       h("h3", { class: "section", style: { margin: 0 } }, "Shipping labels"),
       radio("labels", "zebra", "Zebra thermal printer", "Labels print straight to the Zebra with no dialog. Needs Zebra Browser Print (free) installed and running on this computer."),
       radio("labels", "browser", "Browser print dialog", "Opens a 4×6 label page — print it to any printer."),
-      h("div", { class: "row" }, find, test, status),
+      h("div", { class: "row" }, find, test, (() => {
+        const b = h("button", { class: "btn" }, "Check connection");
+        b.onclick = busy(b, async () => {
+          status.replaceChildren(h("span", { class: "muted" }, "Checking…"));
+          const steps = await zebraDiagnostics();
+          status.replaceChildren(h("div", { class: "stack", style: { gap: "4px" } }, steps.map((x) =>
+            h("div", { class: "small", style: { color: x.ok ? "var(--mint-ink)" : "var(--brick)" } }, x.ok ? "✓ " : "✗ ", x.text))));
+        });
+        return b;
+      })()),
+      status,
       h("p", { class: "small muted", style: { margin: 0 } },
         "Setup: install Zebra Browser Print from ", h("a", { href: "https://www.zebra.com/us/en/support-downloads/software/printer-software/browser-print.html", target: "_blank", rel: "noopener" }, "zebra.com"),
         ", set your ZT220 as its default printer, then open ", h("a", { href: "https://localhost:9101/ssl_support", target: "_blank", rel: "noopener" }, "localhost:9101/ssl_support"), " once and accept it so this page can talk to it."),

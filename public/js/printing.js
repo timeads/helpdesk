@@ -23,36 +23,103 @@ export const labelFormat = () => (printSettings().labels === "zebra" ? "ZPL" : "
 
 // Browser Print listens on https://localhost:9101 (and http://localhost:9100).
 const AGENTS = ["https://localhost:9101", "http://localhost:9100"];
+let goodAgent = null; // the address that answered last time, tried first
+
+const why = (e) =>
+  e instanceof TypeError
+    ? "the browser couldn't connect — Browser Print isn't running, or Chrome is blocking this site from talking to apps on this computer"
+    : e?.message || String(e);
 
 async function agentFetch(path, init) {
-  let lastError;
-  for (const base of AGENTS) {
+  const order = goodAgent ? [goodAgent, ...AGENTS.filter((a) => a !== goodAgent)] : AGENTS;
+  const errors = [];
+  for (const base of order) {
     try {
       const res = await fetch(base + path, init);
-      if (res.ok) return res;
-      lastError = new Error(`Zebra Browser Print answered ${res.status}`);
+      if (res.ok) { goodAgent = base; return res; }
+      errors.push(`${base.replace(/^https?:\/\//, "")}: answered ${res.status}`);
     } catch (e) {
-      lastError = e;
+      errors.push(`${base.replace(/^https?:\/\//, "")}: ${why(e)}`);
     }
   }
-  throw new Error(
-    "Can't reach Zebra Browser Print on this computer. Make sure it's installed and running" +
-      (lastError?.message ? ` (${lastError.message})` : ""),
-  );
+  const err = new Error(errors.join("; "));
+  err.agentDown = true;
+  throw err;
 }
 
 export async function zebraPrinter() {
-  const res = await agentFetch("/default?type=printer");
+  let res;
+  try {
+    res = await agentFetch("/default?type=printer");
+  } catch (e) {
+    throw new Error(`Can't reach Zebra Browser Print on this computer. Check that it's running (its icon is in the system tray / menu bar). Details: ${e.message}`);
+  }
   const text = await res.text();
   if (!text.trim()) throw new Error("Zebra Browser Print is running but has no default printer — pick one in its settings");
   return JSON.parse(text);
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Sends ZPL to the default Zebra one label at a time (big jobs in one request can fail), retrying a label once. */
 export async function sendZpl(zpl) {
   const device = await zebraPrinter();
-  // text/plain keeps this a "simple" request (no CORS preflight), as Zebra's own library does
-  await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device, data: zpl }) });
+  const jobs = zpl.match(/\^XA[\s\S]*?\^XZ/g) ?? [zpl];
+  for (const [i, job] of jobs.entries()) {
+    const body = JSON.stringify({ device, data: job });
+    let sent = false;
+    let last;
+    for (let attempt = 0; attempt < 2 && !sent; attempt++) {
+      try {
+        // text/plain keeps this a "simple" request (no CORS preflight), as Zebra's own library does
+        await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body });
+        sent = true;
+      } catch (e) {
+        last = e;
+        await sleep(800);
+      }
+    }
+    if (!sent) {
+      const kb = Math.round(body.length / 1024);
+      throw new Error(`Found ${device.name || "the Zebra"} but couldn't send ${jobs.length > 1 ? `label ${i + 1} of ${jobs.length}` : "the label"} (${kb} KB)${i ? ` — the first ${i} printed` : ""}. Details: ${last?.message}`);
+    }
+    if (jobs.length > 1) await sleep(150); // let the printer take each one
+  }
   return device;
+}
+
+/** Settings → "Check connection": each step on its own, so a failure says where it is. */
+export async function zebraDiagnostics() {
+  const out = [];
+  for (const base of AGENTS) {
+    try {
+      const r = await fetch(`${base}/default?type=printer`);
+      out.push({ ok: r.ok, text: `${base.replace(/^https?:\/\//, "")} ${r.ok ? "answers" : `answered ${r.status}`}` });
+    } catch (e) {
+      out.push({ ok: false, text: `${base.replace(/^https?:\/\//, "")}: ${why(e)}` });
+    }
+  }
+  let device;
+  try {
+    device = await zebraPrinter();
+    out.push({ ok: true, text: `Default printer: ${device.name || "found"}` });
+  } catch (e) {
+    out.push({ ok: false, text: e.message });
+    return out;
+  }
+  // a packing-slip-sized job (a blank graphic) that prints nothing visible but tests a large send
+  try {
+    const { bitsToGfa } = await import("./zpl.js");
+    const w = 812, h = 400;
+    const bits = new Uint8Array(w * h);
+    for (let i = 0; i < bits.length; i += 3) bits[i] = (i % 7) === 0 ? 1 : 0; // noisy, so it doesn't compress away
+    const job = `^XA^PW812^LL1218^LH0,0${bitsToGfa(bits, w, h).replace("^FO0,0", "^FO0,2000")}^XZ`; // placed past the label, so nothing prints
+    await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device, data: job }) });
+    out.push({ ok: true, text: `Sent a ${Math.round(job.length / 1024)} KB test job (a short blank label may feed)` });
+  } catch (e) {
+    out.push({ ok: false, text: `Sending a packing-slip-sized job failed: ${e.message}` });
+  }
+  return out;
 }
 
 /** Opens a blank tab immediately (inside the click) so pop-up blockers allow it; navigate it later. */
