@@ -52,14 +52,17 @@ function validAddress(a: Address): Address {
 const validSignature = (s: unknown): Signature => (s === "standard" || s === "adult" ? s : null);
 const labelFormat = (f: unknown): "GIF" | "ZPL" => (f === "ZPL" ? "ZPL" : "GIF");
 
+/** Today's date where the store is (Philadelphia), as YYYY-MM-DD. */
+const storeToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+
 async function holdsFor(env: Env, ids: string[]) {
-  const map = new Map<string, { status: string; note: string }>();
+  const map = new Map<string, { status: string; note: string; hold_until: string | null }>();
   for (let i = 0; i < ids.length; i += 50) {
     const chunk = ids.slice(i, i + 50);
     if (!chunk.length) continue;
-    const { results } = await env.DB.prepare(`SELECT order_id, status, note FROM order_holds WHERE order_id IN (${chunk.map(() => "?").join(",")})`)
+    const { results } = await env.DB.prepare(`SELECT order_id, status, note, hold_until FROM order_holds WHERE order_id IN (${chunk.map(() => "?").join(",")})`)
       .bind(...chunk)
-      .all<{ order_id: string; status: string; note: string }>();
+      .all<{ order_id: string; status: string; note: string; hold_until: string | null }>();
     for (const r of results) map.set(r.order_id, r);
   }
   return map;
@@ -104,7 +107,9 @@ async function describe(env: Env, orders: ShopifyOrder[]) {
     const base = plans.get(o.id)!;
     const plan = draft ? applyDraft(base, draft, presets, o.lineItems.nodes.map((l) => l.id)) : base;
     const h = holds.get(o.id);
-    const hold = h?.status === "hold" ? h.note || "On hold" : h?.status === "released" ? null : plan.ruleHold;
+    // A dated hold ends by itself: from that day (store time) the order is back in the queue
+    const holdEnded = h?.status === "hold" && h.hold_until && h.hold_until <= storeToday() ? h.hold_until : null;
+    const hold = h?.status === "hold" && !holdEnded ? h.note || "On hold" : h?.status === "released" || holdEnded ? null : plan.ruleHold;
     return {
       ...o,
       plan,
@@ -112,6 +117,8 @@ async function describe(env: Env, orders: ShopifyOrder[]) {
       // kept for older clients
       suggestion: plan.rules,
       hold,
+      holdUntil: hold && h?.status === "hold" ? h.hold_until : null,
+      holdEnded,
       hasLabel: labelled.has(o.id),
       slipPrinted: slips.has(o.id),
       slipPrintedAt: slips.get(o.id) ?? null,
@@ -194,15 +201,17 @@ shipping.get("/scan/:code", async (c) => {
 
 // ---- Holds
 shipping.post("/holds", async (c) => {
-  const body = await c.req.json<{ orders: { id: string; name?: string }[]; hold: boolean; note?: string }>();
+  const body = await c.req.json<{ orders: { id: string; name?: string }[]; hold: boolean; note?: string; until?: string | null }>();
+  const until = body.hold && typeof body.until === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.until) ? body.until : null;
+  if (until && until <= storeToday()) throw new HttpError(400, "Pick a day after today");
   const orders = (body.orders ?? []).filter((o) => typeof o.id === "string" && o.id.startsWith("gid://")).slice(0, 200);
   if (!orders.length) throw new HttpError(400, "Pick at least one order");
   await c.env.DB.batch(
     orders.map((o) =>
       c.env.DB.prepare(
-        `INSERT INTO order_holds (order_id, order_name, status, note, agent_id, updated_at) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-         ON CONFLICT(order_id) DO UPDATE SET status = excluded.status, note = excluded.note, agent_id = excluded.agent_id, updated_at = excluded.updated_at`,
-      ).bind(o.id, o.name ?? null, body.hold ? "hold" : "released", body.hold ? (body.note ?? "").slice(0, 500) : "", c.get("agent").id),
+        `INSERT INTO order_holds (order_id, order_name, status, note, hold_until, agent_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         ON CONFLICT(order_id) DO UPDATE SET status = excluded.status, note = excluded.note, hold_until = excluded.hold_until, agent_id = excluded.agent_id, updated_at = excluded.updated_at`,
+      ).bind(o.id, o.name ?? null, body.hold ? "hold" : "released", body.hold ? (body.note ?? "").slice(0, 500) : "", until, c.get("agent").id),
     ),
   );
   return c.json({ ok: true, count: orders.length });

@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { navigate } from "./app.js";
-import { h, mount, icon, money, shortDate, relTime, fullTime, toast, busy, spinner, skeletonRows } from "./ui.js";
+import { h, mount, icon, money, shortDate, relTime, fullTime, toast, busy, spinner, skeletonRows, modal } from "./ui.js";
 import { labelFormat, openPackingSlips, printLabels, printSettings, reserveWindow } from "./printing.js";
 import { renderScan } from "./scan.js";
 import { parseCsv } from "./settings-support.js";
@@ -183,7 +183,11 @@ function renderQueue(root, params) {
   const bulk = h("div", { class: "bulk-bar card", hidden: true });
   const progress = h("div");
   const tableWrap = h("div", { class: "card table-card" }, skeletonRows(5));
-  mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips, h("div", { class: "search", style: { marginLeft: "auto", minWidth: "260px" } }, icon("search"), search)),
+  const updated = h("span", { class: "small muted", style: { whiteSpace: "nowrap" } });
+  const refresh = h("button", { class: "btn sm", title: "Get the latest orders from Shopify (also happens every few minutes)" }, icon("refresh"), "Refresh");
+  refresh.onclick = busy(refresh, async () => { await load(); toast("Up to date with Shopify"); });
+  mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips,
+    h("div", { class: "row", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
     bulk, progress, tableWrap);
 
   const load = async () => {
@@ -191,7 +195,9 @@ function renderQueue(root, params) {
       const r = await api("/shipping/queue");
       st.orders = r.orders;
       st.counts = r.counts;
+      st.loadedAt = Date.now();
       draw();
+      tick();
     } catch (e) {
       mount(tableWrap, h("div", { class: "empty" }, h("h2", {}, "Couldn't load orders"), h("p", {}, e.message)));
     }
@@ -250,7 +256,8 @@ function renderQueue(root, params) {
           quoteCell(o),
           h("td", {}, h("div", {}, [a.city, a.provinceCode].filter(Boolean).join(", "), o.international ? h("span", { class: "badge plain", style: { marginLeft: "6px" } }, a.countryCodeV2) : null), addrCell(o)),
           h("td", { class: "flags" },
-            o.hold ? h("span", { class: "badge bad", title: o.hold }, "On hold") : null,
+            o.hold ? h("span", { class: "badge bad", title: o.hold }, o.holdUntil ? `Hold · until ${holdDate(o.holdUntil)}` : "On hold") : null,
+            !o.hold && o.holdEnded && !o.hasLabel ? h("span", { class: "badge good plain", title: `Was on hold until ${holdDate(o.holdEnded)}` }, "Back from hold") : null,
             o.paymentPending ? h("span", { class: "badge warn" }, "Payment pending") : null,
             o.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
             o.pickup ? (o.pickupReadyAt ? h("span", { class: "badge good", title: `Marked ready ${fullTime(o.pickupReadyAt)}` }, "Ready for pickup") : h("span", { class: "badge warn plain" }, "Pickup")) : null,
@@ -321,14 +328,11 @@ function renderQueue(root, params) {
     const slips = h("button", { class: "btn" }, "Packing slips");
     slips.onclick = () => { openPackingSlips(picked.map((o) => o.id)); setTimeout(load, 1500); };
     const hold = h("button", { class: "btn" }, "Hold");
-    hold.onclick = busy(hold, async () => {
-      const note = prompt("Hold note (optional)", "") ?? null;
-      if (note === null) return;
-      await api("/shipping/holds", { method: "POST", body: { hold: true, note, orders: picked.map((o) => ({ id: o.id, name: o.name })) } });
-      toast(`${picked.length} on hold`);
+    hold.onclick = async () => {
+      if (!(await holdDialog(picked))) return;
       st.selected.clear();
       load();
-    });
+    };
     const pickups = picked.filter((o) => o.pickup && !o.pickupReadyAt && !o.pickedUpAt);
     const readyBtn = h("button", { class: "btn" }, icon("check"), `Mark ${pickups.length} ready for pickup`);
     readyBtn.onclick = busy(readyBtn, async () => {
@@ -394,8 +398,15 @@ function renderQueue(root, params) {
     load();
   }
 
+  // "Updated 2 min ago", and a fresh look at Shopify every 3 minutes while nobody's mid-task
+  const tick = () => { updated.textContent = st.loadedAt ? `Updated ${relTime(new Date(st.loadedAt).toISOString())}` : ""; };
+  const ticker = setInterval(() => {
+    tick();
+    const idle = document.visibilityState === "visible" && !page && !st.selected.size && !st.q && !progress.childElementCount;
+    if (idle && st.loadedAt && Date.now() - st.loadedAt > 3 * 60_000) load();
+  }, 30_000);
   load();
-  return () => { queueApi = null; };
+  return () => { queueApi = null; clearInterval(ticker); };
 }
 
 // ---------------------------------------------------------------- Order page (one order, full window)
@@ -629,6 +640,46 @@ function orderLabelsCard(o, onChange) {
   load();
   el.reload = load;
   return el;
+}
+
+// ---- Holds: "until I release it" or until a day, when the order comes back to the queue by itself
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d; };
+const nextWeekday = (wd) => { const d = new Date(); d.setDate(d.getDate() + (((wd - d.getDay() + 7) % 7) || 7)); return d; };
+export const holdDate = (s) => (s ? new Date(`${s}T12:00:00`).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) : "");
+
+/** Asks for a note and how long to hold; resolves true when held. */
+function holdDialog(orders) {
+  return new Promise((resolve) => {
+    let done = false;
+    let until = null;
+    const note = h("input", { class: "input", placeholder: "Why? e.g. Waiting on yarn restock", maxlength: 500 });
+    const date = h("input", { class: "input", type: "date", min: ymd(addDays(1)), style: { width: "auto" } });
+    const when = h("div", { class: "small muted" });
+    const chips = h("div", { class: "row", style: { gap: "6px" } });
+    const choices = [["Until I release it", null], ["Tomorrow", ymd(addDays(1))], ["3 days", ymd(addDays(3))], ["Next Monday", ymd(nextWeekday(1))], ["1 week", ymd(addDays(7))], ["2 weeks", ymd(addDays(14))]];
+    const paint = () => {
+      mount(chips, choices.map(([label, v]) => h("button", { class: "view-chip" + (until === v ? " active" : ""), onclick: () => { until = v; date.value = v ?? ""; paint(); } }, label)));
+      when.textContent = until ? `Hidden from the queue until ${holdDate(until)}, then it's back in Ready to ship.` : "Stays in On hold until someone releases it.";
+    };
+    date.onchange = () => { until = date.value || null; paint(); };
+    paint();
+    const save = h("button", { class: "btn primary" }, "Hold");
+    save.onclick = busy(save, async () => {
+      await api("/shipping/holds", { method: "POST", body: { hold: true, note: note.value.trim(), until, orders: orders.map((o) => ({ id: o.id, name: o.name })) } });
+      toast(`${orders.length === 1 ? orders[0].name : `${orders.length} orders`} on hold${until ? ` until ${holdDate(until)}` : ""}`);
+      done = true;
+      document.querySelector(".modal")?.remove();
+      resolve(true);
+    });
+    modal(orders.length === 1 ? `Hold ${orders[0].name}` : `Hold ${orders.length} orders`, h("div", { class: "stack" },
+      h("label", { class: "field" }, "Note (optional)", note),
+      h("div", { class: "field" }, "How long", chips, h("div", { class: "row", style: { gap: "8px", marginTop: "6px" } }, h("span", { class: "small" }, "or pick a day:"), date)),
+      when,
+      h("div", { class: "row" }, save, h("button", { class: "btn ghost", onclick: () => document.querySelector(".modal")?.remove() }, "Cancel"))),
+    { width: 520, onClose: () => { if (!done) resolve(false); } });
+    setTimeout(() => note.focus(), 30);
+  });
 }
 
 const marginText = (m) => `${m >= 0 ? "+" : "−"}${money(Math.abs(m), "USD")}`;
@@ -1036,13 +1087,13 @@ function buildLabelForm(root, o, presets, opts) {
 
   const holdBtn = o ? h("button", { class: "btn sm" }, o.hold ? "Release hold" : "Hold") : null;
   if (holdBtn) holdBtn.onclick = busy(holdBtn, async () => {
-    const note = o.hold ? "" : prompt("Hold note (optional)", "");
-    if (note === null) return;
-    await api("/shipping/holds", { method: "POST", body: { hold: !o.hold, note, orders: [{ id: o.id, name: o.name }] } });
-    toast(o.hold ? "Released" : "On hold");
-    o.hold = o.hold ? null : note || "On hold";
+    if (o.hold) {
+      await api("/shipping/holds", { method: "POST", body: { hold: false, orders: [{ id: o.id, name: o.name }] } });
+      toast("Released — back in Ready to ship");
+    } else if (!(await holdDialog([o]))) return;
     queueApi?.reload();
-    openOrderPage(o, opts);
+    const { order } = await api(`/shipping/orders/${encodeURIComponent(o.id)}`);
+    openOrderPage(order, opts);
   });
 
   // ---- Layout: summary + buy across the top, ship-to/service | packages, then items/customs; order details on the right
@@ -1060,7 +1111,7 @@ function buildLabelForm(root, o, presets, opts) {
   const pickupEl = o?.pickup ? pickupCard(o, () => openOrderPage(queueApi?.find(o.id) ?? o, opts)) : null;
   if (o?.pickup) boxesEl.style.display = "none";
   const notices = [
-    o?.hold ? h("div", { class: "notice bad" }, `On hold: ${o.hold}`) : null,
+    o?.hold ? h("div", { class: "notice bad" }, `On hold${o.holdUntil ? ` until ${holdDate(o.holdUntil)} — it comes back to Ready to ship that day` : ""}: ${o.hold}`) : null,
     o?.hasLabel ? h("div", { class: "notice" }, "This order already has a label. Buying another one ships it again.") : null,
     plan?.rules?.matched?.length ? h("div", { class: "notice info" }, icon("spark"), " Rules applied: ", plan.rules.matched.join(" · ")) : null,
     plan?.source === "learned" ? h("div", { class: "notice" }, icon("spark"), " ",
