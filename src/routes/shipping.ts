@@ -6,7 +6,7 @@ import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers"
 import { easypostConfigured } from "../lib/easypost";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles } from "../lib/customs";
-import { isInternationalAddress, normalizePhone } from "../lib/ups";
+import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
   addressFromOrder, buyLabel, chooseRate, isInternational, isPaymentPending, isPriority, itemCount, itemsWeightLb,
@@ -287,9 +287,11 @@ shipping.post("/rates", async (c) => {
     // Local preview only: plausible made-up prices so the screens can be tried without UPS keys
     const lb = validParcels(body.parcels).reduce((n, p) => n + Math.max(p.weight, (p.length * p.width * p.height) / 139), 0);
     const n = body.parcels.length;
+    const boxLb = validParcels(body.parcels).map((p) => Math.max(p.weight, (p.length * p.width * p.height) / 139));
     const mk = (serviceCode: string, serviceName: string, base: number, perLb: number, days: number | null) => {
       const total = Math.round((base * n + perLb * lb) * 100) / 100;
-      return { serviceCode, serviceName, total, listTotal: Math.round(total * 1.35 * 100) / 100, currency: "USD", days };
+      const perBox = n > 1 ? splitCost(total, boxLb.map((w) => base + perLb * w)) : undefined;
+      return { serviceCode, serviceName, total, listTotal: Math.round(total * 1.35 * 100) / 100, currency: "USD", days, ...(perBox ? { perBox } : {}) };
     };
     const usps = (code: string, name: string, base: number, perLb: number, days: number) => ({ ...mk(code, name, base, perLb, days), carrier: "USPS" });
     if ((body.to.country || "US").toUpperCase() !== "US") {
@@ -321,6 +323,7 @@ shipping.post("/labels", async (c) => {
     serviceCode: string;
     serviceName: string;
     listTotal?: number;
+    perBox?: number[];
     labelFormat?: string;
     fulfill?: boolean;
     notifyCustomer?: boolean;
@@ -345,7 +348,10 @@ shipping.post("/labels", async (c) => {
     to,
     parcels: validParcels(body.parcels),
     presetId: body.presetId,
-    rate: { serviceCode: body.serviceCode, serviceName: body.serviceName, listTotal: body.listTotal },
+    rate: {
+      serviceCode: body.serviceCode, serviceName: body.serviceName, listTotal: body.listTotal,
+      perBox: Array.isArray(body.perBox) ? body.perBox.slice(0, 20).map((x) => Math.max(0, Number(x) || 0)) : undefined,
+    },
     signature: validSignature(body.signature),
     labelFormat: labelFormat(body.labelFormat),
     fulfill: !!body.fulfill && !!order,

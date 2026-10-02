@@ -56,6 +56,17 @@ export interface Rate {
   listTotal: number;
   currency: string;
   days: number | null;
+  perBox?: number[]; // multi-box shipments: what each box costs (adds up to total)
+}
+
+/** Shares a total across boxes in proportion to each box's own charge (so per-box costs add up). */
+export function splitCost(total: number, parts: number[]): number[] | undefined {
+  if (parts.length < 2 || parts.some((x) => !Number.isFinite(x) || x < 0)) return undefined;
+  const sum = parts.reduce((n, x) => n + x, 0);
+  const shares = sum > 0 ? parts.map((x) => (x / sum) * total) : parts.map(() => total / parts.length);
+  const cents = shares.map((x) => Math.round(x * 100) / 100);
+  cents[cents.length - 1] = Math.round((total - cents.slice(0, -1).reduce((n, x) => n + x, 0)) * 100) / 100; // rounding goes on the last box
+  return cents;
 }
 
 export function upsConfigured(env: Env) {
@@ -237,6 +248,9 @@ export function parseRates(json: any): Rate[] {
       const list = Number(r.TotalCharges?.MonetaryValue ?? 0);
       const negotiated = r.NegotiatedRateCharges?.TotalCharge?.MonetaryValue;
       const days = r.GuaranteedDelivery?.BusinessDaysInTransit;
+      const total = negotiated !== undefined ? Number(negotiated) : list;
+      const pkgs = asArray<any>(r.RatedPackage);
+      const perBox = splitCost(total, pkgs.map((p) => Number(p.NegotiatedCharges?.TotalCharge?.MonetaryValue ?? p.TotalCharges?.MonetaryValue ?? NaN)));
       return {
         serviceCode: code,
         serviceName: UPS_SERVICES[code] ?? `UPS service ${code}`,
@@ -244,6 +258,7 @@ export function parseRates(json: any): Rate[] {
         listTotal: list,
         currency: r.TotalCharges?.CurrencyCode ?? "USD",
         days: days ? Number(days) : null,
+        ...(perBox ? { perBox } : {}),
       };
     })
     .sort((a: Rate, b: Rate) => a.total - b.total);
@@ -299,6 +314,7 @@ export interface ShipResult {
   cost: number;
   currency: string;
   forms?: { type: string; data: string }[]; // customs paperwork, base64 PDF
+  perBox?: number[]; // what each box cost, when the carrier says
 }
 
 export function parseShipResponse(json: any): ShipResult {

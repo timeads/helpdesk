@@ -1149,3 +1149,4 @@ body.order-open { overflow: hidden; }
   .slip-logo { grid-template-columns: minmax(0, 1fr); }
 }
 .slip-designer .field { display: grid; gap: 6px; }
+.box-cost { margin-left: auto; font-variant-numeric: tabular-nums; } .pack-box-head .box-cost + .btn { margin-left: 0 !important; } .per-box { margin-top: 3px; font-variant-numeric: tabular-nums; }

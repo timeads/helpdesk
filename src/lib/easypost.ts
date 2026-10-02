@@ -1,7 +1,7 @@
 // USPS through EasyPost (EasyPost's own USPS account, paid from the EasyPost wallet).
 // One box = one EasyPost shipment; several boxes = an EasyPost order (one label per box).
 import type { Env } from "../env";
-import { normalizePhone, type Address, type Parcel, type Rate, type ShipResult, type Signature } from "./ups";
+import { normalizePhone, splitCost, type Address, type Parcel, type Rate, type ShipResult, type Signature } from "./ups";
 import { HttpError } from "./util";
 import type { Customs, CustomsItem } from "./customs";
 
@@ -65,7 +65,13 @@ const options = (signature: Signature, labelFormat: "GIF" | "ZPL", reference?: s
   ...(reference ? { print_custom_1: reference.slice(0, 35) } : {}),
 });
 
-function toRates(raw: any[]): Rate[] {
+/** An EasyPost order's combined rates, with each box's own price for the same service. */
+function toRates(raw: any[], shipments?: any[]): Rate[] {
+  const boxPrice = (r: any) => {
+    if (!shipments || shipments.length < 2) return undefined;
+    const each = shipments.map((s) => Number((s.rates ?? []).find((x: any) => x.carrier === r.carrier && x.service === r.service)?.rate ?? NaN));
+    return splitCost(Number(r.rate), each);
+  };
   return (raw ?? [])
     .filter((r) => r.carrier === "USPS" && USPS_SERVICES[r.service])
     .map((r) => ({
@@ -76,6 +82,7 @@ function toRates(raw: any[]): Rate[] {
       listTotal: Number(r.retail_rate ?? r.list_rate ?? r.rate),
       currency: r.currency ?? "USD",
       days: r.delivery_days ?? r.est_delivery_days ?? null,
+      ...(boxPrice(r) ? { perBox: boxPrice(r) } : {}),
     }))
     .sort((a, b) => a.total - b.total);
 }
@@ -122,13 +129,13 @@ async function create(env: Env, from: Address, to: Address, parcels: Parcel[], s
   const o = await ep(env, "POST", "/orders", {
     order: { to_address: address(to), from_address: address(from), reference, options: opts, shipments: parcels.map((p) => ({ parcel: parcel(p), options: opts, ...ci(p) })) },
   });
-  return { kind: "order" as const, id: o.id as string, rates: o.rates as any[] };
+  return { kind: "order" as const, id: o.id as string, rates: o.rates as any[], shipments: o.shipments as any[] };
 }
 
 export async function getUspsRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature, customs?: Customs): Promise<Rate[]> {
   if (!domestic(to) && !customs) return []; // can't quote abroad without a customs list
   const c = await create(env, from, to, parcels, signature, "GIF", undefined, customs);
-  return toRates(c.rates);
+  return toRates(c.rates, c.kind === "order" ? c.shipments : undefined);
 }
 
 async function download(url: string): Promise<string> {
@@ -181,6 +188,7 @@ export async function buyUsps(
     cost: Math.round(shipments.reduce((n, s) => n + Number(s.selected_rate?.rate ?? 0), 0) * 100) / 100,
     currency: shipments[0]?.selected_rate?.currency ?? "USD",
     format: zpl ? "ZPL" : "PNG",
+    ...(shipments.length > 1 ? { perBox: shipments.map((s) => Math.round(Number(s.selected_rate?.rate ?? 0) * 100) / 100) } : {}),
   };
 }
 

@@ -3,7 +3,7 @@ import type { Agent, Env } from "../env";
 import type { ShopifyOrder } from "./shopify";
 import { fulfillOrder } from "./shopify";
 import { evaluateRules, type RuleResult, type ShippingRule } from "./rules";
-import { normalizePhone, type Address, type Parcel, type Rate, type Signature } from "./ups";
+import { normalizePhone, splitCost, type Address, type Parcel, type Rate, type Signature } from "./ups";
 import { getAllRates, purchase, trackingUrlFor } from "./carriers";
 import { saveProfiles, type Customs } from "./customs";
 import { HttpError, getSetting } from "./util";
@@ -302,7 +302,7 @@ export interface BuyInput {
   to: Address;
   parcels: Parcel[];
   presetId?: number | null;
-  rate: { serviceCode: string; serviceName: string; listTotal?: number };
+  rate: { serviceCode: string; serviceName: string; listTotal?: number; perBox?: number[] };
   signature: Signature;
   labelFormat: "GIF" | "ZPL";
   fulfill: boolean;
@@ -321,6 +321,10 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
     signature: input.signature,
     customs: input.customs,
   });
+  // Each box's cost: from the carrier when it says, else the quote's split scaled to what was charged
+  const perBox = input.parcels.length > 1
+    ? result.perBox ?? (input.rate.perBox?.length === input.parcels.length ? splitCost(result.cost, input.rate.perBox) : undefined)
+    : undefined;
   const row = await env.DB.prepare(
     `INSERT INTO shipments (forms, carrier, order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format,
        cost, currency, packages, ship_to, agent_id, signature, batch_id, shipping_paid, order_total, order_created_at, requested_service,
@@ -332,7 +336,7 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
       result.carrier,
       o?.id ?? null, o?.name ?? null, input.ticketId ?? null, input.rate.serviceCode, input.rate.serviceName, result.shipmentId,
       JSON.stringify(result.trackingNumbers), JSON.stringify(result.labels), result.format, result.cost, result.currency,
-      JSON.stringify(input.parcels), JSON.stringify(input.to), agent.id, input.signature ?? null, input.batchId ?? null,
+      JSON.stringify(input.parcels.map((p, i) => (perBox ? { ...p, cost: perBox[i] } : p))), JSON.stringify(input.to), agent.id, input.signature ?? null, input.batchId ?? null,
       o ? shippingPaid(o) : null, o ? Number(o.totalPriceSet.shopMoney.amount) : null, o?.createdAt ?? null,
       o ? requestedService(o) : null, input.rate.listTotal ?? null, o ? itemCount(o) : null, input.to.state || null,
       input.to.country || null, input.scanVerified ? 1 : 0,
@@ -356,7 +360,7 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
     }
   }
   if (o) await env.DB.prepare("DELETE FROM order_drafts WHERE order_id = ?").bind(o.id).run(); // the label is bought; choices are done
-  return { id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: result.format, carrier: result.carrier, forms: (result.forms ?? []).length, fulfillError };
+  return { perBox: perBox ?? null, id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: result.format, carrier: result.carrier, forms: (result.forms ?? []).length, fulfillError };
 }
 
 export { getAllRates as getRates };

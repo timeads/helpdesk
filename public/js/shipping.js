@@ -799,6 +799,9 @@ function buildLabelForm(root, o, presets, opts) {
     changed();
   };
 
+  /** What the chosen service charges for box i (multi-box only). */
+  const boxCostText = (i) => (split() && s.rate?.perBox?.length === s.parcels.length ? money(s.rate.perBox[i], s.rate.currency) : "");
+  const drawBoxCosts = () => boxesEl.querySelectorAll(".box-cost").forEach((el) => (el.textContent = boxCostText(Number(el.dataset.box))));
   const drawBoxes = () => {
     mount(boxesEl, s.parcels.map((p, i) => {
       const presetSel = h("select", { class: "input", "aria-label": `Box ${i + 1} size` },
@@ -827,6 +830,7 @@ function buildLabelForm(root, o, presets, opts) {
         h("div", { class: "pack-box-head" },
           h("b", {}, split() ? `Box ${i + 1}` : "Box"),
           lines.length && split() ? h("span", { class: "small muted" }, `${n} item${n === 1 ? "" : "s"}`) : null,
+          split() ? h("b", { class: "box-cost", "data-box": i }, boxCostText(i)) : null,
           split() ? h("button", { class: "btn ghost sm icon-only", style: { marginLeft: "auto" }, "aria-label": `Remove box ${i + 1}`, title: "Remove this box (its items go to another box)", onclick: () => removeBox(i) }, icon("x")) : null),
         presetSel,
         h("div", { class: "pack-dims" }, num("length", "L in"), num("width", "W in"), num("height", "H in"), num("weight", "Weight lb")));
@@ -1022,7 +1026,8 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "op-buy-main" },
         h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Service"), h("b", {}, r ? r.serviceName : "—"),
           r?.days ? h("div", { class: "small muted" }, `Est. ${r.days} business day${r.days > 1 ? "s" : ""}`) : null),
-        h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, split() ? `Labels (${s.parcels.length})` : "Label"), h("b", {}, r ? money(r.total, r.currency) : "—")),
+        h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, split() ? `Labels (${s.parcels.length})` : "Label"), h("b", {}, r ? money(r.total, r.currency) : "—"),
+          r && split() && r.perBox?.length === s.parcels.length ? h("div", { class: "small muted" }, r.perBox.map((x) => money(x, r.currency)).join(" + ")) : null),
         paid !== null ? h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Customer paid"), h("b", {}, money(paid, "USD"))) : null,
         m !== null ? h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Margin"), h("b", { class: "margin " + (m >= 0 ? "pos" : "neg") }, marginText(m))) : null,
         buy),
@@ -1047,7 +1052,7 @@ function buildLabelForm(root, o, presets, opts) {
         body: {
           orderId: o?.id, ticketId: opts.ticketId ? Number(opts.ticketId) : undefined, to: s.to, parcels: s.parcels.map(cleanParcel),
           presetId: s.parcels.length === 1 && s.parcels[0].preset ? Number(s.parcels[0].preset) : undefined,
-          serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal,
+          serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal, perBox: s.rate.perBox,
           labelFormat: labelFormat(), fulfill, notifyCustomer: notify, signature: s.signature || undefined, batchId: newBatchId(),
           customs: isIntl() ? s.customs : undefined,
         },
@@ -1072,6 +1077,7 @@ function buildLabelForm(root, o, presets, opts) {
   function drawRates() {
     drawTotalWeight();
     drawBuyBar();
+    drawBoxCosts();
     if (!s.rates.length) {
       return mount(ratesEl, h("div", { class: "op-card-head" }, h("h3", {}, "Service")), ready() ? null : h("div", { class: "notice" },
         s.parcels.some((p) => !(+p.weight > 0)) ? "Enter the weight to see rates and your margin." : isIntl() && !s.customs ? "Fill in customs to see rates." : "Finish the address and box size to see rates."));
@@ -1101,7 +1107,8 @@ function buildLabelForm(root, o, presets, opts) {
               r.total === cheapest ? h("span", { class: "badge plain" }, "Cheapest") : null,
               fastestDays !== null && r.days === fastestDays ? h("span", { class: "badge plain" }, "Fastest") : null,
               o?.requestedService && sameService(o.requestedService, r.serviceName) ? h("span", { class: "badge plain" }, "Customer's choice") : null,
-              plan?.service === r.serviceCode ? h("span", { class: "badge plain" }, "By rule") : null)),
+              plan?.service === r.serviceCode ? h("span", { class: "badge plain" }, "By rule") : null),
+            split() && r.perBox?.length === s.parcels.length ? h("div", { class: "small muted per-box" }, r.perBox.map((x, i) => `Box ${i + 1} ${money(x, r.currency)}`).join(" · ")) : null),
           h("div", { class: "price-col" },
             h("div", { class: "price" }, money(r.total, r.currency), r.listTotal > r.total ? h("span", { class: "list" }, money(r.listTotal, r.currency)) : null),
             margin !== null ? h("div", { class: "margin " + (margin >= 0 ? "pos" : "neg"), title: margin === best ? "Best margin" : null }, `${marginText(margin)} margin`) : null));
@@ -1122,7 +1129,8 @@ function buildLabelForm(root, o, presets, opts) {
       h("h2", {}, split() ? `${s.parcels.length} labels bought` : "Label bought"),
       h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}${paid !== null ? ` · margin ${marginText(paid - r.cost)}` : ""}`),
       r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
-        h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n))),
+        h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n),
+        r.perBox?.[i] !== undefined ? h("span", { class: "small", style: { opacity: 0.85, marginLeft: "10px", fontFamily: "var(--ui)" } }, money(r.perBox[i], r.currency)) : null)),
       r.fulfillError ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, `The label is fine, but marking the order fulfilled in Shopify failed: ${r.fulfillError}`) : null,
       r.forms ? h("div", { class: "notice", style: { marginTop: "12px" } }, `Customs paperwork: print ${r.forms > 1 ? "these" : "this"} and put 3 copies in a clear pouch on the box (skip if UPS Paperless Invoice is on for your account).`,
         h("div", { class: "row", style: { marginTop: "8px" } }, Array.from({ length: r.forms }, (_, n) => h("a", { class: "btn sm", href: `/api/shipping/labels/${r.id}/forms/${n}`, target: "_blank", rel: "noopener" }, icon("printer"), r.forms > 1 ? `Customs form ${n + 1}` : "Print customs form")))) : null,
