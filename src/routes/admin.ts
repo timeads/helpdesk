@@ -341,6 +341,7 @@ admin.put("/settings", async (c) => {
       hsCode: String(n.hsCode ?? "").replace(/\D/g, "").slice(0, 10),
       origin: String(n.origin ?? "US").toUpperCase().slice(0, 2) || "US",
       signer: String(n.signer ?? "").slice(0, 60),
+      taxId: String(n.taxId ?? "").slice(0, 30),
       contents: ["merchandise", "gift", "sample", "returned_goods", "documents", "other"].includes(n.contents) ? n.contents : "merchandise",
       dutiesPaidBy: n.dutiesPaidBy === "sender" ? "sender" : "recipient",
       nonDelivery: n.nonDelivery === "abandon" ? "abandon" : "return",

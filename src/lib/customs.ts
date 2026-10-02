@@ -27,6 +27,7 @@ export interface CustomsSettings {
   hsCode: string;
   origin: string;
   signer: string;
+  taxId: string; // EIN / tax ID printed on commercial invoices
   contents: Customs["contents"];
   dutiesPaidBy: Customs["dutiesPaidBy"];
   nonDelivery: Customs["nonDelivery"];
@@ -37,6 +38,7 @@ export const DEFAULT_CUSTOMS: CustomsSettings = {
   hsCode: "",
   origin: "US",
   signer: "",
+  taxId: "",
   contents: "merchandise",
   dutiesPaidBy: "recipient",
   nonDelivery: "return",

@@ -380,6 +380,8 @@ function customsCard(s) {
     h("div", { class: "stack" },
       h("div", { class: "grid2" },
         f("Customs signer (your name)", "signer", { placeholder: "Tim Eads" }),
+        f("Tax ID / EIN (printed on commercial invoices)", "taxId", { placeholder: "Optional", maxlength: 30 })),
+      h("div", { class: "grid2" },
         f("Default item description", "description", { maxlength: 35 })),
       h("div", { class: "grid3" },
         f("Default HS code", "hsCode", { inputmode: "numeric", placeholder: "Optional", maxlength: 10 }),

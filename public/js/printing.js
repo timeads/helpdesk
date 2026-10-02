@@ -316,3 +316,36 @@ export async function testZebra() {
   const zpl = "^XA^CF0,40^FO40,60^FDTuft the World^FS^CF0,30^FO40,120^FDZebra test label OK^FS^FO40,180^BY3^BCN,100,Y,N,N^FDTEST-1234^FS^XZ";
   return sendZpl(zpl);
 }
+
+// ---- Commercial invoice (international): letter size on a normal printer, in its own tab
+const CI_COPIES = "ci_copies";
+export function invoiceCopies() {
+  try { return Math.min(5, Math.max(1, Number(localStorage.getItem(CI_COPIES)) || 3)); } catch { return 3; }
+}
+export function setInvoiceCopies(n) {
+  try { localStorage.setItem(CI_COPIES, String(n)); } catch { /* private window */ }
+}
+
+/**
+ * Opens the commercial invoice to print. Before the label: pass `body` (to, customs, orderName…);
+ * after it: pass `shipmentId` (the invoice then carries the tracking number).
+ */
+export async function openCommercialInvoice({ body = null, shipmentId = null } = {}) {
+  const copies = invoiceCopies();
+  const w = window.open("about:blank", "_blank");
+  if (!w) throw new Error("Allow pop-ups for this site to print the commercial invoice");
+  w.document.write("<p style='font:14px system-ui;padding:20px'>Preparing the commercial invoice…</p>");
+  try {
+    const res = shipmentId
+      ? await fetch(`/api/shipping/labels/${shipmentId}/invoice?copies=${copies}`, { credentials: "same-origin" })
+      : await fetch("/api/shipping/commercial-invoice", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, copies }) });
+    const html = await res.text();
+    if (!res.ok) throw new Error((() => { try { return JSON.parse(html).error; } catch { return `Couldn't make the invoice (${res.status})`; } })());
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  } catch (e) {
+    w.close();
+    throw e;
+  }
+}

@@ -19,6 +19,7 @@ import { demoOrders } from "../lib/demo";
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
+import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
 
 const shipping = new Hono<AppEnv>();
@@ -69,6 +70,14 @@ const subsetOrder = (o: ShopifyOrder, partial: { id: string; qty: number }[]): S
   ...o,
   lineItems: { ...o.lineItems, nodes: o.lineItems.nodes.map((l) => ({ ...l, quantity: partial.find((x) => x.id === l.id)?.qty ?? 0 })).filter((l) => l.quantity > 0) },
 });
+
+/** A saved customs list with the order's current quantities (the order may have been edited since). */
+const withOrderQty = (c: Customs | undefined, o: ShopifyOrder): Customs | undefined => {
+  if (!c) return c;
+  const qty = new Map(o.lineItems.nodes.map((l) => [l.id, l.quantity]));
+  const items = c.items.map((i) => (i.lineId && qty.has(i.lineId) ? { ...i, qty: qty.get(i.lineId)! } : i)).filter((i) => !i.lineId || qty.has(i.lineId));
+  return items.length ? { ...c, items } : undefined;
+};
 
 /** Customs for just the items in a partial shipment. */
 const customsFor = (c: Customs | undefined, partial: { id: string; qty: number }[] | null): Customs | undefined =>
@@ -306,6 +315,61 @@ shipping.put("/rules", async (c) => {
 });
 
 // ---- Customs (international)
+const invoiceDate = (iso?: string | null) => (iso ? new Date(iso) : new Date()).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+const invoiceNumber = (orderName: string | null, date: string) => `CI-${(orderName ?? "").replace(/[^\w-]/g, "") || date.replace(/-/g, "")}`;
+const copiesOf = (v: unknown) => Math.min(5, Math.max(1, Number(v) || 3));
+
+/** Commercial invoice before the label is bought, from the customs list as edited on the order page. */
+shipping.post("/commercial-invoice", async (c) => {
+  const body = await c.req.json<{ to: Address; customs: unknown; orderName?: string; packages?: number; weightLb?: number; copies?: number }>();
+  const customs = cleanCustoms(body.customs);
+  if (!customs?.items.length) throw new HttpError(422, "Fill in the customs list first");
+  const settings = await customsSettings(c.env);
+  const date = invoiceDate();
+  const html = renderCommercialInvoice({
+    from: await shipFrom(c.env),
+    to: validAddress(body.to),
+    customs,
+    orderName: body.orderName ? String(body.orderName).slice(0, 40) : null,
+    date,
+    invoiceNumber: invoiceNumber(body.orderName ?? null, date),
+    tracking: [],
+    carrier: null,
+    service: null,
+    packages: Math.max(1, Math.round(Number(body.packages) || 1)),
+    weightLb: Number(body.weightLb) || null,
+    taxId: settings.taxId,
+    copies: copiesOf(body.copies),
+  });
+  return c.html(html);
+});
+
+/** Commercial invoice for a bought label: the customs list it was bought with, plus tracking. */
+shipping.get("/labels/:id/invoice", async (c) => {
+  const s = await c.env.DB.prepare("SELECT order_name, ship_to, customs, tracking_numbers, carrier, service_name, packages, created_at FROM shipments WHERE id = ?")
+    .bind(Number(c.req.param("id")))
+    .first<{ order_name: string | null; ship_to: string; customs: string | null; tracking_numbers: string; carrier: string | null; service_name: string; packages: string; created_at: string }>();
+  if (!s?.customs) throw new HttpError(404, "No customs list saved with this label");
+  const parcels: Parcel[] = JSON.parse(s.packages || "[]");
+  const date = invoiceDate(s.created_at);
+  const settings = await customsSettings(c.env);
+  return c.html(renderCommercialInvoice({
+    from: await shipFrom(c.env),
+    to: JSON.parse(s.ship_to),
+    customs: JSON.parse(s.customs),
+    orderName: s.order_name,
+    date,
+    invoiceNumber: invoiceNumber(s.order_name, date),
+    tracking: JSON.parse(s.tracking_numbers || "[]"),
+    carrier: s.carrier,
+    service: s.service_name,
+    packages: Math.max(1, parcels.length),
+    weightLb: parcels.reduce((n, p) => n + (Number(p.weight) || 0), 0) || null,
+    taxId: settings.taxId,
+    copies: copiesOf(c.req.query("copies")),
+  }));
+});
+
 /** Defaults and remembered per-product customs details, for building the customs list in the browser. */
 shipping.post("/customs", async (c) => {
   const { keys } = await c.req.json<{ keys: string[] }>();
@@ -442,7 +506,10 @@ shipping.post("/labels/auto", async (c) => {
   if (!plan.weightKnown && !body.parcels && !partial) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
   let to = validAddress(d.draft?.to ?? addressFromOrder(order));
   // Don't buy a label for an address the carrier can't find or wants to correct
-  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, partial ? subsetOrder(order, partial) : order) : undefined;
+  // The customs list as edited on the order page (values, descriptions), else built fresh
+  const customs = isInternationalAddress(to)
+    ? customsFor(withOrderQty(d.draft?.customs ?? undefined, order), partial) ?? (await buildCustoms(c.env, partial ? subsetOrder(order, partial) : order))
+    : undefined;
   if (customs) {
     const problems = customsProblems(customs);
     if (problems.length) throw new HttpError(422, `${order.name}: ${problems[0]} — open it to fix the customs list`);
@@ -526,7 +593,7 @@ shipping.post("/labels/:id{[0-9]+}/fulfill", async (c) => {
 
 shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT s.id, s.carrier, s.shipment_id LIKE 'ep:%' AS easypost, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
+    `SELECT s.id, s.carrier, s.shipment_id LIKE 'ep:%' AS easypost, s.customs IS NOT NULL AS invoice, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
      FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL AND (? IS NULL OR s.order_id = ?) ORDER BY s.created_at DESC LIMIT 200`,
   ).bind(c.req.query("order") ?? null, c.req.query("order") ?? null).all<any>();

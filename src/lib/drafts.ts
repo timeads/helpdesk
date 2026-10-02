@@ -3,6 +3,7 @@
 import type { Env } from "../env";
 import type { Address, Signature } from "./ups";
 import type { Plan, Preset } from "./fulfillment";
+import { cleanCustoms, type Customs } from "./customs";
 
 export interface DraftBox {
   presetId: number | null;
@@ -18,6 +19,7 @@ export interface OrderDraft {
   signature: Signature;
   service: string | null;
   to: Address | null;
+  customs?: Customs | null; // edited customs list (international): values, descriptions, HS codes
 }
 
 const num = (v: unknown, max = 500) => {
@@ -53,6 +55,7 @@ export function cleanDraft(input: any): OrderDraft | null {
     signature: input.signature === "adult" || input.signature === "standard" ? input.signature : undefined,
     service: typeof input.service === "string" && input.service.length < 80 ? input.service : null,
     to,
+    customs: cleanCustoms(input.customs) ?? null,
   };
 }
 

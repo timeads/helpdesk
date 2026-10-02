@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { navigate } from "./app.js";
 import { h, mount, icon, money, shortDate, relTime, fullTime, toast, busy, spinner, skeletonRows, modal } from "./ui.js";
-import { labelFormat, openPackingSlips, printLabels, printSettings, reserveWindow } from "./printing.js";
+import { invoiceCopies, labelFormat, openCommercialInvoice, openPackingSlips, printLabels, printSettings, reserveWindow, setInvoiceCopies } from "./printing.js";
 import { renderScan } from "./scan.js";
 import { parseCsv } from "./settings-support.js";
 
@@ -648,6 +648,7 @@ function orderLabelsCard(o, onChange) {
               return b;
             })(),
             h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), "Print"),
+            l.invoice && !voided ? h("button", { class: "btn sm ghost", onclick: () => openCommercialInvoice({ shipmentId: l.id }).catch((e) => toast(e.message, true)) }, "Invoice") : null,
             voidBtn));
       })));
   };
@@ -754,6 +755,11 @@ function buildLabelForm(root, o, presets, opts) {
   else s.parcels = [{ preset: defaultBox?.id ?? "", length: defaultBox?.length ?? "", width: defaultBox?.width ?? "", height: defaultBox?.height ?? "", weight: "", alloc: allIn(), auto: false }];
   // Choices already made for this order (boxes, split, service, signature, address)
   const draft = o ? drafts.get(o.id) ?? o.draft : null;
+  if (o && draft?.customs?.items?.length) {
+    const qty = new Map(lines.map((l) => [l.id, l.ordered]));
+    const items = draft.customs.items.filter((i) => !i.lineId || qty.has(i.lineId)).map((i) => (i.lineId ? { ...i, qty: qty.get(i.lineId) } : i));
+    if (items.length) s.customs = { ...draft.customs, items };
+  }
   if (draft?.boxes?.length) {
     s.parcels = draft.boxes.map((b) => ({
       preset: b.presetId ?? "", length: b.length || "", width: b.width || "", height: b.height || "", weight: b.weight || "",
@@ -774,6 +780,7 @@ function buildLabelForm(root, o, presets, opts) {
     signature: s.signature || undefined,
     service: s.rate?.serviceCode ?? s.wantCode ?? null,
     to: s.toEdited ? s.to : null,
+    customs: isIntl() && s.customs ? s.customs : null,
   });
   const remember = () => {
     if (!o || s.bought) return;
@@ -833,12 +840,48 @@ function buildLabelForm(root, o, presets, opts) {
     for (const [code, v] of Object.entries(by)) if (v > 2500) out.push(`Items under HS ${code} total ${money(v, "USD")} — over $2,500 needs an export filing (AES) first`);
     return out;
   };
+  let valuePct = 100;
   function drawCustoms() {
     if (!isIntl()) return mount(customsEl);
     const c = s.customs;
     if (!c) return mount(customsEl, h("div", { class: "notice", style: { marginTop: "16px" } }, o ? "Loading customs details…" : "Customs: open this from an order to fill in the items."));
-    const total = c.items.reduce((n, i) => n + i.qty * i.unitValue, 0);
-    const onEdit = () => { quote(900); drawProblems(); };
+    const total = () => c.items.reduce((n, i) => n + i.qty * i.unitValue, 0);
+    const totalEl = h("span", { class: "small muted" });
+    const lineTotals = new Map();
+    const drawTotals = () => {
+      totalEl.textContent = `Declared value ${money(total(), "USD")}`;
+      for (const [i, el] of lineTotals) el.textContent = money(i.qty * i.unitValue, "USD");
+    };
+    const onEdit = () => { quote(900); drawProblems(); drawTotals(); remember(); };
+    // What each line sold for, to scale values from (or go back to)
+    const paidEach = (i) => {
+      const l = o?.lineItems.nodes.find((x) => x.id === i.lineId);
+      return Number(l?.discountedUnitPriceAfterAllDiscountsSet?.shopMoney.amount ?? i.unitValue);
+    };
+    const pct = h("input", { class: "input", type: "number", min: "0", max: "100", step: "1", value: String(valuePct), style: { width: "70px" }, "aria-label": "Percent of price paid" });
+    const applyPct = () => {
+      valuePct = Math.max(0, Number(pct.value) || 0);
+      const k = valuePct / 100;
+      for (const i of c.items) i.unitValue = Math.round(paidEach(i) * k * 100) / 100;
+      drawCustoms();
+      quote(900);
+      remember();
+    };
+    const copiesSel = h("select", { class: "input", style: { width: "auto" }, "aria-label": "Copies" }, [1, 2, 3, 4, 5].map((n) => h("option", { value: n, selected: n === invoiceCopies() }, `${n} cop${n === 1 ? "y" : "ies"}`)));
+    copiesSel.onchange = () => setInvoiceCopies(Number(copiesSel.value));
+    const printInvoice = h("button", { class: "btn sm" }, icon("printer"), "Print commercial invoice");
+    printInvoice.onclick = () => {
+      const p = customsProblems();
+      if (p.length) return toast(p[0], true);
+      if (!c.items.some((i) => i.qty > 0)) return toast("Nothing on the customs list", true);
+      const list = partialActive()
+        ? { ...c, items: c.items.map((i) => ({ ...i, qty: lines.find((l) => l.id === i.lineId)?.qty ?? i.qty })).filter((i) => i.qty > 0) }
+        : c;
+      openCommercialInvoice({ body: {
+        to: s.to, customs: list, orderName: o?.name, packages: s.parcels.length,
+        weightLb: s.parcels.reduce((n, p) => n + (+p.weight || 0), 0) || undefined,
+      } }).catch((e) => toast(e.message, true));
+    };
     const sel = (key, options) => {
       const el = h("select", { class: "input" }, options.map(([v, t]) => h("option", { value: v, selected: c[key] === v }, t)));
       el.onchange = () => { c[key] = el.value; onEdit(); };
@@ -852,10 +895,10 @@ function buildLabelForm(root, o, presets, opts) {
     drawProblems();
     mount(customsEl, h("div", { class: "customs card" },
       h("div", { class: "row", style: { justifyContent: "space-between", marginBottom: "6px" } },
-        h("b", {}, "Customs"), h("span", { class: "small muted" }, `Declared value ${money(total, "USD")}`)),
+        h("b", {}, "Customs & commercial invoice"), totalEl),
       h("p", { class: "small muted", style: { margin: "0 0 10px" } }, "Describe each item plainly (e.g. “Acrylic yarn”, “Tufting gun”). What you enter is remembered for next time. HS codes from Shopify are filled in automatically."),
       h("div", { class: "tbl-wrap" }, h("table", { class: "tbl customs-tbl" },
-        h("thead", {}, h("tr", {}, ["Item", "Customs description", "HS code", "Made in", "Qty", "Value each"].map((x) => h("th", {}, x)))),
+        h("thead", {}, h("tr", {}, ["Item", "Customs description", "HS code", "Made in", "Qty", "Value each", "Line total"].map((x, n) => h("th", { class: n >= 4 ? "num" : "" }, x)))),
         h("tbody", {}, c.items.map((i) => {
           const inp = (key, attrs = {}) => {
             const el = h("input", { class: "input", value: i[key] ?? "", ...attrs });
@@ -869,13 +912,20 @@ function buildLabelForm(root, o, presets, opts) {
             h("td", {}, inp("hsCode", { inputmode: "numeric", placeholder: "Optional", maxlength: 10, style: { width: "110px" } })),
             h("td", {}, inp("origin", { maxlength: 2, style: { width: "56px" } })),
             h("td", { class: "num" }, i.qty),
-            h("td", {}, inp("unitValue", { type: "number", min: "0", step: "0.01", style: { width: "90px" } })));
+            h("td", { class: "num" }, inp("unitValue", { type: "number", min: "0", step: "0.01", style: { width: "90px" }, "aria-label": "Value each (USD)" })),
+            (() => { const el = h("td", { class: "num" }); lineTotals.set(i, el); return el; })());
         })))),
+      h("div", { class: "row customs-tools", style: { marginTop: "10px", gap: "8px", flexWrap: "wrap" } },
+        h("span", { class: "small muted" }, "Set every value to"), pct, h("span", { class: "small muted" }, "% of the price paid"),
+        h("button", { class: "btn sm ghost", onclick: applyPct }, "Apply"),
+        h("span", { style: { flex: "1" } }),
+        copiesSel, printInvoice),
       h("div", { class: "grid3", style: { marginTop: "10px" } },
         h("label", { class: "field" }, "Contents", sel("contents", CONTENTS)),
         h("label", { class: "field" }, "Duties & taxes paid by", sel("dutiesPaidBy", [["recipient", "Customer (on delivery)"], ["sender", "Us (UPS bills our account)"]])),
         h("label", { class: "field" }, "If it can't be delivered", sel("nonDelivery", [["return", "Return to us"], ["abandon", "Abandon"]]))),
       probEl));
+    drawTotals();
   }
 
   const ratesEl = h("div");
@@ -1412,6 +1462,7 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "row", style: { marginTop: "16px" } },
         nextUp ? h("button", { class: "btn primary", onclick: () => openOrderPage(queueApi?.find(nextUp.id) ?? nextUp, { list: opts.list }) }, "Next order", h("span", { style: { opacity: 0.75 } }, nextUp.name), icon("down")) : null,
         h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
+        isIntl() ? h("button", { class: "btn", onclick: () => openCommercialInvoice({ shipmentId: r.id }).catch((e) => toast(e.message, true)) }, icon("printer"), "Commercial invoice") : null,
         (split() || partialActive()) && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, split() ? "Packing slips (one per box)" : "Packing slip for this box") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
         (() => {
@@ -1607,6 +1658,7 @@ async function renderBatchList(root, importEl) {
           h("td", { class: "num" }, l.cost != null ? money(l.cost, l.currency) : ""),
           h("td", { style: { whiteSpace: "nowrap" } }, l.status !== "voided" ? h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, "Print") : null,
             l.forms ? Array.from({ length: l.forms }, (_, n) => h("a", { class: "btn sm ghost", href: `/api/shipping/labels/${l.id}/forms/${n}`, target: "_blank", rel: "noopener" }, l.forms > 1 ? `Customs ${n + 1}` : "Customs")) : null,
+            l.invoice && l.status !== "voided" ? h("button", { class: "btn sm ghost", onclick: () => openCommercialInvoice({ shipmentId: l.id }).catch((e) => toast(e.message, true)) }, "Invoice") : null,
             l.status !== "voided" ? voidBtn : null));
       })))));
       const toggle = h("button", { class: "btn sm ghost" }, "Details");

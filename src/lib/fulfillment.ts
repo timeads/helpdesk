@@ -366,7 +366,10 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
   // Remember how this was packed for the next order with the same items (single or multi-box)
   // Remember how this was packed (not for partial shipments: the box held only some of the items)
   if (o && !partialList) await learnPacking(env, o, input.parcels, input.presetId ?? null).catch((e) => console.error("learn packing", e));
-  if (input.customs) await saveProfiles(env, input.customs).catch((e) => console.error("customs profiles", e));
+  if (input.customs) {
+    await env.DB.prepare("UPDATE shipments SET customs = ? WHERE id = ?").bind(JSON.stringify(input.customs), row!.id).run();
+    await saveProfiles(env, input.customs).catch((e) => console.error("customs profiles", e));
+  }
   if (o && partialList) {
     // Redo-style: the rest of the order waits on hold until it can ship
     const note = `Partial shipment — waiting on: ${leftBehind(o, partialList)}`.slice(0, 500);
