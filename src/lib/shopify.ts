@@ -72,19 +72,22 @@ const ADDRESS = `name company address1 address2 city province provinceCode zip c
 // second batched lookup by variant ID, which also needs read_products and is skipped without it.
 const PAGE = 10;
 
+// Orders are read as they are now, after any edits or refunds: totals are Shopify's "current"
+// amounts and each line's quantity is its current quantity (items removed in an order edit stay on
+// the order with quantity 0, and decorate() drops them).
 const ORDER_FIELDS_TEMPLATE = `
   id name createdAt cancelledAt closed note email phone tags
   displayFinancialStatus displayFulfillmentStatus
-  totalPriceSet { shopMoney { amount currencyCode } }
-  totalShippingPriceSet { shopMoney { amount currencyCode } }
-  subtotalPriceSet { shopMoney { amount } }
-  totalDiscountsSet { shopMoney { amount } }
-  totalTaxSet { shopMoney { amount } }
+  totalPriceSet: currentTotalPriceSet { shopMoney { amount currencyCode } }
+  totalShippingPriceSet: currentShippingPriceSet { shopMoney { amount currencyCode } }
+  subtotalPriceSet: currentSubtotalPriceSet { shopMoney { amount } }
+  totalDiscountsSet: currentTotalDiscountsSet { shopMoney { amount } }
+  totalTaxSet: currentTotalTaxSet { shopMoney { amount } }
   shippingAddress { ${ADDRESS} }
   shippingLines(first: 1) { nodes { title } }
   lineItems(first: __LINES__) {
     nodes {
-      id title variantTitle quantity sku
+      id title variantTitle quantity: currentQuantity sku
       discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
       image { url(transform: { maxWidth: 120 }) }
       __VARIANT__
@@ -158,7 +161,12 @@ export interface ShopifyOrder {
 }
 
 function decorate(env: Env, o: ShopifyOrder): ShopifyOrder {
-  return { ...o, tags: o.tags ?? [], adminUrl: adminOrderUrl(env, o.id) };
+  return {
+    ...o,
+    tags: o.tags ?? [],
+    lineItems: { ...o.lineItems, nodes: o.lineItems.nodes.filter((l) => l.quantity > 0) },
+    adminUrl: adminOrderUrl(env, o.id),
+  };
 }
 
 /** Adds barcode + weight to each line's variant with one batched lookup per 50 variants. */
