@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "../env";
-import { cancelFulfillment, fulfillOrder, markReadyForPickup, findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
+import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
 import { checkAddress } from "../lib/address";
-import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles } from "../lib/customs";
+import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles, type Customs } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
@@ -52,6 +52,28 @@ function validAddress(a: Address): Address {
 const validSignature = (s: unknown): Signature => (s === "standard" || s === "adult" ? s : null);
 const labelFormat = (f: unknown): "GIF" | "ZPL" => (f === "ZPL" ? "ZPL" : "GIF");
 
+/** A partial shipment from the browser: [{ id: line item id, qty }] limited to what the order has left. */
+function cleanPartial(raw: unknown, order: ShopifyOrder | null) {
+  if (!order || !Array.isArray(raw)) return null;
+  const left = new Map(order.lineItems.nodes.map((l) => [l.id, l.quantity]));
+  const list = raw
+    .map((x: any) => ({ id: String(x?.id ?? ""), qty: Math.max(0, Math.round(Number(x?.qty) || 0)) }))
+    .filter((x) => left.has(x.id))
+    .map((x) => ({ ...x, qty: Math.min(x.qty, left.get(x.id)!) }));
+  if (!list.some((x) => x.qty > 0)) throw new HttpError(400, "Pick at least one item to ship now");
+  return list;
+}
+
+/** The order with only the quantities being shipped now (for planning boxes and customs). */
+const subsetOrder = (o: ShopifyOrder, partial: { id: string; qty: number }[]): ShopifyOrder => ({
+  ...o,
+  lineItems: { ...o.lineItems, nodes: o.lineItems.nodes.map((l) => ({ ...l, quantity: partial.find((x) => x.id === l.id)?.qty ?? 0 })).filter((l) => l.quantity > 0) },
+});
+
+/** Customs for just the items in a partial shipment. */
+const customsFor = (c: Customs | undefined, partial: { id: string; qty: number }[] | null): Customs | undefined =>
+  c && partial ? { ...c, items: c.items.map((i) => ({ ...i, qty: partial.find((x) => x.id === i.lineId)?.qty ?? 0 })).filter((i) => i.qty > 0) } : c;
+
 /** Today's date where the store is (Philadelphia), as YYYY-MM-DD. */
 const storeToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 
@@ -91,12 +113,13 @@ async function idMap(env: Env, sql: string, ids: string[]) {
 }
 
 /** Everything the queue and slideout need about an order, computed once on the server. */
-async function describe(env: Env, orders: ShopifyOrder[]) {
+async function describe(env: Env, all: ShopifyOrder[]) {
+  const orders = all.map(remaining); // after a partial shipment, only what's still to ship
   const ids = orders.map((o) => o.id);
   const [plans, holds, labelled, slips, drafts, presets, pickups] = await Promise.all([
     planOrders(env, orders),
     holdsFor(env, ids),
-    idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND order_id IN (?)", ids),
+    idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND COALESCE(partial, 0) = 0 AND order_id IN (?)", ids),
     idMap(env, "SELECT order_id, printed_at AS v FROM packing_slip_prints WHERE order_id IN (?)", ids),
     loadDrafts(env, ids),
     loadPresets(env),
@@ -358,11 +381,13 @@ shipping.post("/labels", async (c) => {
     scanVerified?: boolean;
     customs?: unknown;
   }>();
-  const order = body.orderId ? (demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) ?? null : await getOrder(c.env, body.orderId)) : null;
+  const found = body.orderId ? (demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) ?? null : await getOrder(c.env, body.orderId)) : null;
+  const order = found ? remaining(found) : null;
+  const partial = cleanPartial((body as any).partial, order);
   const to = validAddress(body.to);
-  let customs = cleanCustoms(body.customs);
+  let customs = customsFor(cleanCustoms(body.customs), partial);
   if (isInternationalAddress(to)) {
-    if (!customs && order) customs = await buildCustoms(c.env, order);
+    if (!customs && order) customs = await buildCustoms(c.env, partial ? subsetOrder(order, partial) : order);
     if (!customs) throw new HttpError(422, "International shipments need customs details");
     const problems = customsProblems(customs);
     if (problems.length) throw new HttpError(422, problems.join(" · "));
@@ -384,6 +409,7 @@ shipping.post("/labels", async (c) => {
     notifyCustomer: body.notifyCustomer ?? true,
     batchId: body.batchId ?? null,
     scanVerified: !!body.scanVerified,
+    partial,
   });
   return c.json(r);
 });
@@ -394,17 +420,19 @@ shipping.post("/labels", async (c) => {
  * inside Cloudflare's per-request limits and progress can be shown.
  */
 shipping.post("/labels/auto", async (c) => {
-  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean }>();
-  const order = demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) : await getOrder(c.env, body.orderId);
-  if (!order) throw new HttpError(404, "Order not found");
+  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown }>();
+  const found = demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) : await getOrder(c.env, body.orderId);
+  if (!found) throw new HttpError(404, "Order not found");
+  const order = remaining(found);
+  const partial = cleanPartial(body.partial, order);
   const [d] = await describe(c.env, [order]);
   if (d.hasLabel) throw new HttpError(409, `${order.name} already has a label`);
   if (d.hold) throw new HttpError(409, `${order.name} is on hold: ${d.hold}`);
   const plan: Plan = d.plan;
-  if (!plan.weightKnown) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
+  if (!plan.weightKnown && !body.parcels && !partial) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
   let to = validAddress(d.draft?.to ?? addressFromOrder(order));
   // Don't buy a label for an address the carrier can't find or wants to correct
-  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, order) : undefined;
+  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, partial ? subsetOrder(order, partial) : order) : undefined;
   if (customs) {
     const problems = customsProblems(customs);
     if (problems.length) throw new HttpError(422, `${order.name}: ${problems[0]} — open it to fix the customs list`);
@@ -415,12 +443,15 @@ shipping.post("/labels/auto", async (c) => {
   if (check.residential !== null) to = { ...to, residential: check.residential };
   // Every box from the plan (a remembered multi-box packing ships as one multi-box shipment)
   const titles = new Map(order.lineItems.nodes.map((l) => [l.id, l.title + (l.variantTitle ? ` · ${l.variantTitle}` : "")]));
-  const parcels = validParcels(
-    plan.boxes.map((b) => ({
+  // The packing station can send the box it actually used (and, shipping part of the order, what's in it)
+  const boxPlan = partial && !(Array.isArray(body.parcels) && body.parcels.length) ? (await planOrders(c.env, [subsetOrder(order, partial)])).get(order.id) ?? plan : plan;
+  if (!boxPlan.weightKnown && !(Array.isArray(body.parcels) && body.parcels.length)) throw new HttpError(422, `${order.name}: no weight known for these items — set the box weight`);
+  const parcels = Array.isArray(body.parcels) && body.parcels.length ? validParcels(body.parcels) : validParcels(
+    boxPlan.boxes.map((b) => ({
       ...b.parcel,
       presetId: b.preset?.id ?? null,
       box: b.preset?.name,
-      contents: plan.boxes.length > 1 ? Object.entries(b.items).filter(([, q]) => q > 0).map(([id, qty]) => ({ id, title: titles.get(id) ?? "", qty })) : undefined,
+      contents: boxPlan.boxes.length > 1 || partial ? Object.entries(b.items).filter(([, q]) => q > 0).map(([id, qty]) => ({ id, title: titles.get(id) ?? "", qty })) : undefined,
     })),
   );
   const rates = await getRates(c.env, await shipFrom(c.env), to, parcels, plan.signature, customs);
@@ -430,7 +461,7 @@ shipping.post("/labels/auto", async (c) => {
     order,
     to,
     parcels,
-    presetId: plan.preset?.id ?? null,
+    presetId: boxPlan.preset?.id ?? null,
     rate,
     signature: plan.signature,
     labelFormat: labelFormat(body.labelFormat),
@@ -439,6 +470,7 @@ shipping.post("/labels/auto", async (c) => {
     batchId: body.batchId ?? null,
     scanVerified: !!body.scanVerified,
     customs,
+    partial,
   });
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });
 });
@@ -727,6 +759,23 @@ shipping.get("/batches", async (c) => {
  * the boxes (and their tracking numbers) come from that shipment; before that, from the boxes
  * chosen on the order page or remembered for these items.
  */
+/** Slips for one shipment (e.g. a partial one): one per box, listing what that box holds. */
+async function slipsForShipment(env: Env, shipmentId: number): Promise<{ order: Described; box?: SlipBox }[]> {
+  const s = await env.DB.prepare("SELECT order_id, packages, tracking_numbers, partial FROM shipments WHERE id = ?").bind(shipmentId)
+    .first<{ order_id: string | null; packages: string; tracking_numbers: string; partial: number }>();
+  if (!s?.order_id) throw new HttpError(404, "Shipment not found");
+  const found = demo(env) ? demoOrders().find((o) => o.id === s.order_id) : await getOrder(env, s.order_id);
+  if (!found) throw new HttpError(404, "Order not found");
+  // The whole order (not just what's left): the shipment's own lines say what went in it
+  const [order] = await describe(env, [{ ...found, lineItems: { ...found.lineItems, nodes: found.lineItems.nodes.map((l) => ({ ...l, unfulfilledQuantity: undefined })) } }]);
+  const pk = JSON.parse(s.packages || "[]") as { box?: string; contents?: { id: string; qty: number }[] }[];
+  const tn = JSON.parse(s.tracking_numbers || "[]") as string[];
+  const boxes = pk.filter((p) => p.contents?.length).map((p, i) => ({ name: p.box ?? null, tracking: tn[i] ?? null, qty: Object.fromEntries(p.contents!.map((x) => [x.id, x.qty])) }));
+  if (!boxes.length) return [{ order }];
+  if (boxes.length === 1) return [{ order: { ...order, lineItems: { ...order.lineItems, nodes: order.lineItems.nodes.filter((l) => boxes[0].qty[l.id]).map((l) => ({ ...l, quantity: boxes[0].qty[l.id] })) } } }];
+  return boxes.map((b, i) => ({ order, box: { ...b, n: i + 1, of: boxes.length } }));
+}
+
 async function slipsFor(env: Env, orders: Described[]): Promise<{ order: Described; box?: SlipBox }[]> {
   const ids = orders.map((o) => o.id);
   const bought = new Map<string, { packages: string; tracking_numbers: string }>();
@@ -734,7 +783,7 @@ async function slipsFor(env: Env, orders: Described[]): Promise<{ order: Describ
     const chunk = ids.slice(i, i + 50);
     if (!chunk.length) continue;
     const { results } = await env.DB.prepare(
-      `SELECT order_id, packages, tracking_numbers FROM shipments WHERE status = 'purchased' AND order_id IN (${chunk.map(() => "?").join(",")}) ORDER BY id`,
+      `SELECT order_id, packages, tracking_numbers FROM shipments WHERE status = 'purchased' AND COALESCE(partial, 0) = 0 AND order_id IN (${chunk.map(() => "?").join(",")}) ORDER BY id`,
     ).bind(...chunk).all<{ order_id: string; packages: string; tracking_numbers: string }>();
     for (const r of results) bought.set(r.order_id, r); // the latest shipment wins
   }
@@ -808,10 +857,11 @@ shipping.post("/packing-slips/printed", async (c) => {
  * browser can draw them) plus which were printed before. The browser turns each into ZPL.
  */
 shipping.get("/packing-slips/data", async (c) => {
-  const ids = (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 50);
+  const shipmentId = Number(c.req.query("shipment")) || 0; // one shipment's slips (e.g. a partial one)
+  const forShipment = shipmentId ? await slipsForShipment(c.env, shipmentId) : null;
+  const ids = forShipment ? [forShipment[0].order.id] : (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 50);
   if (!ids.length) throw new HttpError(400, "No orders selected");
-  const orders = demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids);
-  const described = await describe(c.env, orders);
+  const described = forShipment ? forShipment.map((x) => x.order) : await describe(c.env, demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids));
   const from = await getSetting<Address | null>(c.env, "ship_from", null);
   const layout = await slipLayout(c.env);
   if (layout.itemImages) {
@@ -834,17 +884,18 @@ shipping.get("/packing-slips/data", async (c) => {
   const prints = await idMap(c.env, "SELECT order_id, printed_at || '|' || print_count AS v FROM packing_slip_prints WHERE order_id IN (?)", described.map((o) => o.id));
   return c.json({
     css: SLIP_CSS,
-    slips: (await slipsFor(c.env, described)).map(({ order: o, box }) => ({ id: o.id, name: box ? `${o.name} (box ${box.n} of ${box.of})` : o.name, html: renderSlip(o, "4x6", from, layout, box) })),
+    slips: (forShipment ?? (await slipsFor(c.env, described))).map(({ order: o, box }) => ({ id: o.id, name: box ? `${o.name} (box ${box.n} of ${box.of})` : o.name, html: renderSlip(o, "4x6", from, layout, box) })),
     printed: described.filter((o) => prints.has(o.id)).map((o) => { const [at, n] = prints.get(o.id)!.split("|"); return { id: o.id, name: o.name, at, count: Number(n) || 1 }; }),
   });
 });
 
 shipping.get("/packing-slips", async (c) => {
-  const ids = (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 100);
+  const shipmentId = Number(c.req.query("shipment")) || 0;
+  const forShipment = shipmentId ? await slipsForShipment(c.env, shipmentId) : null;
+  const ids = forShipment ? [forShipment[0].order.id] : (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 100);
   if (!ids.length) throw new HttpError(400, "No orders selected");
   const size = c.req.query("size") === "letter" ? "letter" : "4x6";
-  const orders = demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids);
-  const described = await describe(c.env, orders);
+  const described = forShipment ? [forShipment[0].order] : await describe(c.env, demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids));
   const from = await getSetting<Address | null>(c.env, "ship_from", null);
   const layout = await slipLayout(c.env);
   const prints = await idMap(c.env, "SELECT order_id, printed_at || '|' || print_count AS v FROM packing_slip_prints WHERE order_id IN (?)", described.map((o) => o.id));
@@ -858,7 +909,7 @@ shipping.get("/packing-slips", async (c) => {
     total: described.length,
     newOnlyUrl: already.length && fresh.length ? `/api/shipping/packing-slips?size=${size}&ids=${fresh.map((o) => encodeURIComponent(o.id)).join(",")}` : null,
   });
-  const slips = await slipsFor(c.env, described);
+  const slips = forShipment ?? (await slipsFor(c.env, described));
   return c.html(slipPage(slips.map(({ order: o, box }) => renderSlip(o, size, from, layout, box)).join(""), slips.length, size, true, guard));
 });
 

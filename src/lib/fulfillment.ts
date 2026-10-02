@@ -314,10 +314,26 @@ export interface BuyInput {
   batchId?: string | null;
   scanVerified?: boolean;
   customs?: Customs;
+  /** Ship only these line items/quantities now; the rest of the order waits, on hold. */
+  partial?: { id: string; qty: number }[] | null;
+}
+
+/** "1 × Primary Tufting Cloth, 2 × Yarn" for what a partial shipment leaves behind. */
+export function leftBehind(o: ShopifyOrder, partial: { id: string; qty: number }[]) {
+  const sent = new Map(partial.map((x) => [x.id, x.qty]));
+  return o.lineItems.nodes
+    .map((l) => ({ l, left: l.quantity - (sent.get(l.id) ?? 0) }))
+    .filter((x) => x.left > 0)
+    .map((x) => `${x.left} × ${x.l.title}${x.l.variantTitle ? ` (${x.l.variantTitle})` : ""}`)
+    .join(", ");
 }
 
 /** Buys the label, records it (with analytics fields), learns the box, and fulfills in Shopify. */
 export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
+  // A partial shipment only counts when something is actually left behind
+  const partialList = input.partial?.length && input.order && input.order.lineItems.nodes.some((l) => (input.partial!.find((x) => x.id === l.id)?.qty ?? 0) < l.quantity)
+    ? input.partial.filter((x) => x.qty > 0)
+    : null;
   const o = input.order;
   const result = await purchase(env, await shipFrom(env), input.to, input.parcels, input.rate.serviceCode, {
     reference: o?.name,
@@ -332,8 +348,8 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
   const row = await env.DB.prepare(
     `INSERT INTO shipments (forms, carrier, order_id, order_name, ticket_id, service_code, service_name, shipment_id, tracking_numbers, labels, label_format,
        cost, currency, packages, ship_to, agent_id, signature, batch_id, shipping_paid, order_total, order_created_at, requested_service,
-       list_cost, item_count, dest_state, dest_country, scan_verified)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+       list_cost, item_count, dest_state, dest_country, scan_verified, partial)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
   )
     .bind(
       JSON.stringify(result.forms ?? []),
@@ -343,21 +359,29 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
       JSON.stringify(input.parcels.map((p, i) => (perBox ? { ...p, cost: perBox[i] } : p))), JSON.stringify(input.to), agent.id, input.signature ?? null, input.batchId ?? null,
       o ? shippingPaid(o) : null, o ? Number(o.totalPriceSet.shopMoney.amount) : null, o?.createdAt ?? null,
       o ? requestedService(o) : null, input.rate.listTotal ?? null, o ? itemCount(o) : null, input.to.state || null,
-      input.to.country || null, input.scanVerified ? 1 : 0,
+      input.to.country || null, input.scanVerified ? 1 : 0, partialList ? 1 : 0,
     )
     .first<{ id: number }>();
 
   // Remember how this was packed for the next order with the same items (single or multi-box)
-  if (o) await learnPacking(env, o, input.parcels, input.presetId ?? null).catch((e) => console.error("learn packing", e));
+  // Remember how this was packed (not for partial shipments: the box held only some of the items)
+  if (o && !partialList) await learnPacking(env, o, input.parcels, input.presetId ?? null).catch((e) => console.error("learn packing", e));
   if (input.customs) await saveProfiles(env, input.customs).catch((e) => console.error("customs profiles", e));
-  if (o) await env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id).run();
+  if (o && partialList) {
+    // Redo-style: the rest of the order waits on hold until it can ship
+    const note = `Partial shipment — waiting on: ${leftBehind(o, partialList)}`.slice(0, 500);
+    await env.DB.prepare(
+      `INSERT INTO order_holds (order_id, order_name, status, note, hold_until, agent_id, updated_at) VALUES (?, ?, 'hold', ?, NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT(order_id) DO UPDATE SET status = 'hold', note = excluded.note, hold_until = NULL, agent_id = excluded.agent_id, updated_at = excluded.updated_at`,
+    ).bind(o.id, o.name, note, agent.id).run();
+  } else if (o) await env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id).run();
 
   let fulfillError: string | null = null;
   if (input.fulfill && o && result.trackingNumbers[0]) {
     try {
       // Every box's tracking number goes on the one fulfillment, so the customer's email lists them all
       const numbers = result.trackingNumbers;
-      const f = await fulfillOrder(env, o.id, { company: result.carrier, numbers, urls: numbers.map((n) => trackingUrlFor(result.carrier, n)) }, input.notifyCustomer);
+      const f = await fulfillOrder(env, o.id, { company: result.carrier, numbers, urls: numbers.map((n) => trackingUrlFor(result.carrier, n)) }, input.notifyCustomer, partialList ?? undefined);
       await env.DB.prepare("UPDATE shipments SET fulfilled = 1, fulfillment_id = ? WHERE id = ?").bind(f?.id ?? null, row!.id).run();
     } catch (e) {
       fulfillError = (e as Error).message;

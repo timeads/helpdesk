@@ -1235,3 +1235,9 @@ body.order-open { overflow: hidden; }
 .email-addr { overflow-wrap: anywhere; }
 .op-aside .email-customer { width: 100%; justify-content: center; margin-top: 10px; }
 .new-email .starters { flex-wrap: wrap; }
+.ship-now { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ship-now .qty-in { width: 60px; text-align: center; }
+.pack-row.held { opacity: .6; }
+.scan-box { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--sunken); }
+.scan-box .field { flex: 1; min-width: 70px; }
+.scan-quote-wrap { display: grid; gap: 4px; justify-items: end; margin-left: auto; min-width: 200px; text-align: right; }

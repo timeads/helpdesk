@@ -266,24 +266,25 @@ export async function printLabels({ ids, batch }, win = null) {
 /** Zebra + 4×6 slips: send them straight to the printer (unless turned off on this computer). */
 export const slipsDirect = () => printSettings().labels === "zebra" && printSettings().slips === "4x6" && printSettings().slipsDirect !== false;
 
-export function openPackingSlips(orderIds, win = null) {
+/** Packing slips for orders, or ({ shipment }) for one shipment — e.g. what's in a partial shipment. */
+export function openPackingSlips(orderIds, win = null, { shipment = null } = {}) {
   if (slipsDirect()) {
     if (win && !win.closed) win.close();
-    return printSlipsToZebra(orderIds);
+    return printSlipsToZebra(orderIds, { shipment });
   }
-  const url = `/api/shipping/packing-slips?size=${printSettings().slips}&ids=${orderIds.map(encodeURIComponent).join(",")}`;
+  const url = `/api/shipping/packing-slips?size=${printSettings().slips}${shipment ? `&shipment=${shipment}` : `&ids=${orderIds.map(encodeURIComponent).join(",")}`}`;
   if (win && !win.closed) win.location.href = url;
   else if (!window.open(url, "_blank")) toast("Allow pop-ups for this site to print packing slips", true);
 }
 
 /** Draws each slip, converts it to ZPL and sends it to the Zebra — no window, no dialog. */
-export async function printSlipsToZebra(orderIds, { sample = false } = {}) {
+export async function printSlipsToZebra(orderIds, { sample = false, shipment = null } = {}) {
   try {
-    const res = await fetch(`/api/shipping/packing-slips/data?ids=${orderIds.map(encodeURIComponent).join(",")}`, { credentials: "same-origin" });
+    const res = await fetch(`/api/shipping/packing-slips/data?${shipment ? `shipment=${shipment}` : `ids=${orderIds.map(encodeURIComponent).join(",")}`}`, { credentials: "same-origin" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Couldn't load the packing slips");
     let slips = data.slips;
-    if (data.printed.length && !sample) {
+    if (data.printed.length && !sample && !shipment) {
       const when = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
       const lines = data.printed.slice(0, 8).map((p) => `${p.name} — printed ${when(p.at)}${p.count > 1 ? ` (${p.count} times)` : ""}`);
       const orders = new Set(slips.map((x) => x.id)).size; // a split order has one slip per box

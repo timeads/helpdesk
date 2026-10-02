@@ -77,7 +77,7 @@ export function renderShipping(main) {
   }).catch(() => {});
 
   const cleanups = [];
-  if (tab === "scan") cleanups.push(renderScan(body, { openSlideout: (o) => openOrderPage(o, { list: [] }) }));
+  if (tab === "scan") cleanups.push(renderScan(body, { openSlideout: (o, extra = {}) => openOrderPage(o, { list: [], ...extra }) }));
   else if (tab === "batches") renderBatches(body);
   else cleanups.push(renderQueue(body, params));
 
@@ -723,7 +723,9 @@ function buildLabelForm(root, o, presets, opts) {
     wantCode: null,
   };
   const round1 = (n) => Math.round(n * 10) / 10;
-  const lines = o ? o.lineItems.nodes.map((l) => ({ id: l.id, title: l.title + (l.variantTitle ? ` · ${l.variantTitle}` : ""), qty: l.quantity, lb: lineWeight(l), image: l.image?.url })) : [];
+  // qty = how many ship in this label; ordered = how many the order still needs (they differ when shipping part of it)
+  const lines = o ? o.lineItems.nodes.map((l) => ({ id: l.id, title: l.title + (l.variantTitle ? ` · ${l.variantTitle}` : ""), qty: l.quantity, ordered: l.quantity, lb: lineWeight(l), image: l.image?.url })) : [];
+  const partialActive = () => lines.some((l) => l.qty < l.ordered);
   const weightsKnown = lines.length > 0 && lines.every((l) => l.lb !== null);
   const defaultBox = presets.find((b) => b.is_default) ?? presets[0];
   const allIn = () => Object.fromEntries(lines.map((l) => [l.id, l.qty]));
@@ -903,7 +905,7 @@ function buildLabelForm(root, o, presets, opts) {
     length: p.length, width: p.width, height: p.height, weight: p.weight,
     presetId: p.preset ? Number(p.preset) : undefined,
     box: presets.find((b) => String(b.id) === String(p.preset))?.name,
-    contents: split() ? lines.filter((l) => p.alloc[l.id] > 0).map((l) => ({ id: l.id, title: l.title, qty: p.alloc[l.id] })) : undefined,
+    contents: split() || partialActive() ? lines.filter((l) => p.alloc[l.id] > 0).map((l) => ({ id: l.id, title: l.title, qty: p.alloc[l.id] })) : undefined,
   });
 
   const inputs = {};
@@ -1039,6 +1041,32 @@ function buildLabelForm(root, o, presets, opts) {
     h("button", { class: "pack-add", onclick: addBox, title: "Too much for one box? Each box gets its own label and tracking number." }, icon("plus"), h("span", {}, "Add another box")));
   };
 
+  /** Shipping part of the order: n of this item go now; the box contents follow. */
+  const setShipQty = (l, n) => {
+    l.qty = Math.max(0, Math.min(l.ordered, Math.round(+n || 0)));
+    let total = s.parcels.reduce((t, p) => t + (p.alloc[l.id] || 0), 0);
+    for (let i = s.parcels.length - 1; i >= 0 && total > l.qty; i--) {
+      const take = Math.min(s.parcels[i].alloc[l.id] || 0, total - l.qty);
+      s.parcels[i].alloc[l.id] -= take;
+      total -= take;
+    }
+    if (total < l.qty) s.parcels[0].alloc[l.id] = (s.parcels[0].alloc[l.id] || 0) + (l.qty - total);
+    // A box left with nothing in it isn't shipped
+    const empty = s.parcels.map((p, i) => (lines.some((x) => p.alloc[x.id] > 0) ? -1 : i)).filter((i) => i >= 0);
+    if (empty.length && empty.length < s.parcels.length) {
+      for (const i of empty.reverse()) s.parcels.splice(i, 1);
+      toast(empty.length === 1 ? "That box is empty now, so it's left out" : `${empty.length} empty boxes left out`);
+    }
+    if (weightsKnown) for (const p of s.parcels) p.auto = true;
+    changed();
+  };
+  const togglePartial = () => {
+    s.partialMode = !s.partialMode;
+    if (!s.partialMode) for (const l of lines) if (l.qty !== l.ordered) setShipQty(l, l.ordered);
+    drawParcels();
+    drawBuyBar();
+  };
+
   const drawItems = () => {
     const anyLeft = lines.some((l) => left(l) !== 0);
     const hasDraft = o && (drafts.has(o.id) || o.draft);
@@ -1047,7 +1075,8 @@ function buildLabelForm(root, o, presets, opts) {
       hasDraft ? h("button", { class: "btn sm ghost", title: "Forget the choices made here and go back to the suggested boxes", onclick: resetDraft }, "Reset") : null,
       totalWeightEl,
       split() && anyLeft ? h("span", { class: "badge warn" }, "Some items aren't in a box") : null,
-      split() && lines.length ? h("button", { class: "btn sm", title: "Spread the items so each box weighs about the same", onclick: () => { splitEvenly(); changed(); } }, "Split evenly") : null);
+      split() && lines.length ? h("button", { class: "btn sm", title: "Spread the items so each box weighs about the same", onclick: () => { splitEvenly(); changed(); } }, "Split evenly") : null,
+      o && !o.pickup && lines.length ? h("button", { class: "btn sm" + (s.partialMode ? " primary" : ""), title: "Some items aren't in stock: ship what you have; the rest of the order goes on hold", onclick: togglePartial }, s.partialMode ? "Ship everything" : "Ship part of this order") : null);
     if (!lines.length) return mount(itemsEl);
     const meta = (l) => {
       const src = lineInfo.get(l.id);
@@ -1062,6 +1091,28 @@ function buildLabelForm(root, o, presets, opts) {
         h("div", { class: "qty" }, h("span", { class: l.qty > 1 ? "many" : null }, `× ${l.qty}`), m.price ? h("div", { class: "small" }, m.price) : null),
       ];
     };
+    const shipNow = (l) => {
+      const inp = h("input", { class: "input qty-in", type: "number", min: "0", max: String(l.ordered), value: l.qty, inputmode: "numeric", "aria-label": `${l.title} shipping now` });
+      inp.onchange = () => setShipQty(l, inp.value);
+      return h("label", { class: "ship-now" }, h("span", { class: "small muted" }, "Ship now"), inp, h("span", { class: "small muted" }, `of ${l.ordered}`),
+        l.qty < l.ordered ? h("span", { class: "small neg" }, `${l.ordered - l.qty} held back`) : null);
+    };
+    if (s.partialMode) {
+      const held = lines.filter((l) => l.qty < l.ordered);
+      mount(itemsEl,
+        h("div", { class: "notice info", style: { marginBottom: "10px" } }, held.length
+          ? `Shipping part of the order. Shopify marks only these items fulfilled; the rest (${held.map((l) => `${l.ordered - l.qty} × ${l.title}`).join(", ")}) goes on hold until you release it.`
+          : "Set how many of each item ship now. Whatever's held back stays on the order, on hold."),
+        h("div", { class: "pack-rows" }, lines.map((l) => h("div", { class: "pack-row" + (l.qty === 0 ? " held" : "") },
+          h("div", { class: "line" }, head({ ...l, qty: l.ordered })),
+          h("div", { class: "pack-assign" }, shipNow(l),
+            split() && l.qty > 0 ? h("div", { class: "pack-qtys" }, s.parcels.map((p, i) => {
+              const inp = h("input", { class: "input qty-in", type: "number", min: "0", max: String(l.qty), value: p.alloc[l.id] || 0, inputmode: "numeric", "aria-label": `${l.title} in box ${i + 1}` });
+              inp.onchange = () => setQty(l, i, inp.value);
+              return h("label", {}, h("span", { class: "small muted" }, `Box ${i + 1}`), inp);
+            })) : null)))));
+      return;
+    }
     if (!split()) {
       return mount(itemsEl, h("div", { class: "op-items" }, lines.map((l) => h("div", { class: "line" }, head(l)))));
     }
@@ -1226,7 +1277,7 @@ function buildLabelForm(root, o, presets, opts) {
     const notify = s.notifyBox ??= h("input", { type: "checkbox", checked: true });
     const r = s.rate;
     const buy = h("button", { class: "btn primary op-buy-btn", disabled: !r },
-      icon("printer"), r ? (split() ? `Buy ${s.parcels.length} labels & print` : "Buy & print label") : "Pick a service", r ? h("kbd", {}, navigator.platform?.startsWith("Mac") ? "⌘P" : "Ctrl+P") : null);
+      icon("printer"), r ? (partialActive() ? "Buy label for part of order" : split() ? `Buy ${s.parcels.length} labels & print` : "Buy & print label") : "Pick a service", r ? h("kbd", {}, navigator.platform?.startsWith("Mac") ? "⌘P" : "Ctrl+P") : null);
     buy.onclick = busy(buy, () => purchase(fulfill.checked, notify.checked));
     if (page) page.buy = () => (r && !buy.disabled ? buy.click() : toast(ready() ? "Pick a service first" : "Finish the address, box and weight first", true));
     const m = r && paid !== null ? paid - r.total : null;
@@ -1251,6 +1302,7 @@ function buildLabelForm(root, o, presets, opts) {
     if (isIntl() && !s.to.phone?.trim()) { toast("Add the customer's phone number — carriers need it for international shipments", true); inputs.phone?.focus(); return; }
     if (s.addr?.status === "invalid" && !confirm("The carrier couldn't find this address. Buy the label anyway?")) return;
     if (s.addr?.status === "corrected" && !confirm("There's a suggested correction for this address you haven't used. Buy with the address as typed?")) return;
+    if (lines.length && lines.every((l) => l.qty === 0)) { toast("Nothing is set to ship now", true); return; }
     if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
       && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
     const win = reserveWindow();
@@ -1262,6 +1314,7 @@ function buildLabelForm(root, o, presets, opts) {
           presetId: s.parcels.length === 1 && s.parcels[0].preset ? Number(s.parcels[0].preset) : undefined,
           serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal, perBox: s.rate.perBox,
           labelFormat: labelFormat(), fulfill, notifyCustomer: notify, signature: s.signature || undefined, batchId: newBatchId(),
+          partial: partialActive() ? lines.map((l) => ({ id: l.id, qty: l.qty })) : undefined,
           customs: isIntl() ? s.customs : undefined,
         },
       });
@@ -1335,6 +1388,7 @@ function buildLabelForm(root, o, presets, opts) {
     buyEl.classList.add("done");
     mount(buyEl, h("div", { class: "success-card fade-in" },
       h("h2", {}, split() ? `${s.parcels.length} labels bought` : "Label bought"),
+      partialActive() ? h("div", { class: "notice", style: { margin: "6px 0 10px", color: "var(--text)" } }, `Partial shipment. The rest of ${o?.name ?? "the order"} (${lines.filter((l) => l.qty < l.ordered).map((l) => `${l.ordered - l.qty} × ${l.title}`).join(", ")}) is on hold — release it from On hold when it's ready to ship.`) : null,
       h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}${paid !== null ? ` · margin ${marginText(paid - r.cost)}` : ""}`),
       r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
         h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n),
@@ -1345,7 +1399,7 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "row", style: { marginTop: "16px" } },
         nextUp ? h("button", { class: "btn primary", onclick: () => openOrderPage(queueApi?.find(nextUp.id) ?? nextUp, { list: opts.list }) }, "Next order", h("span", { style: { opacity: 0.75 } }, nextUp.name), icon("down")) : null,
         h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
-        split() && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id]) }, "Packing slips (one per box)") : null,
+        (split() || partialActive()) && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, split() ? "Packing slips (one per box)" : "Packing slip for this box") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
         (() => {
           const b = h("button", { class: "btn ghost", title: "Cancel this label so you're not charged" }, "Void label");
@@ -1362,6 +1416,11 @@ function buildLabelForm(root, o, presets, opts) {
   }
 
   drawParcels();
+  if (opts.shipQty && o) {
+    s.partialMode = true;
+    for (const l of lines) if (opts.shipQty[l.id] !== undefined && opts.shipQty[l.id] < l.ordered) setShipQty(l, opts.shipQty[l.id]);
+    drawParcels();
+  }
   if (o?.pickup) {
     if (page) page.buy = () => pickupEl.querySelector(".btn.primary")?.click();
     return;

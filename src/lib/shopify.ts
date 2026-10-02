@@ -87,7 +87,7 @@ const ORDER_FIELDS_TEMPLATE = `
   shippingLines(first: 1) { nodes { title } }
   lineItems(first: __LINES__) {
     nodes {
-      id title variantTitle quantity: currentQuantity sku
+      id title variantTitle quantity: currentQuantity unfulfilledQuantity sku
       discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
       image { url(transform: { maxWidth: 120 }) }
       __VARIANT__
@@ -148,6 +148,7 @@ export interface ShopifyOrder {
       title: string;
       variantTitle: string | null;
       quantity: number;
+      unfulfilledQuantity?: number;
       sku: string | null;
       image: { url: string } | null;
       discountedUnitPriceAfterAllDiscountsSet?: { shopMoney: { amount: string } };
@@ -170,6 +171,15 @@ export interface ShopifyOrder {
     trackingInfo: { company: string | null; number: string | null; url: string | null }[];
   }[];
   adminUrl?: string;
+}
+
+/**
+ * The order as far as shipping is concerned: only what's still to ship. After a partial shipment
+ * the rest of the order keeps its line items, with their remaining quantities.
+ */
+export function remaining(o: ShopifyOrder): ShopifyOrder {
+  if (!o.lineItems.nodes.some((l) => typeof l.unfulfilledQuantity === "number")) return o;
+  return { ...o, lineItems: { ...o.lineItems, nodes: o.lineItems.nodes.map((l) => ({ ...l, quantity: Math.min(l.quantity, l.unfulfilledQuantity ?? l.quantity) })).filter((l) => l.quantity > 0) } };
 }
 
 function decorate(env: Env, o: ShopifyOrder): ShopifyOrder {
@@ -354,14 +364,32 @@ export async function fulfillOrder(
   orderId: string,
   tracking: { numbers: string[]; urls: string[]; company: string } | null, // null: in-store pickup (no tracking)
   notifyCustomer: boolean,
+  only?: { id: string; qty: number }[], // partial shipment: these order line items and quantities only
 ) {
-  const fo = await shopify<{ order: { fulfillmentOrders: { nodes: { id: string; status: string }[] } } }>(
+  type FoLine = { id: string; remainingQuantity: number; lineItem: { id: string } };
+  const fo = await shopify<{ order: { fulfillmentOrders: { nodes: { id: string; status: string; lineItems: { nodes: FoLine[] } }[] } } }>(
     env,
-    `query FO($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status } } } }`,
+    `query FO($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status lineItems(first: 100) { nodes { id remainingQuantity lineItem { id } } } } } } }`,
     { id: orderId },
   );
   const open = fo.order.fulfillmentOrders.nodes.filter((n) => ["OPEN", "IN_PROGRESS"].includes(n.status));
   if (!open.length) throw new HttpError(409, "This order has nothing left to fulfill in Shopify");
+  let byFo: { fulfillmentOrderId: string; fulfillmentOrderLineItems?: { id: string; quantity: number }[] }[] = open.map((n) => ({ fulfillmentOrderId: n.id }));
+  if (only) {
+    // Spread each line's quantity over the fulfillment order lines that still have it
+    const want = new Map(only.filter((x) => x.qty > 0).map((x) => [x.id, x.qty]));
+    byFo = open.map((n) => ({
+      fulfillmentOrderId: n.id,
+      fulfillmentOrderLineItems: n.lineItems.nodes.flatMap((li) => {
+        const left = want.get(li.lineItem.id) ?? 0;
+        const take = Math.min(left, li.remainingQuantity);
+        if (take <= 0) return [];
+        want.set(li.lineItem.id, left - take);
+        return [{ id: li.id, quantity: take }];
+      }),
+    })).filter((x) => x.fulfillmentOrderLineItems.length);
+    if (!byFo.length) throw new HttpError(409, "None of those items are left to fulfill in Shopify");
+  }
   const res = await shopify<{ fulfillmentCreate: { fulfillment: { id: string } | null; userErrors: { message: string }[] } }>(
     env,
     `mutation Fulfill($f: FulfillmentInput!) {
@@ -369,7 +397,7 @@ export async function fulfillOrder(
     }`,
     {
       f: {
-        lineItemsByFulfillmentOrder: open.map((n) => ({ fulfillmentOrderId: n.id })),
+        lineItemsByFulfillmentOrder: byFo,
         ...(tracking ? { trackingInfo: tracking } : {}),
         notifyCustomer,
       },
