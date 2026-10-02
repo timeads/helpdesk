@@ -1126,3 +1126,26 @@ body.order-open { overflow: hidden; }
   .pack-boxes { grid-template-columns: minmax(0, 1fr); }
   .pack-add { min-height: 48px; flex-direction: row; }
 }
+/* Settings → Packing slip */
+.slip-designer { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+.slip-preview { position: sticky; top: 12px; display: grid; gap: 8px; }
+.slip-frame-wrap { width: 340px; height: 510px; overflow: hidden; border-radius: 8px; border: 1px solid var(--border); background: #fff; box-shadow: var(--shadow-sm); }
+.slip-frame { width: 384px; height: 576px; border: 0; transform: scale(.8854); transform-origin: 0 0; background: #fff; }
+.slip-frame-wrap.letter { height: 440px; }
+.slip-frame-wrap.letter .slip-frame { width: 816px; height: 1056px; transform: scale(.4167); }
+.slip-logo { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px; align-items: start; }
+.slip-logo-img, .slip-logo-empty { height: 96px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; display: grid; place-items: center; padding: 8px; overflow: hidden; }
+.slip-logo-img img { max-width: 100%; max-height: 80px; image-rendering: pixelated; }
+.slip-logo-empty { background: var(--sunken); color: var(--text-3); font-size: 12px; gap: 4px; align-content: center; }
+.slip-sections { display: grid; gap: 4px; }
+.slip-section { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.slip-section.off { opacity: .6; }
+.field .seg { justify-self: start; }
+@media (max-width: 900px) {
+  .slip-designer { grid-template-columns: minmax(0, 1fr); }
+  .slip-preview { position: static; justify-items: center; }
+}
+@media (max-width: 480px) {
+  .slip-logo { grid-template-columns: minmax(0, 1fr); }
+}
+.slip-designer .field { display: grid; gap: 6px; }

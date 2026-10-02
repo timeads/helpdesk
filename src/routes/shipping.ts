@@ -18,6 +18,7 @@ import { HttpError, base64UrlDecodeBytes, getSetting, setSetting } from "../lib/
 import { demoOrders } from "../lib/demo";
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
+import { SLIP_CSS, cleanSlip, renderSlip, slipLayout } from "../lib/slip";
 
 const shipping = new Hono<AppEnv>();
 const demo = (env: Env) => !shopifyConfigured(env) && env.DEMO_DATA === "1";
@@ -537,26 +538,38 @@ shipping.get("/batches", async (c) => {
   return c.json({ batches: results, imported });
 });
 
-// ---- Packing slips
-function packingSlip(o: Described, size: "4x6" | "letter", from: Address | null) {
-  const a = (o.shippingAddress ?? {}) as Record<string, string | null>;
-  const code = o.name.replace(/^#/, "");
-  const lines = o.lineItems.nodes
-    .map(
-      (l) => `<tr><td class="q">${l.quantity}</td><td><b>${escapeHtml(l.title)}</b>${l.variantTitle ? `<div class="v">${escapeHtml(l.variantTitle)}</div>` : ""}
-        <div class="v">${[l.sku ? `SKU ${escapeHtml(l.sku)}` : "", l.variant?.barcode ? `Barcode ${escapeHtml(l.variant.barcode)}` : ""].filter(Boolean).join(" · ")}</div></td></tr>`,
-    )
-    .join("");
-  return `<section class="slip ${size === "letter" ? "letter" : "s4x6"}">
-    <header><div><div class="brand">Tuft the World</div>${from ? `<div class="v">${escapeHtml([from.address1, `${from.city}, ${from.state} ${from.zip}`].join(" · "))}</div>` : ""}</div>
-      <div class="right"><div class="order">${escapeHtml(o.name)}</div><div class="v">${new Date(o.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div></div></header>
-    <div class="cols"><div><div class="lbl">Ship to</div><div>${escapeHtml([a.name, a.company, a.address1, a.address2, `${a.city ?? ""}, ${a.provinceCode ?? ""} ${a.zip ?? ""}`, a.countryCodeV2 !== "US" ? a.country : ""].filter(Boolean).join("\n")).replace(/\n/g, "<br>")}</div></div>
-      <div><div class="lbl">Shipping</div><div>${escapeHtml(o.requestedService || "—")}</div>${o.plan.preset ? `<div class="lbl" style="margin-top:6px">${o.plan.boxes.length > 1 ? `Boxes (${o.plan.boxes.length})` : "Box"}</div><div>${escapeHtml(o.plan.boxes.map((b) => b.preset?.name ?? "Custom").join(" + "))}</div>` : ""}</div></div>
-    <table><thead><tr><th class="q">Qty</th><th>Item</th></tr></thead><tbody>${lines}</tbody></table>
-    ${o.note ? `<div class="note"><b>Note:</b> ${escapeHtml(o.note)}</div>` : ""}
-    <footer>${code128Svg(code, { height: 48, module: 2 })}<div class="v">Scan at the packing station · ${escapeHtml(code)}</div><div class="thanks">Thanks for tufting with us!</div></footer>
-  </section>`;
-}
+// ---- Packing slips (layout from Settings → Packing slip)
+const slipPage = (body: string, count: number, size: "4x6" | "letter", autoPrint: boolean) => `<!doctype html><html><head><meta charset="utf-8"><title>Packing slips</title><style>
+@page { size: ${size === "letter" ? "8.5in 11in" : "4in 6in"}; }
+${SLIP_CSS}
+.bar { font: 14px system-ui, sans-serif; padding: 12px; display: flex; gap: 8px; align-items: center; }
+@media print { .bar { display: none; } }
+</style></head><body>
+${autoPrint ? `<div class="bar"><button onclick="print()">Print</button><span>${count} packing slip${count === 1 ? "" : "s"} · ${size === "letter" ? "Letter" : "4×6"}</span></div>` : ""}
+${body}
+${autoPrint ? "<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>" : ""}
+</body></html>`;
+
+shipping.get("/slip-layout", async (c) => c.json({ layout: await slipLayout(c.env) }));
+
+shipping.put("/slip-layout", async (c) => {
+  requireAdmin(c);
+  const layout = cleanSlip((await c.req.json<{ layout: unknown }>()).layout);
+  await setSetting(c.env, "slip_layout", layout);
+  return c.json({ layout });
+});
+
+/** Live preview for the settings screen: an unsaved layout on a sample (or a given) order. */
+shipping.post("/packing-slips/preview", async (c) => {
+  const body = await c.req.json<{ layout: unknown; size?: string; orderId?: string }>();
+  const size = body.size === "letter" ? "letter" : "4x6";
+  let order: ShopifyOrder | undefined;
+  if (body.orderId && !demo(c.env)) order = (await ordersByIds(c.env, [body.orderId]))[0];
+  order ??= [...demoOrders()].sort((x, y) => y.lineItems.nodes.length - x.lineItems.nodes.length)[0];
+  const [described] = await describe(c.env, [order]);
+  const from = await getSetting<Address | null>(c.env, "ship_from", null);
+  return c.html(slipPage(renderSlip(described, size, from, cleanSlip(body.layout)), 1, size, false));
+});
 
 shipping.get("/packing-slips", async (c) => {
   const ids = (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 100);
@@ -572,37 +585,8 @@ shipping.get("/packing-slips", async (c) => {
       ).bind(o.id),
     ),
   );
-  const page = size === "letter" ? "8.5in 11in" : "4in 6in";
-  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>Packing slips</title><style>
-@page { size: ${page}; margin: 0; }
-html, body { margin: 0; background: #fff; color: #111; font: 11px/1.35 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
-.slip { box-sizing: border-box; page-break-after: always; padding: 0.22in; display: flex; flex-direction: column; gap: 8px; }
-.slip.s4x6 { width: 4in; height: 6in; overflow: hidden; }
-.slip.letter { width: 8.5in; min-height: 11in; padding: 0.5in; font-size: 13px; gap: 14px; }
-header { display: flex; justify-content: space-between; gap: 8px; border-bottom: 2px solid #111; padding-bottom: 6px; }
-.brand { font: 400 15px Georgia, serif; text-transform: uppercase; letter-spacing: .04em; }
-.order { font-size: 16px; font-weight: 800; text-align: right; }
-.right { text-align: right; }
-.v { color: #555; font-size: 9.5px; }
-.letter .v { font-size: 11px; }
-.lbl { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #555; }
-.cols { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: 8.5px; text-transform: uppercase; letter-spacing: .08em; color: #555; border-bottom: 1px solid #999; padding: 3px 0; }
-td { border-bottom: 1px solid #ddd; padding: 4px 0; vertical-align: top; }
-td.q { width: 30px; font-weight: 800; font-size: 12px; }
-th.q { width: 30px; }
-.note { border: 1px dashed #999; padding: 5px; }
-footer { margin-top: auto; text-align: center; }
-footer svg { max-width: 100%; height: 40px; }
-.thanks { font-weight: 700; margin-top: 2px; }
-.bar { font: 14px system-ui, sans-serif; padding: 12px; display: flex; gap: 8px; align-items: center; }
-@media print { .bar { display: none; } }
-</style></head><body>
-<div class="bar"><button onclick="print()">Print</button><span>${described.length} packing slip${described.length === 1 ? "" : "s"} · ${size === "letter" ? "Letter" : "4×6"}</span></div>
-${described.map((o) => packingSlip(o, size, from)).join("")}
-<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>
-</body></html>`);
+  const layout = await slipLayout(c.env);
+  return c.html(slipPage(described.map((o) => renderSlip(o, size, from, layout)).join(""), described.length, size, true));
 });
 
 export default shipping;

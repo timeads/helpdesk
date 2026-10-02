@@ -2,6 +2,7 @@ import { api } from "./api.js";
 import { state } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
 import { printSettings, savePrintSettings, testZebra, zebraPrinter } from "./printing.js";
+import { slipCard } from "./settings-slip.js";
 import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
 export function renderSettings(main) {
@@ -10,7 +11,7 @@ export function renderSettings(main) {
     h("header", { class: "page-head" }, h("div", { class: "inner", style: { maxWidth: "880px", paddingBottom: "4px" } },
       h("h1", {}, "Settings"),
       h("p", { class: "sub" }, "Connections, team, support automation and shipping defaults."),
-      h("nav", { class: "settings-nav", "aria-label": "Settings sections" }, [["connections", "Connections"], ["team", "Team"], ["support", "Tickets"], ["macros", "Macros"], ["tags", "Tags"], ["views", "Views"], ["rules", "Rules"], ["knowledge", "AI knowledge"], ["email", "Email"], ["shipping", "Shipping"], ["customs", "Customs"], ["printing", "Printing"]]
+      h("nav", { class: "settings-nav", "aria-label": "Settings sections" }, [["connections", "Connections"], ["team", "Team"], ["support", "Tickets"], ["macros", "Macros"], ["tags", "Tags"], ["views", "Views"], ["rules", "Rules"], ["knowledge", "AI knowledge"], ["email", "Email"], ["shipping", "Shipping"], ["customs", "Customs"], ["printing", "Printing"], ["slip", "Packing slip"]]
         .map(([id, label]) => h("a", { href: `#${id}`, onclick: (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); history.replaceState(null, "", `#${id}`); } }, label))))),
     inner));
   load(inner);
@@ -39,6 +40,7 @@ async function load(inner) {
     connections(s, isAdmin, inner),
     isAdmin && creds ? credentials(creds.fields, inner) : null,
     printing(),
+    isAdmin ? slipCard() : null,
     profile(),
     team(agents, isAdmin, inner),
     isAdmin ? supportBehavior(s) : null,
