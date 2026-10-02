@@ -18,6 +18,7 @@ import { HttpError, base64UrlDecodeBytes, getSetting, setSetting } from "../lib/
 import { demoOrders } from "../lib/demo";
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
+import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout } from "../lib/slip";
 
 const shipping = new Hono<AppEnv>();
@@ -78,19 +79,24 @@ async function idSet(env: Env, sql: string, ids: string[]) {
 /** Everything the queue and slideout need about an order, computed once on the server. */
 async function describe(env: Env, orders: ShopifyOrder[]) {
   const ids = orders.map((o) => o.id);
-  const [plans, holds, labelled, slips] = await Promise.all([
+  const [plans, holds, labelled, slips, drafts, presets] = await Promise.all([
     planOrders(env, orders),
     holdsFor(env, ids),
     idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND order_id IN (?)", ids),
     idSet(env, "SELECT order_id FROM packing_slip_prints WHERE order_id IN (?)", ids),
+    loadDrafts(env, ids),
+    loadPresets(env),
   ]);
   return orders.map((o) => {
-    const plan = plans.get(o.id)!;
+    const draft = drafts.get(o.id) ?? null;
+    const base = plans.get(o.id)!;
+    const plan = draft ? applyDraft(base, draft, presets, o.lineItems.nodes.map((l) => l.id)) : base;
     const h = holds.get(o.id);
     const hold = h?.status === "hold" ? h.note || "On hold" : h?.status === "released" ? null : plan.ruleHold;
     return {
       ...o,
       plan,
+      draft,
       // kept for older clients
       suggestion: plan.rules,
       hold,
@@ -141,6 +147,21 @@ shipping.get("/orders/:id", async (c) => {
   if (!order) throw new HttpError(404, "Order not found");
   const [d] = await describe(c.env, [order]);
   return c.json({ order: d });
+});
+
+// ---- Choices saved from the order page (boxes, split, service, address) until a label is bought
+shipping.put("/drafts/:id", async (c) => {
+  const id = decodeURIComponent(c.req.param("id"));
+  if (!id.startsWith("gid://shopify/Order/")) throw new HttpError(400, "Unknown order");
+  const draft = cleanDraft(await c.req.json());
+  if (!draft) throw new HttpError(400, "Nothing to save");
+  await saveDraft(c.env, id, draft);
+  return c.json({ ok: true });
+});
+
+shipping.delete("/drafts/:id", async (c) => {
+  await deleteDraft(c.env, decodeURIComponent(c.req.param("id")));
+  return c.json({ ok: true });
 });
 
 /** Scan station: look up an order by the code on its packing slip ("68762-TG", "#68762-TG", "68762"). */
@@ -349,7 +370,7 @@ shipping.post("/labels/auto", async (c) => {
   if (d.hold) throw new HttpError(409, `${order.name} is on hold: ${d.hold}`);
   const plan: Plan = d.plan;
   if (!plan.weightKnown) throw new HttpError(422, `${order.name}: no weight known — open it to enter one`);
-  let to = validAddress(addressFromOrder(order));
+  let to = validAddress(d.draft?.to ?? addressFromOrder(order));
   // Don't buy a label for an address the carrier can't find or wants to correct
   const customs = isInternationalAddress(to) ? await buildCustoms(c.env, order) : undefined;
   if (customs) {

@@ -32,7 +32,7 @@ export interface Plan {
   boxes: PlanBox[];
   totalWeight: number;
   weightKnown: boolean;
-  source: "rule" | "learned" | "learned-similar" | "default";
+  source: "rule" | "learned" | "learned-similar" | "default" | "saved";
   signature: Signature;
   service: string | null;
   ruleHold: string | null;
@@ -355,6 +355,7 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
       fulfillError = (e as Error).message;
     }
   }
+  if (o) await env.DB.prepare("DELETE FROM order_drafts WHERE order_id = ?").bind(o.id).run(); // the label is bought; choices are done
   return { id: row!.id, shipmentId: result.shipmentId, trackingNumbers: result.trackingNumbers, cost: result.cost, currency: result.currency, labelFormat: result.format, carrier: result.carrier, forms: (result.forms ?? []).length, fulfillError };
 }
 

@@ -96,7 +96,10 @@ let queueApi = null; // lets the order page refresh the queue after buying a lab
 /** UPS numbers start with 1Z; everything else here is USPS. */
 const trackHref = (n) => (/^1Z/i.test(n) ? `https://www.ups.com/track?tracknum=${n}` : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}`);
 
-const SOURCE_LABEL = { rule: "by rule", learned: "remembered", "learned-similar": "remembered (similar order)" };
+const SOURCE_LABEL = { rule: "by rule", learned: "remembered", "learned-similar": "remembered (similar order)", saved: "your choice" };
+
+/** The latest choices saved per order in this session (the queue's copy of an order can be older). */
+const drafts = new Map();
 
 // ---- Live carrier quotes for queue rows (cached per order + package, a few at a time)
 const quoteCache = new Map();
@@ -400,6 +403,7 @@ function closeOrderPage(keepUrl = false) {
   page = null;
   if (keepUrl) return;
   dropOrderParam();
+  if (queueApi?.stale) { queueApi.stale = false; queueApi.reload(); } // show the boxes chosen
   // Back on the queue, land on the row of the order last looked at
   const tr = [...document.querySelectorAll("tr[data-order]")].find((t) => t.dataset.order === id);
   if (tr) { tr.focus({ preventScroll: true }); tr.scrollIntoView({ block: "nearest" }); }
@@ -532,6 +536,56 @@ function buildLabelForm(root, o, presets, opts) {
     }));
   }
   else s.parcels = [{ preset: defaultBox?.id ?? "", length: defaultBox?.length ?? "", width: defaultBox?.width ?? "", height: defaultBox?.height ?? "", weight: "", alloc: allIn(), auto: false }];
+  // Choices already made for this order (boxes, split, service, signature, address)
+  const draft = o ? drafts.get(o.id) ?? o.draft : null;
+  if (draft?.boxes?.length) {
+    s.parcels = draft.boxes.map((b) => ({
+      preset: b.presetId ?? "", length: b.length || "", width: b.width || "", height: b.height || "", weight: b.weight || "",
+      alloc: Object.fromEntries(lines.map((l) => [l.id, b.items?.[l.id] ?? 0])), auto: false,
+    }));
+    // a line added to the order since goes in the first box
+    for (const l of lines) if (!s.parcels.some((p) => p.alloc[l.id])) s.parcels[0].alloc[l.id] = l.qty;
+    if (draft.signature !== undefined) s.signature = draft.signature || "";
+    if (draft.service) s.wantCode = draft.service;
+    if (draft.to) s.to = { ...s.to, ...draft.to };
+  }
+
+  // ---- Save choices as they're made, so moving to another order (or bulk buying) keeps them
+  let saveTimer;
+  const savedEl = h("span", { class: "small muted op-saved" });
+  const draftNow = () => ({
+    boxes: s.parcels.map((p) => ({ presetId: p.preset ? Number(p.preset) : null, length: +p.length || 0, width: +p.width || 0, height: +p.height || 0, weight: +p.weight || null, items: { ...p.alloc } })),
+    signature: s.signature || undefined,
+    service: s.rate?.serviceCode ?? s.wantCode ?? null,
+    to: s.toEdited ? s.to : null,
+  });
+  const remember = () => {
+    if (!o || s.bought) return;
+    const d = draftNow();
+    drafts.set(o.id, d);
+    if (queueApi) queueApi.stale = true;
+    savedEl.textContent = "Saving…";
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      try {
+        await api(`/shipping/drafts/${encodeURIComponent(o.id)}`, { method: "PUT", body: draftNow() });
+        savedEl.textContent = "Saved for this order";
+      } catch (e) {
+        savedEl.textContent = "";
+        toast(`Couldn't save your choices: ${e.message}`, true);
+      }
+    }, 600);
+  };
+  if (draft?.to) s.toEdited = true;
+  if (draft) savedEl.textContent = "Your saved choices";
+  const resetDraft = async () => {
+    clearTimeout(saveTimer);
+    await api(`/shipping/drafts/${encodeURIComponent(o.id)}`, { method: "DELETE" });
+    drafts.delete(o.id);
+    const { order } = await api(`/shipping/orders/${encodeURIComponent(o.id)}`);
+    if (queueApi) queueApi.stale = true;
+    openOrderPage(order, opts);
+  };
   const paid = o ? o.shippingPaid : null;
   const split = () => s.parcels.length > 1;
   const boxWeight = (p) => presets.find((b) => String(b.id) === String(p.preset))?.weight ?? 0;
@@ -655,7 +709,7 @@ function buildLabelForm(root, o, presets, opts) {
   const field = (label, key, attrs = {}) => {
     const input = h("input", { class: "input", value: s.to[key] ?? "", ...attrs });
     inputs[key] = input;
-    input.addEventListener("input", () => { s.to[key] = input.value; if (key === "country") loadCustoms(); quote(900); verifySoon(1200); });
+    input.addEventListener("input", () => { s.to[key] = input.value; s.toEdited = true; remember(); if (key === "country") loadCustoms(); quote(900); verifySoon(1200); });
     return h("label", { class: "field" }, label, input);
   };
 
@@ -672,6 +726,8 @@ function buildLabelForm(root, o, presets, opts) {
       if (inputs[k]) inputs[k].value = s.to[k];
     }
     toast("Address updated for this label");
+    s.toEdited = true;
+    remember();
     quote(0);
     verifySoon(0);
   };
@@ -717,7 +773,7 @@ function buildLabelForm(root, o, presets, opts) {
   const lineInfo = new Map((o?.lineItems.nodes ?? []).map((l) => [l.id, l]));
   const inBox = (p) => lines.reduce((n, l) => n + (p.alloc[l.id] || 0), 0);
   const left = (l) => l.qty - s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0);
-  const changed = () => { reweigh(); drawParcels(); quote(); };
+  const changed = () => { reweigh(); drawParcels(); quote(); remember(); };
 
   /** Puts n of an item in box i and takes the difference out of the other boxes (or hands it back). */
   const setQty = (l, i, n) => {
@@ -759,10 +815,11 @@ function buildLabelForm(root, o, presets, opts) {
         }
         drawParcels();
         quote();
+        remember();
       };
       const num = (key, label) => {
         const inp = h("input", { class: "input", type: "number", min: "0", step: key === "weight" ? "0.1" : "0.5", value: p[key], inputmode: "decimal" });
-        inp.oninput = () => { p[key] = inp.value; if (key !== "weight") p.preset = ""; else p.auto = false; quote(); };
+        inp.oninput = () => { p[key] = inp.value; if (key !== "weight") p.preset = ""; else p.auto = false; quote(); remember(); };
         return h("label", { class: "field" }, key === "weight" && p.auto ? h("span", { title: "Box + the items in it, from Shopify product weights" }, "Weight lb · auto") : label, inp);
       };
       const n = inBox(p);
@@ -779,7 +836,10 @@ function buildLabelForm(root, o, presets, opts) {
 
   const drawItems = () => {
     const anyLeft = lines.some((l) => left(l) !== 0);
+    const hasDraft = o && (drafts.has(o.id) || o.draft);
     mount(packHeadEl,
+      savedEl,
+      hasDraft ? h("button", { class: "btn sm ghost", title: "Forget the choices made here and go back to the suggested boxes", onclick: resetDraft }, "Reset") : null,
       totalWeightEl,
       split() && anyLeft ? h("span", { class: "badge warn" }, "Some items aren't in a box") : null,
       split() && lines.length ? h("button", { class: "btn sm", title: "Spread the items so each box weighs about the same", onclick: () => { splitEvenly(); changed(); } }, "Split evenly") : null);
@@ -846,7 +906,7 @@ function buildLabelForm(root, o, presets, opts) {
 
   const sigSel = h("select", { class: "input" },
     [["", "No signature"], ["standard", "Signature required"], ["adult", "Adult signature required"]].map(([v, t]) => h("option", { value: v, selected: s.signature === v }, t)));
-  sigSel.onchange = () => { s.signature = sigSel.value; quote(0); };
+  sigSel.onchange = () => { s.signature = sigSel.value; quote(0); remember(); };
 
   const holdBtn = o ? h("button", { class: "btn sm" }, o.hold ? "Release hold" : "Hold") : null;
   if (holdBtn) holdBtn.onclick = busy(holdBtn, async () => {
@@ -890,7 +950,7 @@ function buildLabelForm(root, o, presets, opts) {
         (() => {
           const r = h("input", { type: "checkbox", checked: s.to.residential });
           resBox = r;
-          r.onchange = () => { s.to.residential = r.checked; resTouched = true; quote(0); };
+          r.onchange = () => { s.to.residential = r.checked; resTouched = true; s.toEdited = true; quote(0); remember(); };
           return h("label", { class: "check" }, r, "Residential address");
         })(),
         h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel))));
@@ -993,6 +1053,8 @@ function buildLabelForm(root, o, presets, opts) {
         },
       });
       await printLabels({ ids: [r.id] }, win).catch((e) => toast(e.message, true));
+      clearTimeout(saveTimer);
+      if (o) drafts.delete(o.id);
       showPurchased(r);
       if (o) o.hasLabel = true;
       queueApi?.reload();
@@ -1028,8 +1090,8 @@ function buildLabelForm(root, o, presets, opts) {
         const margin = paid !== null ? paid - r.total : null;
         return h("div", {
           class: "rate" + (s.rate === r ? " sel" : ""), role: "radio", tabindex: 0, "aria-checked": s.rate === r,
-          onclick: () => { s.rate = r; drawRates(); },
-          onkeydown: (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); s.rate = r; drawRates(); } },
+          onclick: () => { s.rate = r; drawRates(); remember(); },
+          onkeydown: (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); s.rate = r; drawRates(); remember(); } },
         },
           h("span", { class: "radio" }),
           h("div", { style: { minWidth: 0 } },
