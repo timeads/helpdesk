@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { HttpError, cachedToken } from "./util";
+import { HttpError, cachedToken, setSetting } from "./util";
 import type { Customs } from "./customs";
 
 const API_VERSION = "v2409";
@@ -66,9 +66,12 @@ function base(env: Env) {
   return env.UPS_ENV === "production" ? "https://onlinetools.ups.com" : "https://wwwcie.ups.com";
 }
 
+// Keyed by mode and Client ID, so new keys never reuse a token issued for the old ones
+const tokenKey = (env: Env) => `ups_access_${env.UPS_ENV}_${(env.UPS_CLIENT_ID ?? "").slice(-8)}`;
+
 async function token(env: Env): Promise<string> {
   if (!upsConfigured(env)) throw new HttpError(409, "UPS is not connected");
-  return cachedToken(env, `ups_access_${env.UPS_ENV}`, async () => {
+  return cachedToken(env, tokenKey(env), async () => {
     const res = await fetch(`${base(env)}/security/v1/oauth/token`, {
       method: "POST",
       headers: {
@@ -84,17 +87,30 @@ async function token(env: Env): Promise<string> {
   });
 }
 
+/** Shown when UPS accepts the keys but refuses the request itself. */
+const authHelp = (env: Env) =>
+  `UPS accepted your keys but refused this request (Invalid Authentication Information). In developer.ups.com → Apps → your app: ` +
+  `1) under Products, make sure Rating and Shipping are added (and Address Validation if you use it); ` +
+  `2) make sure UPS account ${env.UPS_ACCOUNT_NUMBER} is the billing account linked to the app, and that the Account number in Settings → Credentials matches it exactly (6 characters, no spaces).`;
+
 async function ups<T = any>(env: Env, method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(base(env) + path, {
-    method,
-    headers: {
-      authorization: `Bearer ${await token(env)}`,
-      "content-type": "application/json",
-      transId: crypto.randomUUID().replace(/-/g, "").slice(0, 32),
-      transactionSrc: "helpdesk",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const send = async () =>
+    fetch(base(env) + path, {
+      method,
+      headers: {
+        authorization: `Bearer ${await token(env)}`,
+        "content-type": "application/json",
+        transId: crypto.randomUUID().replace(/-/g, "").slice(0, 32),
+        transactionSrc: "helpdesk",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  let res = await send();
+  if (res.status === 401) {
+    // The saved token may be from older keys or revoked: get a fresh one and try once more
+    await setSetting(env, tokenKey(env), null);
+    res = await send();
+  }
   const text = await res.text();
   let json: any = null;
   try {
@@ -104,6 +120,7 @@ async function ups<T = any>(env: Env, method: string, path: string, body?: unkno
   }
   if (!res.ok) {
     const errs = json?.response?.errors as { code: string; message: string }[] | undefined;
+    if (res.status === 401 || errs?.some((e) => e.code === "250002")) throw new HttpError(502, authHelp(env));
     throw new HttpError(422, "UPS: " + (errs?.map((e) => e.message).join("; ") || text.slice(0, 300)));
   }
   return json as T;
@@ -318,8 +335,13 @@ export async function createShipment(
 }
 
 /** Fetches an OAuth token to prove the keys and account number are valid. */
+/** Signs in, then asks for one real rate, so a missing product or unlinked account shows up here too. */
 export async function testUps(env: Env) {
   await token(env);
+  const from: Address = { name: "Test", address1: "100 Main St", city: "New York", state: "NY", zip: "10001", country: "US", phone: "2125550100" };
+  const to: Address = { name: "Test", address1: "200 Main St", city: "Los Angeles", state: "CA", zip: "90001", country: "US", residential: true };
+  const req = buildRateRequest(env.UPS_ACCOUNT_NUMBER!, from, to, [{ length: 10, width: 8, height: 4, weight: 1 }]);
+  await ups(env, "POST", `/api/rating/${API_VERSION}/Shop`, req);
 }
 
 export async function voidShipment(env: Env, shipmentId: string) {
