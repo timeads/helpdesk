@@ -8,7 +8,7 @@ import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, kno
 // Settings is split into pages (/settings/<page>); each loads only what it shows.
 const PAGES = [
   { id: "account", label: "Profile & team", icon: "user", desc: "Your profile, signature and who's on the team." },
-  { id: "connections", label: "Connections", icon: "link", desc: "Gmail, Shopify, UPS, USPS and AI — and the keys behind them." },
+  { id: "connections", label: "Connections", icon: "link", desc: "Gmail, Shopify, UPS, EasyPost and AI — and the keys behind them." },
   { id: "tickets", label: "Tickets & email", icon: "inbox", desc: "How tickets are assigned and merged, which email becomes a ticket, and automatic ticket rules.", admin: true },
   { id: "macros", label: "Macros, tags & views", icon: "tag", desc: "Saved replies, tags and the ticket views in the sidebar." },
   { id: "knowledge", label: "AI knowledge", icon: "spark", desc: "What AI drafts know about your products and policies." },
@@ -148,7 +148,7 @@ function connections(s, isAdmin, inner) {
 const GROUPS = [
   { id: "shopify", title: "Shopify", desc: "From the Helpdesk app you created in Shopify. Use a Client ID + secret (Dev Dashboard) or an Admin API token (older custom apps)." },
   { id: "ups", title: "UPS", desc: "From your app at developer.ups.com. Keep Mode on “test” until a test label prints correctly." },
-  { id: "usps", title: "USPS (EasyPost)", desc: "From easypost.com → Account → API Keys. Use the Production key; postage is paid from your EasyPost wallet (fund it by ACH to avoid the card fee)." },
+  { id: "usps", title: "EasyPost (USPS, FedEx & more)", desc: "From easypost.com → Account → API Keys. Use the Production key; postage is paid from your EasyPost wallet (fund it by ACH to avoid the card fee). USPS works right away; turn on FedEx, UPS, OnTrac, Amazon Shipping or DHL eCommerce under Carriers in EasyPost and their rates show up here automatically." },
   { id: "ai", title: "AI drafts", desc: "Optional. A key from console.anthropic.com turns on “Draft with AI” (about 1–2¢ per draft)." },
 ];
 

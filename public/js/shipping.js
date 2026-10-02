@@ -62,7 +62,7 @@ export function renderShipping(main) {
   mount(main, h("div", { class: "page" },
     h("header", { class: "page-head" }, h("div", { class: "inner" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
-        h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, UPS and USPS labels, packing slips and the packing station.")),
+        h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, labels from every carrier, packing slips and the packing station.")),
         h("div", { class: "row" }, printerChip, blank)),
       h("nav", { class: "tabs-line", "aria-label": "Shipping" },
         tabLink("queue", "/shipping", "Orders"), tabLink("scan", "/shipping/scan", "Scan & pack"), tabLink("batches", "/shipping/batches", "Label batches")))),
@@ -71,7 +71,7 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     const n = [];
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
-    if (!st.ups && !st.usps) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or USPS (EasyPost) keys in Settings → Connections to get rates and buy labels."));
+    if (!st.ups && !st.usps) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
     else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Connections when ready."));
     mount(notices, n.length ? h("div", { class: "stack", style: { marginBottom: "16px" } }, n) : null);
   }).catch(() => {});
@@ -95,8 +95,20 @@ export function renderShipping(main) {
 
 let queueApi = null; // lets the order page refresh the queue after buying a label and step through it
 
-/** UPS numbers start with 1Z; everything else here is USPS. */
-const trackHref = (n) => (/^1Z/i.test(n) ? `https://www.ups.com/track?tracknum=${n}` : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}`);
+/** The carrier's tracking page; without a carrier, UPS numbers start with 1Z and the rest are taken as USPS. */
+const TRACK_URLS = {
+  UPS: "https://www.ups.com/track?tracknum=",
+  USPS: "https://tools.usps.com/go/TrackConfirmAction?tLabels=",
+  FedEx: "https://www.fedex.com/fedextrack/?trknbr=",
+  OnTrac: "https://www.ontrac.com/tracking/?number=",
+  "DHL eCommerce": "https://webtrack.dhlecs.com/?trackingnumber=",
+  "DHL Express": "https://www.dhl.com/us-en/home/tracking/tracking-express.html?tracking-id=",
+  "Amazon Shipping": "https://track.amazon.com/tracking/",
+};
+const trackHref = (n, carrier) => {
+  const base = TRACK_URLS[carrier] ?? (carrier && carrier !== "UPS" && carrier !== "USPS" ? "https://parcelsapp.com/en/tracking/" : /^1Z/i.test(n) ? TRACK_URLS.UPS : TRACK_URLS.USPS);
+  return base + encodeURIComponent(n);
+};
 
 const SOURCE_LABEL = { rule: "by rule", learned: "remembered", "learned-similar": "remembered (similar order)", saved: "your choice" };
 
@@ -543,17 +555,18 @@ function shipFromPhoneFix(message, done) {
  * Returns true when voided.
  */
 async function voidLabelFlow(l) {
-  const usps = l.carrier === "USPS";
+  const refund = !!l.easypost || (l.carrier && l.carrier !== "UPS");
+  const name = l.carrier || "UPS";
   const msg = [
-    usps
-      ? `Void this USPS label${l.order_name ? ` for ${l.order_name}` : ""}? The postage is refunded to your EasyPost wallet (USPS takes about 2–4 weeks; labels must be unused and voided within 30 days).`
+    refund
+      ? `Void this ${name} label${l.order_name ? ` for ${l.order_name}` : ""}? The postage is refunded to your EasyPost wallet once ${name} confirms it wasn't used (USPS takes about 2–4 weeks; void within 30 days).`
       : `Void this UPS label${l.order_name ? ` for ${l.order_name}` : ""}? UPS cancels it and you're not charged (it must not have been scanned by UPS yet; up to 90 days).`,
     l.fulfilled ? "The order will be marked unfulfilled in Shopify again so you can ship it with a new label. (The customer isn't emailed.)" : "",
     "Throw away the printed label so it can't be used.",
   ].filter(Boolean).join("\n\n");
   if (!confirm(msg)) return false;
   const r = await api(`/shipping/labels/${l.id}/void`, { method: "POST" });
-  const parts = [usps ? "Refund requested from USPS" : "Label voided with UPS — no charge"];
+  const parts = [refund ? `Refund requested from ${name} through EasyPost` : "Label voided with UPS — no charge"];
   if (r.shopify === "cancelled") parts.push("order is unfulfilled in Shopify again");
   else if (r.shopify === "not_found") parts.push("no matching Shopify fulfillment to undo");
   else if (r.shopify && r.shopify !== "skipped") parts.push(`but undoing the Shopify fulfillment failed (${r.shopify}) — cancel it in Shopify`);
@@ -622,7 +635,7 @@ function orderLabelsCard(o, onChange) {
             h("b", {}, l.service_name), " · ", money(l.cost, l.currency),
             voided ? h("span", { class: "badge bad", style: { marginLeft: "6px" } }, "Voided") : l.fulfilled ? h("span", { class: "badge good", style: { marginLeft: "6px" } }, "Fulfilled in Shopify") : null,
             h("div", { class: "small muted" }, `${relTime(l.created_at)}${l.agent_name ? ` by ${l.agent_name}` : ""} · `,
-              l.tracking_numbers.map((n, i) => [i ? ", " : "", h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n)]))),
+              l.tracking_numbers.map((n, i) => [i ? ", " : "", h("a", { href: trackHref(n, l.carrier), target: "_blank", rel: "noopener" }, n)]))),
           voided ? null : h("div", { class: "row", style: { gap: "6px", flexWrap: "nowrap" } },
             l.fulfilled ? null : (() => {
               const b = h("button", { class: "btn sm primary", title: "Mark the order fulfilled in Shopify with this label's tracking (emails the customer)" }, "Mark fulfilled in Shopify");
@@ -1391,7 +1404,7 @@ function buildLabelForm(root, o, presets, opts) {
       partialActive() ? h("div", { class: "notice", style: { margin: "6px 0 10px", color: "var(--text)" } }, `Partial shipment. The rest of ${o?.name ?? "the order"} (${lines.filter((l) => l.qty < l.ordered).map((l) => `${l.ordered - l.qty} × ${l.title}`).join(", ")}) is on hold — release it from On hold when it's ready to ship.`) : null,
       h("p", { style: { margin: "4px 0 12px", opacity: 0.85 } }, `${s.rate.serviceName} · ${money(r.cost, r.currency)}${o ? ` · ${o.name}` : ""}${paid !== null ? ` · margin ${marginText(paid - r.cost)}` : ""}`),
       r.trackingNumbers.map((n, i) => h("div", { class: "tn" }, split() ? h("span", { class: "small", style: { opacity: 0.8, marginRight: "8px" } }, `Box ${i + 1}`) : null,
-        h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n),
+        h("a", { href: trackHref(n, r.carrier), target: "_blank", rel: "noopener" }, n),
         r.perBox?.[i] !== undefined ? h("span", { class: "small", style: { opacity: 0.85, marginLeft: "10px", fontFamily: "var(--ui)" } }, money(r.perBox[i], r.currency)) : null)),
       r.fulfillError ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, `The label is fine, but marking the order fulfilled in Shopify failed: ${r.fulfillError}`) : null,
       r.forms ? h("div", { class: "notice", style: { marginTop: "12px" } }, `Customs paperwork: print ${r.forms > 1 ? "these" : "this"} and put 3 copies in a clear pouch on the box (skip if UPS Paperless Invoice is on for your account).`,
@@ -1404,7 +1417,7 @@ function buildLabelForm(root, o, presets, opts) {
         (() => {
           const b = h("button", { class: "btn ghost", title: "Cancel this label so you're not charged" }, "Void label");
           b.onclick = busy(b, async () => {
-            if (!(await voidLabelFlow({ id: r.id, carrier: r.carrier, order_name: o?.name, fulfilled: !!o && !r.fulfillError }))) return;
+            if (!(await voidLabelFlow({ id: r.id, carrier: r.carrier, easypost: String(r.shipmentId ?? "").startsWith("ep:"), order_name: o?.name, fulfilled: !!o && !r.fulfillError }))) return;
             if (o) o.hasLabel = false;
             labelsCard?.reload();
             openOrderPage(o ? queueApi?.find(o.id) ?? o : null, opts);
@@ -1433,6 +1446,14 @@ function buildLabelForm(root, o, presets, opts) {
 
 const sameService = (chosen, service) => {
   const a = chosen.toLowerCase();
+  service = service.replace(/ · EasyPost$/, "");
+  // Other carriers (FedEx, OnTrac…) only match a checkout option that names them
+  const other = service.match(/^(fedex|ontrac|dhl|amazon)/i);
+  if (other || /fedex|ontrac|dhl|amazon/.test(a)) {
+    if (!other || !a.includes(other[1].toLowerCase())) return false;
+    const rest = service.toLowerCase().replace(/^(fedex|ontrac|dhl ecommerce|dhl express|amazon shipping)\s*/, "");
+    return !rest || a.includes(rest) || (/ground|home/.test(rest) && /ground|standard|home/.test(a));
+  }
   // A checkout option only means USPS when it says so; generic names ("Standard") mean UPS, your default carrier
   if (/^usps/i.test(service) !== /usps|postal|ground advantage|priority mail/.test(a)) return false;
   if (/^usps/i.test(service)) return a.includes(service.toLowerCase().replace(/^usps\s+/, "").replace(" mail", ""));
@@ -1582,7 +1603,7 @@ async function renderBatchList(root, importEl) {
           h("td", {}, l.order_name || "—"),
           h("td", {}, l.ship_to?.name, h("div", { class: "small muted" }, [l.ship_to?.city, l.ship_to?.state].filter(Boolean).join(", "))),
           h("td", {}, l.service_name, l.status === "voided" ? h("span", { class: "badge bad", style: { marginLeft: "6px" } }, "Voided") : null),
-          h("td", { class: "mono" }, l.tracking_numbers.map((n) => h("div", {}, h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n)))),
+          h("td", { class: "mono" }, l.tracking_numbers.map((n) => h("div", {}, h("a", { href: trackHref(n, l.carrier), target: "_blank", rel: "noopener" }, n)))),
           h("td", { class: "num" }, l.cost != null ? money(l.cost, l.currency) : ""),
           h("td", { style: { whiteSpace: "nowrap" } }, l.status !== "voided" ? h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, "Print") : null,
             l.forms ? Array.from({ length: l.forms }, (_, n) => h("a", { class: "btn sm ghost", href: `/api/shipping/labels/${l.id}/forms/${n}`, target: "_blank", rel: "noopener" }, l.forms > 1 ? `Customs ${n + 1}` : "Customs")) : null,

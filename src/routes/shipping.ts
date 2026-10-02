@@ -526,7 +526,7 @@ shipping.post("/labels/:id{[0-9]+}/fulfill", async (c) => {
 
 shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT s.id, s.carrier, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
+    `SELECT s.id, s.carrier, s.shipment_id LIKE 'ep:%' AS easypost, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
      FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL AND (? IS NULL OR s.order_id = ?) ORDER BY s.created_at DESC LIMIT 200`,
   ).bind(c.req.query("order") ?? null, c.req.query("order") ?? null).all<any>();
@@ -752,7 +752,7 @@ shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
   if (!s) throw new HttpError(404, "Label not found");
   if (s.status === "voided") return c.json({ ok: true, already: true });
   if (!s.shipment_id) throw new HttpError(409, "Imported from Redo — void it in Redo or UPS");
-  // 1. The carrier: UPS cancels it (no charge); USPS starts a refund (paid back to the EasyPost wallet in ~2–4 weeks)
+  // 1. The carrier: UPS cancels it (no charge); EasyPost labels start a refund to the EasyPost wallet (USPS takes ~2–4 weeks)
   await voidLabel(c.env, s.shipment_id);
   await c.env.DB.prepare("UPDATE shipments SET status = 'voided', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").bind(id).run();
   // 2. Shopify: undo the fulfillment so the order can be shipped again
