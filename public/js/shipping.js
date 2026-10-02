@@ -904,8 +904,9 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "op-main" },
         buyEl,
         notices.length ? h("div", { class: "stack" }, notices) : null,
+        itemsCard,
         h("div", { class: "op-cols" },
-          h("div", { class: "op-col" }, shipTo, itemsCard, noteCard),
+          h("div", { class: "op-col" }, shipTo, noteCard),
           h("div", { class: "op-col" }, packages, service)),
         customsEl),
       aside));
