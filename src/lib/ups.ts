@@ -173,9 +173,11 @@ function party(a: Address, residential = false) {
   };
 }
 
-function pkg(p: Parcel, packagingKey: "PackagingType" | "Packaging", signature?: Signature) {
+function pkg(p: Parcel, packagingKey: "PackagingType" | "Packaging", signature?: Signature, reference?: string) {
   return {
     [packagingKey]: { Code: "02" }, // customer-supplied box
+    // Order number on the label. Package level: UPS refuses shipment-level references on many shipments
+    ...(reference ? { ReferenceNumber: { Value: trunc(reference, 35) } } : {}),
     Dimensions: {
       UnitOfMeasurement: { Code: "IN" },
       // Envelopes can be 0" deep; UPS needs whole inches ≥ 1
@@ -295,8 +297,7 @@ export function buildShipRequest(
         Service: { Code: serviceCode },
         ...(intl ? { ...invoiceLineTotal(to, opts.customs), ShipmentServiceOptions: internationalForms(to, opts.customs!) } : {}),
         ShipmentRatingOptions: { NegotiatedRatesIndicator: "" },
-        ...(opts.reference ? { ReferenceNumber: { Value: trunc(opts.reference, 35) } } : {}),
-        Package: parcels.map((p) => pkg(p, "Packaging", signature)),
+        Package: parcels.map((p, i) => pkg(p, "Packaging", signature, opts.reference ? (parcels.length > 1 ? `${opts.reference} box ${i + 1}/${parcels.length}` : opts.reference) : undefined)),
       },
       LabelSpecification: {
         LabelImageFormat: { Code: opts.labelFormat },

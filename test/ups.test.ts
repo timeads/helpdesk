@@ -55,3 +55,16 @@ describe("UPS requests", () => {
     expect(r).toEqual({ shipmentId: "1ZSHIP", trackingNumbers: ["1Z999"], labels: ["R0lGOD"], cost: 11.2, currency: "USD", forms: [] });
   });
 });
+
+describe("UPS label references", () => {
+  const from = { name: "Tuft the World", address1: "5400 Grays Ave", city: "Philadelphia", state: "PA", zip: "19143", country: "US", phone: "2155550100" };
+  const to = { name: "Test", address1: "100 Main St", city: "Indianapolis", state: "IN", zip: "46204", country: "US" };
+  const box = { length: 10, width: 8, height: 4, weight: 2 };
+  it("puts the order number on each package, never on the shipment", () => {
+    const one = buildShipRequest("A12345", from, to, [box], "03", { reference: "#1042", labelFormat: "ZPL" }) as any;
+    expect(one.ShipmentRequest.Shipment.ReferenceNumber).toBeUndefined();
+    expect(one.ShipmentRequest.Shipment.Package[0].ReferenceNumber).toEqual({ Value: "#1042" });
+    const two = buildShipRequest("A12345", from, to, [box, box], "03", { reference: "#1042", labelFormat: "ZPL" }) as any;
+    expect(two.ShipmentRequest.Shipment.Package.map((p: any) => p.ReferenceNumber.Value)).toEqual(["#1042 box 1/2", "#1042 box 2/2"]);
+  });
+});
