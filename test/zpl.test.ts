@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain browser JS module
-import { bitsToGfa, compressRow, expandRows } from "../public/js/zpl.js";
+import { bitsToGfa, bitsToGfaZ64, compressRow, crc16, expandRows } from "../public/js/zpl.js";
+// @ts-expect-error Node built-in (the app is typed for Workers)
+import { inflateSync } from "node:zlib";
 
 describe("ZPL graphic encoding", () => {
   it("uses ZPL's run-length letters, trailing-zero commas and repeat colons", () => {
@@ -29,5 +31,25 @@ describe("ZPL graphic encoding", () => {
       }
     }
     expect(m[4].length).toBeLessThan(13 * 2 * h); // actually compressed
+  });
+});
+
+describe("Z64 graphics", () => {
+  it("uses the CRC-16/XMODEM check ZPL expects", () => {
+    expect(crc16("123456789")).toBe("31C3"); // the standard check value
+  });
+  it("compresses to zlib + base64 that inflates back to the same pixels, much smaller", async () => {
+    const w = 812, h = 600;
+    const bits = new Uint8Array(w * h);
+    for (let y = 100; y < 140; y++) for (let x = 50; x < 700; x++) bits[y * w + x] = (x >> 2) % 3 === 0 ? 1 : 0;
+    const gfa: string = await bitsToGfaZ64(bits, w, h);
+    const m = /^\^FO0,0\^GFA,(\d+),(\d+),(\d+),:Z64:([A-Za-z0-9+/=]+):([0-9A-F]{4})\^FS$/.exec(gfa)!;
+    expect(m).toBeTruthy();
+    expect(crc16(m[4])).toBe(m[5]);
+    const raw = inflateSync(Buffer.from(m[4], "base64"));
+    const bpr = Number(m[3]);
+    expect(raw.length).toBe(Number(m[1]));
+    for (let y = 0; y < h; y += 7) for (let x = 0; x < w; x += 3) expect((raw[y * bpr + (x >> 3)] >> (7 - (x & 7))) & 1).toBe(bits[y * w + x]);
+    expect(gfa.length).toBeLessThan(bitsToGfa(bits, w, h).length);
   });
 });

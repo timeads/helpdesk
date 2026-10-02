@@ -69,6 +69,34 @@ export function bitsToGfa(bits, width, height) {
   return `^FO0,0^GFA,${total},${total},${bytesPerRow},${parts.join("")}^FS`;
 }
 
+/** CRC-16/XMODEM (poly 0x1021, init 0) over the Z64 text, as ZPL expects after ":Z64:…:". */
+export function crc16(text) {
+  let crc = 0;
+  for (let i = 0; i < text.length; i++) {
+    crc ^= text.charCodeAt(i) << 8;
+    for (let k = 0; k < 8; k++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+/**
+ * 1-bit pixels → ^GFA using Z64 (zlib + base64): several times smaller than the ASCII form,
+ * which keeps Browser Print happy. Falls back to ASCII where the browser can't compress.
+ */
+export async function bitsToGfaZ64(bits, width, height) {
+  if (typeof CompressionStream === "undefined") return bitsToGfa(bits, width, height);
+  const bytesPerRow = Math.ceil(width / 8);
+  const raw = new Uint8Array(bytesPerRow * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) if (bits[y * width + x]) raw[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
+  }
+  const zipped = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < zipped.length; i += 0x8000) bin += String.fromCharCode(...zipped.subarray(i, i + 0x8000));
+  const b64 = btoa(bin);
+  return `^FO0,0^GFA,${raw.length},${raw.length},${bytesPerRow},:Z64:${b64}:${crc16(b64)}^FS`;
+}
+
 const loadImage = (src) => new Promise((resolve, reject) => {
   const img = new Image();
   img.onload = () => resolve(img);
@@ -172,7 +200,7 @@ export async function slipToZpl(html, css, dpi = 203) {
     // skip blank rows at the top of a continuation so it starts right at the margin
     let from = y;
     if (!first) while (from < end && blank[from]) from++;
-    if (from < end) pages.push(`^XA^PW${W}^LL${pageH}^LH0,0${bitsToGfa(bits.subarray(from * W, end * W), W, end - from).replace("^FO0,0", `^FO0,${top}`)}^XZ`);
+    if (from < end) pages.push(`^XA^PW${W}^LL${pageH}^LH0,0${(await bitsToGfaZ64(bits.subarray(from * W, end * W), W, end - from)).replace("^FO0,0", `^FO0,${top}`)}^XZ`);
     y = end;
   }
   return pages.join("\n");
@@ -203,5 +231,5 @@ export async function imageToZpl(base64, format, dpi = 203) {
   const px = ctx.getImageData(0, 0, W, H).data;
   const bits = new Uint8Array(W * H);
   for (let i = 0; i < bits.length; i++) bits[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2] < 128 ? 1 : 0;
-  return `^XA^PW${W}^LL${H}^LH0,0${bitsToGfa(bits, W, H)}^XZ`;
+  return `^XA^PW${W}^LL${H}^LH0,0${await bitsToGfaZ64(bits, W, H)}^XZ`;
 }

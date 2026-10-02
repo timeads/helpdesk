@@ -66,22 +66,26 @@ export async function sendZpl(zpl) {
   const device = await zebraPrinter();
   const jobs = zpl.match(/\^XA[\s\S]*?\^XZ/g) ?? [zpl];
   for (const [i, job] of jobs.entries()) {
-    const body = JSON.stringify({ device, data: job });
-    let sent = false;
-    let last;
-    for (let attempt = 0; attempt < 2 && !sent; attempt++) {
-      try {
-        // text/plain keeps this a "simple" request (no CORS preflight), as Zebra's own library does
-        await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body });
-        sent = true;
-      } catch (e) {
-        last = e;
-        await sleep(800);
+    // Browser Print rejects large requests (500), so each label goes in small pieces; the printer joins them
+    const pieces = job.match(/[\s\S]{1,6000}/g);
+    for (const [k, piece] of pieces.entries()) {
+      const body = JSON.stringify({ device, data: piece });
+      let sent = false;
+      let last;
+      for (let attempt = 0; attempt < 2 && !sent; attempt++) {
+        try {
+          // text/plain keeps this a "simple" request (no CORS preflight), as Zebra's own library does
+          await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body });
+          sent = true;
+        } catch (e) {
+          last = e;
+          await sleep(800);
+        }
       }
-    }
-    if (!sent) {
-      const kb = Math.round(body.length / 1024);
-      throw new Error(`Found ${device.name || "the Zebra"} but couldn't send ${jobs.length > 1 ? `label ${i + 1} of ${jobs.length}` : "the label"} (${kb} KB)${i ? ` — the first ${i} printed` : ""}. Details: ${last?.message}`);
+      if (!sent) {
+        if (k > 0) await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device, data: "^XZ" }) }).catch(() => {}); // close the half-sent label
+        throw new Error(`Found ${device.name || "the Zebra"} but couldn't send ${jobs.length > 1 ? `label ${i + 1} of ${jobs.length}` : "the label"} (${Math.round(job.length / 1024)} KB, part ${k + 1} of ${pieces.length})${i ? ` — the first ${i} printed` : ""}. Details: ${last?.message}`);
+      }
     }
     if (jobs.length > 1) await sleep(150); // let the printer take each one
   }
@@ -107,15 +111,11 @@ export async function zebraDiagnostics() {
     out.push({ ok: false, text: e.message });
     return out;
   }
-  // a packing-slip-sized job (a blank graphic) that prints nothing visible but tests a large send
+  // a packing-slip-sized job sent the way slips are (in pieces): a comment that prints nothing
   try {
-    const { bitsToGfa } = await import("./zpl.js");
-    const w = 812, h = 400;
-    const bits = new Uint8Array(w * h);
-    for (let i = 0; i < bits.length; i += 3) bits[i] = (i % 7) === 0 ? 1 : 0; // noisy, so it doesn't compress away
-    const job = `^XA^PW812^LL1218^LH0,0${bitsToGfa(bits, w, h).replace("^FO0,0", "^FO0,2000")}^XZ`; // placed past the label, so nothing prints
-    await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device, data: job }) });
-    out.push({ ok: true, text: `Sent a ${Math.round(job.length / 1024)} KB test job (a short blank label may feed)` });
+    const job = `^XA^FX${"connection test ".repeat(2000)}^FS^XZ`;
+    await sendZpl(job);
+    out.push({ ok: true, text: `Sent a ${Math.round(job.length / 1024)} KB test job in pieces (a blank label may feed)` });
   } catch (e) {
     out.push({ ok: false, text: `Sending a packing-slip-sized job failed: ${e.message}` });
   }
