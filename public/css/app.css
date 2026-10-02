@@ -1224,3 +1224,11 @@ body.order-open { overflow: hidden; }
 .op-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .op-label.voided { opacity: .6; }
 @media (max-width: 760px) { .op-label { flex-wrap: wrap; } }
+.pickup-steps { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
+.pickup-step { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 999px; background: var(--sunken); color: var(--text-2); font: 600 13px var(--ui); }
+.pickup-step .dot { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border-strong); font-size: 12px; }
+.pickup-step .dot svg { width: 13px; height: 13px; }
+.pickup-step.current { background: var(--ochre-soft); color: var(--ochre-text); }
+.pickup-step.done { background: var(--mint-soft); color: var(--mint-ink); }
+.pickup-step.done .dot { background: var(--mint-ink); color: #fff; border-color: transparent; }
+.notice.good { background: var(--mint-soft); color: var(--mint-ink); }

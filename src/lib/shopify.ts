@@ -93,23 +93,34 @@ const ORDER_FIELDS_TEMPLATE = `
       __VARIANT__
     }
   }
+  __FO__
   fulfillments(first: 3) {
     status createdAt displayStatus
     trackingInfo(first: 3) { company number url }
   }
 `;
 
-const orderFields = (lines: number, variant: boolean) =>
-  ORDER_FIELDS_TEMPLATE.replace("__LINES__", String(lines)).replace("__VARIANT__", variant ? "variant { id }" : "");
+// How each part of the order is delivered (shipping vs. in-store pickup); needs the fulfillment-order scopes
+const FO_FIELDS = "fulfillmentOrders(first: 5) { nodes { id status deliveryMethod { methodType } } }";
 
-/** Runs an order query; if product access is missing, retries without variant fields. */
+const orderFields = (lines: number, variant: boolean, fo = true) =>
+  ORDER_FIELDS_TEMPLATE.replace("__LINES__", String(lines)).replace("__VARIANT__", variant ? "variant { id }" : "").replace("__FO__", fo ? FO_FIELDS : "");
+
+/** Runs an order query; if product or fulfillment-order access is missing, retries without those fields. */
 async function withOrderFields<T>(lines: number, run: (fields: string) => Promise<T>): Promise<T> {
-  try {
-    return await run(orderFields(lines, true));
-  } catch (e) {
-    if (e instanceof ShopifyAccessError && /read_products|variant/i.test(e.message)) return run(orderFields(lines, false));
-    throw e;
+  let variant = true;
+  let fo = true;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await run(orderFields(lines, variant, fo));
+    } catch (e) {
+      if (!(e instanceof ShopifyAccessError)) throw e;
+      if (fo && /fulfillment ?order/i.test(e.message)) fo = false;
+      else if (variant && /read_products|variant/i.test(e.message)) variant = false;
+      else throw e;
+    }
   }
+  return run(orderFields(lines, false, false));
 }
 
 export interface ShopifyOrder {
@@ -151,6 +162,7 @@ export interface ShopifyOrder {
       } | null;
     }[];
   };
+  fulfillmentOrders?: { nodes: { id: string; status: string; deliveryMethod: { methodType: string } | null }[] };
   fulfillments: {
     status: string;
     createdAt: string;
@@ -318,10 +330,29 @@ export async function cancelFulfillment(env: Env, orderId: string, fulfillmentId
   return true;
 }
 
+/** In-store pickup: tells Shopify the order is ready to collect (Shopify emails the customer). */
+export async function markReadyForPickup(env: Env, orderId: string) {
+  const fo = await shopify<{ order: { fulfillmentOrders: { nodes: { id: string; status: string; deliveryMethod: { methodType: string } | null }[] } } }>(
+    env,
+    `query FO($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status deliveryMethod { methodType } } } } }`,
+    { id: orderId },
+  );
+  const open = fo.order.fulfillmentOrders.nodes.filter((n) => ["OPEN", "IN_PROGRESS"].includes(n.status) && n.deliveryMethod?.methodType === "PICK_UP");
+  if (!open.length) throw new HttpError(409, "Shopify doesn't have this order set up for in-store pickup (or it's already been picked up)");
+  const res = await shopify<{ fulfillmentOrderLineItemsPreparedForPickup: { userErrors: { message: string }[] } }>(
+    env,
+    `mutation R($input: FulfillmentOrderLineItemsPreparedForPickupInput!) { fulfillmentOrderLineItemsPreparedForPickup(input: $input) { userErrors { message } } }`,
+    { input: { lineItemsByFulfillmentOrder: open.map((n) => ({ fulfillmentOrderId: n.id })) } },
+  );
+  if (res.fulfillmentOrderLineItemsPreparedForPickup.userErrors.length) {
+    throw new HttpError(422, "Shopify: " + res.fulfillmentOrderLineItemsPreparedForPickup.userErrors.map((e) => e.message).join("; "));
+  }
+}
+
 export async function fulfillOrder(
   env: Env,
   orderId: string,
-  tracking: { numbers: string[]; urls: string[]; company: string },
+  tracking: { numbers: string[]; urls: string[]; company: string } | null, // null: in-store pickup (no tracking)
   notifyCustomer: boolean,
 ) {
   const fo = await shopify<{ order: { fulfillmentOrders: { nodes: { id: string; status: string }[] } } }>(
@@ -339,7 +370,7 @@ export async function fulfillOrder(
     {
       f: {
         lineItemsByFulfillmentOrder: open.map((n) => ({ fulfillmentOrderId: n.id })),
-        trackingInfo: tracking,
+        ...(tracking ? { trackingInfo: tracking } : {}),
         notifyCustomer,
       },
     },

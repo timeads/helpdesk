@@ -51,6 +51,13 @@ const people = (): Record<string, { name: string; since: string; tags: string[];
     name: "Lee Park", since: "2026-09-01", tags: [],
     orders: [order(9053, "#1053-TG", 0, "58.00", "PENDING", "UNFULFILLED", [line("Tufting Glue", "1 gal", 1, "58.00", "GLUE", "#c78c2b", 9)], address("Lee Park", "Seattle", "WA", "98101"), undefined, "Standard", "9.50")],
   },
+  "priya@example.com": {
+    name: "Priya Shah", since: "2026-09-20", tags: [],
+    orders: [{
+      ...order(9054, "#1054-TG", 0, "96.00", "PAID", "UNFULFILLED", [line("Tufting Frame", "Medium", 1, "96.00", "FRAME", "#7a5b3a", 6)], address("Priya Shah", "Philadelphia", "PA", "19143"), undefined, "Pickup at Tuft the World", "0.00"),
+      fulfillmentOrders: { nodes: [{ id: "gid://shopify/FulfillmentOrder/9054", status: "OPEN", deliveryMethod: { methodType: "PICK_UP" } }] },
+    }],
+  },
   "marcus@example.com": {
     name: "Marcus Lee", since: "2025-06-11", tags: [],
     orders: [order(9031, "#1031", 3, "64.00", "PAID", "FULFILLED", [line("Acrylic Yarn Cone", "Goldenrod", 4, "16.00", "YARN", "#b03424", 0.6)], address("Marcus Lee", "Denver", "CO", "80202"), "1Z999AA10123456785")],

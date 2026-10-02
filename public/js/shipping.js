@@ -7,6 +7,7 @@ import { parseCsv } from "./settings-support.js";
 
 const VIEWS = [
   ["ready", "Ready to ship"],
+  ["pickup", "In-store pickup"],
   ["priority", "Priority"],
   ["payment_pending", "Payment pending"],
   ["on_hold", "On hold"],
@@ -14,11 +15,12 @@ const VIEWS = [
   ["all", "All open"],
 ];
 const VIEW_FILTERS = {
-  ready: (o) => !o.hold && !o.paymentPending && !o.hasLabel,
-  priority: (o) => !o.hold && !o.paymentPending && !o.hasLabel && o.priority,
+  ready: (o) => !o.hold && !o.paymentPending && !o.hasLabel && !o.pickup,
+  priority: (o) => !o.hold && !o.paymentPending && !o.hasLabel && !o.pickup && o.priority,
+  pickup: (o) => o.pickup && !o.pickedUpAt,
   payment_pending: (o) => o.paymentPending && !o.hasLabel,
   on_hold: (o) => !!o.hold && !o.hasLabel,
-  international: (o) => o.international && !o.hasLabel,
+  international: (o) => o.international && !o.hasLabel && !o.pickup,
   all: () => true,
 };
 const POLICIES = [
@@ -112,7 +114,7 @@ function pickRate(rates, policy, plan) {
   return rates.find((r) => r.serviceCode === want) ?? null;
 }
 function loadQuotes(orders, onEach) {
-  const todo = orders.filter((o) => o.plan.weightKnown && !o.hasLabel && !quoteCache.has(quoteKey(o)));
+  const todo = orders.filter((o) => o.plan.weightKnown && !o.hasLabel && !o.pickup && !quoteCache.has(quoteKey(o)));
   let i = 0;
   const worker = async () => {
     while (i < todo.length) {
@@ -157,7 +159,7 @@ async function customsFor(o) {
 
 const addrCache = new Map();
 function loadAddressChecks(orders, onEach) {
-  const todo = orders.filter((o) => !o.hasLabel && !o.international && !addrCache.has(o.id));
+  const todo = orders.filter((o) => !o.hasLabel && !o.international && !o.pickup && !addrCache.has(o.id));
   let i = 0;
   const worker = async () => {
     while (i < todo.length) {
@@ -251,6 +253,7 @@ function renderQueue(root, params) {
             o.hold ? h("span", { class: "badge bad", title: o.hold }, "On hold") : null,
             o.paymentPending ? h("span", { class: "badge warn" }, "Payment pending") : null,
             o.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
+            o.pickup ? (o.pickupReadyAt ? h("span", { class: "badge good", title: `Marked ready ${fullTime(o.pickupReadyAt)}` }, "Ready for pickup") : h("span", { class: "badge warn plain" }, "Pickup")) : null,
             o.slipPrinted ? h("span", { class: "badge plain", title: o.slipPrintedAt ? `Packing slip printed ${fullTime(o.slipPrintedAt)}` : "Packing slip printed" }, "Slip printed") : null,
             o.plan.signature ? h("span", { class: "badge plain" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null));
         return tr;
@@ -269,6 +272,7 @@ function renderQueue(root, params) {
   function fillQuote(o, td = cells.get(o.id)) {
     if (!td) return;
     if (o.hasLabel) return mount(td, h("span", { class: "muted small" }, "—"));
+    if (o.pickup) return mount(td, h("span", { class: "small muted" }, "No label — in-store pickup"));
     if (!o.plan.weightKnown) return mount(td, h("span", { class: "muted small" }, "Needs weight"));
     const q = quoteCache.get(quoteKey(o));
     if (!q || q.loading) return mount(td, h("span", { class: "skel-inline" }));
@@ -325,6 +329,18 @@ function renderQueue(root, params) {
       st.selected.clear();
       load();
     });
+    const pickups = picked.filter((o) => o.pickup && !o.pickupReadyAt && !o.pickedUpAt);
+    const readyBtn = h("button", { class: "btn" }, icon("check"), `Mark ${pickups.length} ready for pickup`);
+    readyBtn.onclick = busy(readyBtn, async () => {
+      const failed = [];
+      for (const o of pickups) {
+        try { await api(`/shipping/pickup/${encodeURIComponent(o.id)}/ready`, { method: "POST", body: { name: o.name } }); }
+        catch (e) { failed.push(`${o.name}: ${e.message}`); }
+      }
+      toast(failed.length ? `Not marked: ${failed.join("; ")}` : `${pickups.length} ready for pickup — Shopify emailed the customers`, failed.length > 0);
+      st.selected.clear();
+      load();
+    });
     const release = h("button", { class: "btn" }, "Release");
     release.onclick = busy(release, async () => {
       await api("/shipping/holds", { method: "POST", body: { hold: false, orders: picked.map((o) => ({ id: o.id, name: o.name })) } });
@@ -336,15 +352,16 @@ function renderQueue(root, params) {
       quoted.length ? h("span", { class: "small", title: quoted.length < picked.length ? "Some selected orders have no quote yet" : null },
         `Est. ${money(est, "USD")} · `, h("span", { class: "margin " + (estMargin >= 0 ? "pos" : "neg") }, `${marginText(estMargin)} margin`),
         quoted.length < picked.length ? h("span", { class: "muted" }, ` (${quoted.length} of ${picked.length} quoted)`) : null) : null,
-      h("div", { class: "row", style: { marginLeft: "auto" } }, h("span", { class: "small muted" }, "Service"), policy, buy, slips,
+      h("div", { class: "row", style: { marginLeft: "auto" } }, pickups.length ? readyBtn : null,
+        picked.some((o) => !o.pickup) ? [h("span", { class: "small muted" }, "Service"), policy, buy] : null, slips,
         picked.some((o) => !o.hold) ? hold : null, picked.some((o) => o.hold) ? release : null,
         h("button", { class: "btn ghost icon-only", "aria-label": "Clear selection", onclick: () => { st.selected.clear(); draw(); } }, icon("x"))));
   }
 
   /** Buys labels one order at a time (keeps each request small and shows progress), then prints the batch. */
   async function bulkBuy(picked, policy) {
-    const ready = picked.filter((o) => !o.hasLabel && !o.hold);
-    if (!ready.length) return toast("Those orders already have labels or are on hold", true);
+    const ready = picked.filter((o) => !o.hasLabel && !o.hold && !o.pickup);
+    if (!ready.length) return toast(picked.every((o) => o.pickup) ? "Pickup orders don't need labels — use “Mark ready for pickup”" : "Those orders already have labels or are on hold", true);
     const total = ready.reduce((n, o) => n + (o.plan.weightKnown ? 0 : 1), 0);
     if (total && !confirm(`${total} order${total > 1 ? "s have" : " has"} no known weight and will be skipped. Continue?`)) return;
     const win = reserveWindow();
@@ -533,6 +550,47 @@ async function voidLabelFlow(l) {
   return true;
 }
 
+/** In-store pickup on the order page: pack it, mark it ready (Shopify emails the customer), then picked up. */
+function pickupCard(o, reopen) {
+  const el = h("section", { class: "card op-card pickup-card" });
+  const when = (iso) => fullTime(iso);
+  const step = (n, label, done, current) => h("div", { class: "pickup-step" + (done ? " done" : current ? " current" : "") }, h("span", { class: "dot" }, done ? icon("check") : String(n)), label);
+  const ready = h("button", { class: "btn primary" }, icon("check"), "Mark ready for pickup", h("kbd", {}, navigator.platform?.startsWith("Mac") ? "⌘P" : "Ctrl+P"));
+  ready.onclick = busy(ready, async () => {
+    await api(`/shipping/pickup/${encodeURIComponent(o.id)}/ready`, { method: "POST", body: { name: o.name } });
+    o.pickupReadyAt = new Date().toISOString();
+    toast(`${o.name} is ready for pickup — Shopify emailed the customer`);
+    queueApi?.reload();
+    reopen();
+  });
+  const picked = h("button", { class: "btn primary" }, icon("check"), "Mark picked up");
+  picked.onclick = busy(picked, async () => {
+    if (!confirm(`Mark ${o.name} as picked up? It's marked fulfilled in Shopify.`)) return;
+    await api(`/shipping/pickup/${encodeURIComponent(o.id)}/picked-up`, { method: "POST", body: { name: o.name } });
+    o.pickedUpAt = new Date().toISOString();
+    toast(`${o.name} picked up — fulfilled in Shopify`);
+    queueApi?.reload();
+    reopen();
+  });
+  const slip = h("button", { class: "btn", onclick: () => openPackingSlips([o.id]) }, icon("printer"), "Packing slip");
+  mount(el,
+    h("div", { class: "op-card-head" }, h("h3", {}, "In-store pickup"), h("span", { class: "small muted" }, o.requestedService || "")),
+    h("div", { class: "pickup-steps" },
+      step(1, "Pack it", !!o.pickupReadyAt || !!o.slipPrinted, !o.pickupReadyAt),
+      step(2, "Ready for pickup", !!o.pickupReadyAt, !o.pickupReadyAt),
+      step(3, "Picked up", !!o.pickedUpAt, !!o.pickupReadyAt && !o.pickedUpAt)),
+    o.pickedUpAt
+      ? h("div", { class: "notice good" }, `Picked up ${when(o.pickedUpAt)} — fulfilled in Shopify.`)
+      : o.pickupReadyAt
+        ? h("div", { class: "stack", style: { gap: "10px" } },
+          h("p", { class: "small muted", style: { margin: 0 } }, `Marked ready ${when(o.pickupReadyAt)} — Shopify emailed the customer. When they collect it, mark it picked up.`),
+          h("div", { class: "row" }, picked, slip))
+        : h("div", { class: "stack", style: { gap: "10px" } },
+          h("p", { class: "small muted", style: { margin: 0 } }, "No shipping label needed. Pack the order, then mark it ready — Shopify sends the customer its “ready for pickup” email."),
+          h("div", { class: "row" }, ready, slip)));
+  return el;
+}
+
 /** "Labels for this order" on the order page: reprint or void what was bought. */
 function orderLabelsCard(o, onChange) {
   const el = h("section", { class: "card op-card", hidden: true });
@@ -554,6 +612,16 @@ function orderLabelsCard(o, onChange) {
             h("div", { class: "small muted" }, `${relTime(l.created_at)}${l.agent_name ? ` by ${l.agent_name}` : ""} · `,
               l.tracking_numbers.map((n, i) => [i ? ", " : "", h("a", { href: trackHref(n), target: "_blank", rel: "noopener" }, n)]))),
           voided ? null : h("div", { class: "row", style: { gap: "6px", flexWrap: "nowrap" } },
+            l.fulfilled ? null : (() => {
+              const b = h("button", { class: "btn sm primary", title: "Mark the order fulfilled in Shopify with this label's tracking (emails the customer)" }, "Mark fulfilled in Shopify");
+              b.onclick = busy(b, async () => {
+                await api(`/shipping/labels/${l.id}/fulfill`, { method: "POST", body: { notifyCustomer: true } });
+                toast("Marked fulfilled in Shopify — the customer gets the shipping email");
+                await load();
+                queueApi?.reload();
+              });
+              return b;
+            })(),
             h("button", { class: "btn sm", onclick: () => printLabels({ ids: [l.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), "Print"),
             voidBtn));
       })));
@@ -988,7 +1056,9 @@ function buildLabelForm(root, o, presets, opts) {
     totalWeightEl.textContent = w > 0 ? `Total ${lbOz(w)}${split() ? ` · ${s.parcels.length} boxes` : ""}` : "";
   };
   const items = o?.lineItems.nodes ?? [];
-  const labelsCard = o ? orderLabelsCard(o) : null;
+  const labelsCard = o && !o.pickup ? orderLabelsCard(o) : null;
+  const pickupEl = o?.pickup ? pickupCard(o, () => openOrderPage(queueApi?.find(o.id) ?? o, opts)) : null;
+  if (o?.pickup) boxesEl.style.display = "none";
   const notices = [
     o?.hold ? h("div", { class: "notice bad" }, `On hold: ${o.hold}`) : null,
     o?.hasLabel ? h("div", { class: "notice" }, "This order already has a label. Buying another one ships it again.") : null,
@@ -1015,7 +1085,7 @@ function buildLabelForm(root, o, presets, opts) {
         h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel))));
 
   const packages = h("section", { class: "card op-card" },
-    h("div", { class: "op-card-head" }, h("h3", {}, o ? `Items & boxes · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}` : "Packages"), packHeadEl),
+    h("div", { class: "op-card-head" }, h("h3", {}, o ? `${o.pickup ? "Items" : "Items & boxes"} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}` : "Packages"), packHeadEl),
     boxesEl,
     itemsEl);
 
@@ -1054,18 +1124,19 @@ function buildLabelForm(root, o, presets, opts) {
         h("h1", {}, o ? o.name : "New label",
           o?.priority ? h("span", { class: "badge warn plain" }, "Priority") : null,
           o?.international ? h("span", { class: "badge plain" }, `International · ${a.countryCodeV2}`) : null,
-          o?.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null),
+          o?.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
+          o?.pickup ? h("span", { class: "badge warn plain" }, "In-store pickup") : null),
         h("div", { class: "small muted" }, o ? `${shortDate(o.createdAt)} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"} · ${money(o.totalPriceSet.shopMoney.amount, cur)}` : "Not linked to an order — for replacements, samples, etc."))),
     h("div", { class: "op-grid" + (aside ? "" : " solo") },
       h("div", { class: "op-main" },
-        buyEl,
+        o?.pickup ? pickupEl : buyEl,
         notices.length ? h("div", { class: "stack" }, notices) : null,
         labelsCard,
-        shipTo,
+        o?.pickup ? null : shipTo,
         noteCard,
         packages,
-        service,
-        customsEl),
+        o?.pickup ? null : service,
+        o?.pickup ? null : customsEl),
       aside));
 
   // The bar at the top: chosen service, cost, margin and the buy button (Ctrl+P)
@@ -1211,6 +1282,10 @@ function buildLabelForm(root, o, presets, opts) {
   }
 
   drawParcels();
+  if (o?.pickup) {
+    if (page) page.buy = () => pickupEl.querySelector(".btn.primary")?.click();
+    return;
+  }
   drawRates();
   quote(0);
   verifySoon(0);

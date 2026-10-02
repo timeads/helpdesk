@@ -1,15 +1,15 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "../env";
-import { cancelFulfillment, findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
+import { cancelFulfillment, fulfillOrder, markReadyForPickup, findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
-import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers";
+import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
-  addressFromOrder, buyLabel, chooseRate, isInternational, isPaymentPending, isPriority, itemCount, itemsWeightLb,
+  addressFromOrder, buyLabel, chooseRate, isInternational, isPickup, isPaymentPending, isPriority, itemCount, itemsWeightLb,
   loadPresets, loadRules, planOrders, requestedService, shipFrom, shippingPaid, type Plan,
 } from "../lib/fulfillment";
 import { code128Svg } from "../lib/code128";
@@ -90,13 +90,14 @@ async function idMap(env: Env, sql: string, ids: string[]) {
 /** Everything the queue and slideout need about an order, computed once on the server. */
 async function describe(env: Env, orders: ShopifyOrder[]) {
   const ids = orders.map((o) => o.id);
-  const [plans, holds, labelled, slips, drafts, presets] = await Promise.all([
+  const [plans, holds, labelled, slips, drafts, presets, pickups] = await Promise.all([
     planOrders(env, orders),
     holdsFor(env, ids),
     idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND order_id IN (?)", ids),
     idMap(env, "SELECT order_id, printed_at AS v FROM packing_slip_prints WHERE order_id IN (?)", ids),
     loadDrafts(env, ids),
     loadPresets(env),
+    idMap(env, "SELECT order_id, COALESCE(ready_at, '') || '|' || COALESCE(picked_up_at, '') AS v FROM pickup_status WHERE order_id IN (?)", ids),
   ]);
   return orders.map((o) => {
     const draft = drafts.get(o.id) ?? null;
@@ -121,6 +122,9 @@ async function describe(env: Env, orders: ShopifyOrder[]) {
       priority: isPriority(o),
       paymentPending: isPaymentPending(o),
       international: isInternational(o),
+      pickup: isPickup(o),
+      pickupReadyAt: pickups.get(o.id)?.split("|")[0] || null,
+      pickedUpAt: pickups.get(o.id)?.split("|")[1] || null,
     };
   });
 }
@@ -128,11 +132,12 @@ async function describe(env: Env, orders: ShopifyOrder[]) {
 type Described = Awaited<ReturnType<typeof describe>>[number];
 
 const VIEWS: Record<string, (o: Described) => boolean> = {
-  ready: (o) => !o.hold && !o.paymentPending && !o.hasLabel,
-  priority: (o) => !o.hold && !o.paymentPending && !o.hasLabel && o.priority,
+  ready: (o) => !o.hold && !o.paymentPending && !o.hasLabel && !o.pickup,
+  priority: (o) => !o.hold && !o.paymentPending && !o.hasLabel && !o.pickup && o.priority,
+  pickup: (o) => o.pickup && !o.pickedUpAt,
   payment_pending: (o) => o.paymentPending && !o.hasLabel,
   on_hold: (o) => !!o.hold && !o.hasLabel,
-  international: (o) => o.international && !o.hasLabel,
+  international: (o) => o.international && !o.hasLabel && !o.pickup,
   all: () => true,
 };
 
@@ -427,6 +432,45 @@ shipping.post("/labels/auto", async (c) => {
     customs,
   });
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });
+});
+
+// ---- In-store pickup: "ready for pickup" (Shopify emails the customer), then "picked up" (fulfilled)
+shipping.post("/pickup/:id/ready", async (c) => {
+  const id = decodeURIComponent(c.req.param("id"));
+  const { name } = await c.req.json<{ name?: string }>().catch(() => ({ name: undefined }));
+  if (!demo(c.env)) await markReadyForPickup(c.env, id);
+  await c.env.DB.prepare(
+    `INSERT INTO pickup_status (order_id, order_name, ready_at, agent_id) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?)
+     ON CONFLICT(order_id) DO UPDATE SET ready_at = excluded.ready_at, agent_id = excluded.agent_id`,
+  ).bind(id, name ?? null, c.get("agent").id).run();
+  return c.json({ ok: true });
+});
+
+shipping.post("/pickup/:id/picked-up", async (c) => {
+  const id = decodeURIComponent(c.req.param("id"));
+  const { name } = await c.req.json<{ name?: string }>().catch(() => ({ name: undefined }));
+  if (!demo(c.env)) await fulfillOrder(c.env, id, null, false);
+  await c.env.DB.prepare(
+    `INSERT INTO pickup_status (order_id, order_name, picked_up_at, agent_id) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?)
+     ON CONFLICT(order_id) DO UPDATE SET picked_up_at = excluded.picked_up_at, agent_id = excluded.agent_id`,
+  ).bind(id, name ?? null, c.get("agent").id).run();
+  return c.json({ ok: true });
+});
+
+/** A label whose Shopify fulfillment failed (e.g. a missing scope): try marking the order fulfilled again. */
+shipping.post("/labels/:id{[0-9]+}/fulfill", async (c) => {
+  const id = Number(c.req.param("id"));
+  const { notifyCustomer } = await c.req.json<{ notifyCustomer?: boolean }>().catch(() => ({ notifyCustomer: undefined }));
+  const s = await c.env.DB.prepare("SELECT order_id, carrier, tracking_numbers, status, fulfilled FROM shipments WHERE id = ?").bind(id)
+    .first<{ order_id: string | null; carrier: string | null; tracking_numbers: string; status: string; fulfilled: number }>();
+  if (!s || !s.order_id) throw new HttpError(404, "Label not found");
+  if (s.status !== "purchased") throw new HttpError(409, "This label was voided");
+  if (s.fulfilled) return c.json({ ok: true, already: true });
+  const numbers = JSON.parse(s.tracking_numbers || "[]") as string[];
+  const carrier = s.carrier ?? "UPS";
+  const f = await fulfillOrder(c.env, s.order_id, { company: carrier, numbers, urls: numbers.map((n) => trackingUrlFor(carrier, n)) }, notifyCustomer ?? true);
+  await c.env.DB.prepare("UPDATE shipments SET fulfilled = 1, fulfillment_id = ? WHERE id = ?").bind(f?.id ?? null, id).run();
+  return c.json({ ok: true });
 });
 
 shipping.get("/labels", async (c) => {

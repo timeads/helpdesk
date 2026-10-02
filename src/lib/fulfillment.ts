@@ -47,6 +47,10 @@ export const shippingPaid = (o: ShopifyOrder) => Number(o.totalShippingPriceSet?
 export const requestedService = (o: ShopifyOrder) => o.shippingLines.nodes[0]?.title ?? "";
 export const isPriority = (o: ShopifyOrder) => /next|overnight|express|priority|2nd|second|2[- ]day|3 day|rush/i.test(requestedService(o));
 export const isPaymentPending = (o: ShopifyOrder) => ["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED"].includes(o.displayFinancialStatus ?? "");
+/** In-store pickup: Shopify's delivery method says so (or, without fulfillment-order access, the checkout option's name). */
+export const isPickup = (o: ShopifyOrder) =>
+  o.fulfillmentOrders?.nodes.some((f) => f.deliveryMethod?.methodType === "PICK_UP")
+  ?? /\b(pick ?-?up|in[- ]store|collect(ion)?)\b/i.test(o.shippingLines.nodes[0]?.title ?? "");
 export const isInternational = (o: ShopifyOrder) => !!o.shippingAddress?.countryCodeV2 && o.shippingAddress.countryCodeV2 !== "US";
 
 /** One product, however it's listed on the order: SKU, else title / variant. */
