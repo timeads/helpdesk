@@ -227,7 +227,9 @@ shipping.get("/scan/:code", async (c) => {
   const boxes = slips.filter((x) => x.box).map((x) => ({ n: x.box!.n, of: x.box!.of, name: x.box!.name, tracking: x.box!.tracking, qty: x.box!.qty }));
   const n = boxMatch ? Number(boxMatch[2]) : null;
   if (n && boxes.length && !boxes.some((b) => b.n === n)) throw new HttpError(404, `${d.name} doesn't have a box ${n} any more — its boxes changed. Reprint its packing slips.`);
-  return c.json({ order: d, boxes, box: n && boxes.length ? n : null });
+  const bought = await c.env.DB.prepare("SELECT id, tracking_numbers, printed_boxes FROM shipments WHERE order_id = ? AND status = 'purchased' AND COALESCE(partial, 0) = 0 ORDER BY id DESC LIMIT 1")
+    .bind(d.id).first<{ id: number; tracking_numbers: string; printed_boxes: string }>();
+  return c.json({ order: d, boxes, box: n && boxes.length ? n : null, shipmentId: bought?.id ?? null, printedBoxes: bought ? Object.keys(printedBoxes(bought)).map(Number) : [] });
 });
 
 // ---- Holds
@@ -542,7 +544,7 @@ function zplOf(labels: string[]): string {
  * was already printed (and when) and waits, with "print again" and "only the new ones" buttons.
  * The print is recorded only when it's actually sent to the printer.
  */
-function printGuard(o: { what: string; markUrl: string; markIds: (string | number)[]; already: { name: string; at: string; count: number }[]; total: number; newOnlyUrl?: string | null }) {
+function printGuard(o: { what: string; markUrl: string; markIds: (string | number)[]; markBox?: number | null; already: { name: string; at: string; count: number }[]; total: number; newOnlyUrl?: string | null }) {
   const warn = o.already.length > 0;
   const list = o.already.slice(0, 12).map((a) => `<li><b>${escapeHtml(a.name)}</b> — <time data-at="${escapeHtml(a.at)}">${escapeHtml(a.at)}</time>${a.count > 1 ? ` (${a.count} times)` : ""}</li>`).join("");
   const banner = warn
@@ -551,10 +553,10 @@ function printGuard(o: { what: string; markUrl: string; markIds: (string | numbe
        <div class="guard-actions"><button class="again" onclick="go()">Print ${o.total === 1 ? "it" : "all"} again</button>${o.newOnlyUrl ? `<a class="only" href="${escapeHtml(o.newOnlyUrl)}">Print only the ${o.total - o.already.length} not printed yet</a>` : ""}<button onclick="close()">Cancel</button></div></div>`
     : "";
   const script = `<script>
-const MARK = ${JSON.stringify({ url: o.markUrl, ids: o.markIds })};
+const MARK = ${JSON.stringify({ url: o.markUrl, ids: o.markIds, box: o.markBox ?? null })};
 let marked = false;
 function go() {
-  if (!marked) { marked = true; fetch(MARK.url, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: MARK.ids }) }).catch(() => {}); }
+  if (!marked) { marked = true; fetch(MARK.url, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: MARK.ids, box: MARK.box }) }).catch(() => {}); }
   document.querySelector(".guard")?.remove();
   print();
 }
@@ -596,6 +598,22 @@ ${pages}
 ${guard?.script ?? "<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>"}
 </body></html>`;
 }
+
+/** When each box of a multi-box label was printed: { "1": iso, "2": iso }. */
+const printedBoxes = (r: any): Record<string, string> => {
+  try { const v = JSON.parse(r.printed_boxes || "{}"); return v && !Array.isArray(v) ? v : {}; } catch { return {}; }
+};
+
+/** ?box=N: just that box's label from each row (multi-box shipments printed one box at a time). */
+function onlyBox(rows: any[], box: number | null) {
+  if (!box) return rows;
+  return rows.map((r) => {
+    const all = JSON.parse(r.labels || "[]") as string[];
+    const at = printedBoxes(r)[String(box)] ?? null;
+    return { ...r, labels: JSON.stringify(all[box - 1] ? [all[box - 1]] : []), printed_at: at, print_count: at ? 1 : 0, order_name: `${r.order_name ?? `Label ${r.id}`} · box ${box} of ${all.length}` };
+  });
+}
+const boxParam = (v: string | undefined) => (Number(v) > 0 && Number(v) < 100 ? Math.floor(Number(v)) : null);
 
 /** Labels to print: ?ids=1,2,3 or ?batch=… . format=zpl returns raw ZPL text for Zebra Browser Print. */
 async function labelRows(env: Env, q: { ids?: string; batch?: string }) {
@@ -648,7 +666,8 @@ shipping.post("/import/redo", async (c) => {
 });
 
 shipping.get("/labels/print", async (c) => {
-  const rows = await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") });
+  const box = boxParam(c.req.query("box"));
+  const rows = onlyBox(await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") }), box);
   if (!rows.length) throw new HttpError(404, "No labels found");
   if (rows.every((r: any) => r.labels === "[]")) throw new HttpError(404, "These were imported from Redo — reprint them in Redo or UPS");
   const gif = rows.filter((r) => r.label_format !== "ZPL").flatMap((r) => (JSON.parse(r.labels) as string[]).map((data) => ({ data, format: r.label_format as string })));
@@ -664,6 +683,7 @@ shipping.get("/labels/print", async (c) => {
     what: "label",
     markUrl: "/api/shipping/labels/printed",
     markIds: printable.map((r) => r.id),
+    markBox: box,
     already: already.map((r) => ({ name: r.order_name ?? `Label ${r.id}`, at: r.printed_at, count: r.print_count })),
     total: printable.length,
     newOnlyUrl: already.length && fresh.length ? `/api/shipping/labels/print?ids=${fresh.map((r) => r.id).join(",")}` : null,
@@ -679,7 +699,7 @@ shipping.get("/labels/print-status", async (c) => {
 
 /** For Zebra printing: every label in the selection (ZPL as text, images as base64) and whether it was printed before. */
 shipping.get("/labels/print-data", async (c) => {
-  const rows = await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") });
+  const rows = onlyBox(await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") }), boxParam(c.req.query("box")));
   return c.json({
     labels: rows.filter((r: any) => r.labels !== "[]").map((r: any) => {
       const data = JSON.parse(r.labels) as string[];
@@ -689,9 +709,16 @@ shipping.get("/labels/print-data", async (c) => {
 });
 
 shipping.post("/labels/printed", async (c) => {
-  const { ids } = await c.req.json<{ ids: number[] }>();
+  const { ids, box } = await c.req.json<{ ids: number[]; box?: number }>();
   const list = (Array.isArray(ids) ? ids : []).map(Number).filter((n) => n > 0).slice(0, 200);
-  if (list.length) {
+  const n = boxParam(String(box ?? ""));
+  if (list.length && n) {
+    // One box of a multi-box label: remember that box (and that something of it was printed)
+    await c.env.DB.prepare(
+      `UPDATE shipments SET printed_boxes = json_set(CASE WHEN json_valid(printed_boxes) AND json_type(printed_boxes) = 'object' THEN printed_boxes ELSE '{}' END, '$."' || ? || '"', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+         printed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), print_count = print_count + 1 WHERE id IN (${list.map(() => "?").join(",")})`,
+    ).bind(String(n), ...list).run();
+  } else if (list.length) {
     await c.env.DB.prepare(`UPDATE shipments SET printed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), print_count = print_count + 1 WHERE id IN (${list.map(() => "?").join(",")})`).bind(...list).run();
   }
   return c.json({ ok: true });

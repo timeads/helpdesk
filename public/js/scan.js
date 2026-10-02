@@ -56,11 +56,12 @@ export function renderScan(root, { openSlideout }) {
   async function loadOrder(code) {
     mount(area, h("div", { class: "card loading" }, spinner()));
     try {
-      const { order, boxes, box } = await api(`/shipping/scan/${encodeURIComponent(code)}`);
+      const { order, boxes, box, shipmentId, printedBoxes } = await api(`/shipping/scan/${encodeURIComponent(code)}`);
+      st.shipmentId = shipmentId ?? null;
       const same = st.order?.id === order.id;
       st.order = order;
       st.boxes = boxes ?? [];
-      if (!same) { st.byBox = new Map(); st.packed = new Set(); st.manual = false; }
+      if (!same) { st.byBox = new Map(); st.packed = new Set(); st.manual = false; st.printed = new Set(printedBoxes ?? []); }
       // A split order scanned by its order number (an older slip) packs as a whole; a box's slip packs that box
       st.boxN = st.boxes.length && box ? box : null;
       const key = st.boxN ?? 0;
@@ -165,9 +166,10 @@ export function renderScan(root, { openSlideout }) {
     const next = st.boxes.find((x) => !st.packed.has(x.n));
     return h("div", { class: "scan-boxes" },
       h("div", { class: "row", style: { gap: "6px" } }, st.boxes.map((x) => h("span", { class: "scan-box-pill" + (x.n === st.boxN ? " current" : "") + (st.packed.has(x.n) ? " packed" : "") },
-        st.packed.has(x.n) ? icon("check") : null, `Box ${x.n}${x.name ? ` · ${x.name}` : ""}`))),
-      boxVerified() && next ? h("div", { class: "notice good", style: { marginTop: "8px" } }, `Box ${b.n} of ${b.of} packed ✓ — scan the packing slip for box ${next.n}.`) : null,
-      boxVerified() && !next ? h("div", { class: "notice good", style: { marginTop: "8px" } }, `All ${st.boxes.length} boxes packed ✓ — print the labels.`) : null,
+        st.packed.has(x.n) ? icon("check") : null, `Box ${x.n}${x.name ? ` · ${x.name}` : ""}`, st.printed?.has(x.n) ? " · label printed" : ""))),
+      boxVerified() ? h("div", { class: "notice good", style: { marginTop: "8px" } },
+        `Box ${b.n} of ${b.of} packed ✓ — `,
+        st.printed?.has(b.n) ? (st.boxes.some((x) => !st.printed.has(x.n)) ? `label printed. Scan the packing slip for box ${st.boxes.find((x) => !st.printed.has(x.n)).n}.` : "label printed. That's every box.") : "print its label below.") : null,
       b?.tracking ? h("div", { class: "small muted", style: { marginTop: "6px" } }, `Tracking for this box: ${b.tracking}`) : null);
   }
 
@@ -243,6 +245,35 @@ export function renderScan(root, { openSlideout }) {
       }
       focus();
     };
+    // Packing a split order one box at a time: print just this box's label (buying the shipment the first time)
+    const printBox = st.boxN && st.boxes.length > 1 ? h("button", { class: boxVerified() ? "btn primary big" : "btn big" }, icon("printer"), `Print box ${st.boxN} label`) : null;
+    if (printBox) printBox.onclick = async () => {
+      if (!boxVerified() && !confirm(`Not everything in box ${st.boxN} has been packed. Print its label anyway?`)) return;
+      printBox.disabled = true;
+      const n = st.boxN;
+      const win = reserveWindow();
+      try {
+        let id = st.shipmentId;
+        if (!id) {
+          // First box: buy the labels for every box as one shipment, then print only this one
+          const r = await api("/shipping/labels/auto", { method: "POST", body: { orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: false } });
+          id = st.shipmentId = r.id;
+          o.hasLabel = true;
+          st.boxes = st.boxes.map((b, i) => ({ ...b, tracking: r.trackingNumbers?.[i] ?? b.tracking }));
+          toast(`Bought ${st.boxes.length} labels (${r.serviceName} · ${money(r.cost, r.currency)}) — printing box ${n}`);
+        }
+        await printLabels({ ids: [id], box: n }, win);
+        st.printed = new Set([...(st.printed ?? []), n]);
+        beep(true);
+        draw();
+      } catch (e) {
+        win?.close();
+        beep(false);
+        toast(e.message, true);
+        printBox.disabled = false;
+      }
+      focus();
+    };
     go.onclick = () => {
       const msg = st.boxN ? `Not every box has been packed and checked (${st.packed.size} of ${st.boxes.length}). Print the labels for all ${st.boxes.length} boxes anyway?` : "Not every item has been scanned. Print the label for the whole order anyway?";
       if (!verified && !confirm(msg)) return;
@@ -253,7 +284,7 @@ export function renderScan(root, { openSlideout }) {
       if (!confirm(`Ship only what's been scanned?\n\nHeld back (the order goes on hold):\n${missing().join("\n")}\n\nShopify marks only the shipped items fulfilled.`)) return;
       buy(shipPart, true);
     };
-    const blocked = o.hasLabel ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending ? "Payment is still pending." : null;
+    const blocked = o.hasLabel && !(st.boxN && st.shipmentId) ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending ? "Payment is still pending." : null;
     mount(area, h("div", { class: "card" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
         h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name, st.boxN ? h("span", { class: "badge plain", style: { marginLeft: "8px", fontSize: "13px" } }, `Box ${st.boxN} of ${st.boxes.length}`) : null), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`)),
@@ -295,8 +326,10 @@ export function renderScan(root, { openSlideout }) {
       h("div", { class: "row", style: { marginTop: "14px", justifyContent: "space-between" } },
         h("div", { class: "small muted" },
           o.plan.signature ? "Signature required" : ""),
-        blocked ? null : h("div", { class: "row" }, shipPart, (o.plan.weightKnown || (st.box && +st.box.weight > 0)) ? go : h("span", { class: "small muted" }, "Enter the weight to print")))));
-    if (!blocked) area.querySelector(".scan-items")?.after(boxRow());
+        blocked ? null : h("div", { class: "row" },
+          st.shipmentId ? null : shipPart,
+          printBox ?? ((o.plan.weightKnown || (st.box && +st.box.weight > 0)) ? go : h("span", { class: "small muted" }, "Enter the weight to print"))))));
+    if (!blocked && !st.shipmentId) area.querySelector(".scan-items")?.after(boxRow()); // boxes are fixed once the labels are bought
     drawQuote();
   }
 

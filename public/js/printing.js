@@ -217,8 +217,9 @@ function reprintChoice(title, lines, freshCount, what = "label") {
 }
 
 /** Prints labels by shipment ids or batch, to Zebra or the browser print dialog. */
-export async function printLabels({ ids, batch }, win = null) {
-  const q = batch ? `batch=${encodeURIComponent(batch)}` : `ids=${ids.join(",")}`;
+export async function printLabels({ ids, batch, box = null }, win = null) {
+  // box: just that box's label of a multi-box shipment (packing one box at a time)
+  const q = (batch ? `batch=${encodeURIComponent(batch)}` : `ids=${ids.join(",")}`) + (box ? `&box=${box}` : "");
   if (printSettings().labels === "zebra") {
     const res = await fetch(`/api/shipping/labels/print-data?${q}`, { credentials: "same-origin" });
     const st = await res.json().catch(() => ({}));
@@ -236,6 +237,7 @@ export async function printLabels({ ids, batch }, win = null) {
         : `${done.length} of ${labels.length} labels were already printed`, lines, freshCount);
       if (choice === "cancel") return;
       if (choice === "new") labels = labels.filter((l) => !l.printedAt);
+      if (!labels.length) return;
     }
     // ZPL labels go as they are; labels bought as images (UPS GIF / USPS PNG) are converted for the Zebra
     const dpi = Number(printSettings().zebraDpi) || 203;
@@ -254,7 +256,7 @@ export async function printLabels({ ids, batch }, win = null) {
       actionToast(`Zebra didn't take it: ${e.message}`, "Print with dialog instead", () => window.open(`/api/shipping/labels/print?ids=${labels.map((l) => l.id).join(",")}`, "_blank"), 20000);
       return;
     }
-    fetch("/api/shipping/labels/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: labels.map((l) => l.id) }) }).catch(() => {});
+    fetch("/api/shipping/labels/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: labels.map((l) => l.id), box }) }).catch(() => {});
     toast(`${labels.length === 1 ? "Label" : `${labels.length} labels`} sent to ${device.name || "Zebra printer"}`);
     return;
   }
