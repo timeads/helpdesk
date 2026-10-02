@@ -1119,7 +1119,6 @@ function buildLabelForm(root, o, presets, opts) {
   function showPurchased(r) {
     s.bought = true;
     if (page) page.buy = () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true));
-    const boxes = s.parcels.map(cleanParcel);
     const nextUp = (() => {
       const list = opts.list ?? [];
       const i = o ? list.findIndex((x) => x.id === o.id) : -1;
@@ -1138,7 +1137,7 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "row", style: { marginTop: "16px" } },
         nextUp ? h("button", { class: "btn primary", onclick: () => openOrderPage(queueApi?.find(nextUp.id) ?? nextUp, { list: opts.list }) }, "Next order", h("span", { style: { opacity: 0.75 } }, nextUp.name), icon("down")) : null,
         h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
-        split() && o ? h("button", { class: "btn", onclick: () => printBoxSlips(o, boxes, r.trackingNumbers) }, "Box contents slips") : null,
+        split() && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id]) }, "Packing slips (one per box)") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
         h("button", { class: "btn", onclick: () => closeOrderPage() }, "Done"))));
     buyEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1159,22 +1158,6 @@ const sameService = (chosen, service) => {
   const b = service.toLowerCase().replace(/^ups\s+/, "");
   return a.includes(b) || (b.includes("ground") && /ground|standard/.test(a)) || (b.includes("2nd day") && /2.?day|two.?day|express/.test(a)) || (b.includes("next day") && /next.?day|overnight/.test(a));
 };
-
-/** One 4×6 page per box: "Box 2 of 3", what's inside, its tracking number. */
-function printBoxSlips(o, boxes, tracking) {
-  const w = window.open("", "_blank");
-  if (!w) return toast("Allow pop-ups to print box slips", true);
-  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-  w.document.write(`<!doctype html><title>${esc(o.name)} boxes</title><style>
-@page { size: 4in 6in; margin: 0.25in; } body { font: 12pt/1.35 Arial, sans-serif; margin: 0; }
-.page { page-break-after: always; } h1 { font-size: 22pt; margin: 0 0 4pt; } h2 { font-size: 13pt; margin: 0 0 10pt; font-weight: normal; }
-li { margin: 3pt 0; } .tn { font-family: monospace; font-size: 11pt; margin-top: 10pt; }</style>
-${boxes.map((b, i) => `<div class="page"><h1>Box ${i + 1} of ${boxes.length}</h1><h2>${esc(o.name)} · ${esc(o.shippingAddress?.name ?? "")}</h2>
-<ul>${(b.contents ?? []).map((c) => `<li><b>${c.qty} ×</b> ${esc(c.title)}</li>`).join("") || "<li>(no items assigned)</li>"}</ul>
-${tracking[i] ? `<div class="tn">${/^1Z/i.test(tracking[i]) ? "UPS" : "USPS"} ${esc(tracking[i])}</div>` : ""}</div>`).join("")}
-<script>onload = () => print()</script>`);
-  w.document.close();
-}
 
 // ---------------------------------------------------------------- Batches
 

@@ -37,8 +37,8 @@ export const DEFAULT_SLIP: SlipLayout = {
   showReturnAddress: true,
   sections: SLIP_SECTIONS.map((id) => ({ id, on: true })),
   itemImages: false,
-  showSku: true,
-  showItemBarcode: true,
+  showSku: false,
+  showItemBarcode: false,
   showPrices: false,
   fontSize: "m",
   message: "Thanks for tufting with us!",
@@ -88,10 +88,19 @@ export type SlipOrder = Pick<ShopifyOrder, "name" | "createdAt" | "note" | "ship
   plan?: { preset?: unknown; boxes: { preset?: { name: string } | null }[] };
 };
 
+/** One box of a split order: its slip lists only what's packed in it. */
+export interface SlipBox {
+  n: number;
+  of: number;
+  name: string | null;
+  tracking: string | null;
+  qty: Record<string, number>; // line item id → quantity in this box
+}
+
 const esc = (s: unknown) => escapeHtml(String(s ?? ""));
 const br = (s: string) => esc(s).replace(/\n/g, "<br>");
 
-export function renderSlip(o: SlipOrder, size: "4x6" | "letter", from: Address | null, layout: SlipLayout): string {
+export function renderSlip(o: SlipOrder, size: "4x6" | "letter", from: Address | null, layout: SlipLayout, box?: SlipBox): string {
   const L = layout;
   const a = (o.shippingAddress ?? {}) as Record<string, string | null>;
   const code = o.name.replace(/^#/, "");
@@ -101,18 +110,23 @@ export function renderSlip(o: SlipOrder, size: "4x6" | "letter", from: Address |
     L.showStoreName && L.storeName ? `<div class="brand">${esc(L.storeName)}</div>` : "",
     L.showReturnAddress && from?.address1 ? `<div class="v">${esc([from.address1, `${from.city}, ${from.state} ${from.zip}`].join(" · "))}</div>` : "",
   ].join("");
-  const orderBox = `<div class="right"><div class="order">${esc(o.name)}</div><div class="v">${esc(date)}</div></div>`;
+  const orderBox = `<div class="right"><div class="order">${esc(o.name)}</div>${box ? `<div class="boxno">Box ${box.n} of ${box.of}</div>` : ""}<div class="v">${esc(date)}</div></div>`;
   const header = `<header class="${L.align}"><div class="brandbox">${brand}</div>${orderBox}</header>`;
 
   const boxes = o.plan?.boxes ?? [];
   const parts: Record<SlipSection, () => string> = {
     shipto: () => `<div class="sec"><div class="lbl">Ship to</div><div>${br([a.name, a.company, a.address1, a.address2, `${a.city ?? ""}, ${a.provinceCode ?? ""} ${a.zip ?? ""}`, a.countryCodeV2 && a.countryCodeV2 !== "US" ? a.country : ""].filter(Boolean).join("\n"))}</div></div>`,
-    shipping: () => `<div class="sec"><div class="lbl">Shipping</div><div>${esc(o.requestedService || "—")}</div>${o.plan?.preset && boxes.length ? `<div class="lbl" style="margin-top:4px">${boxes.length > 1 ? `Boxes (${boxes.length})` : "Box"}</div><div>${esc(boxes.map((b) => b.preset?.name ?? "Custom").join(" + "))}</div>` : ""}</div>`,
+    shipping: () => box
+      ? `<div class="sec"><div class="lbl">Shipping</div><div>${esc(o.requestedService || "—")}</div><div class="lbl" style="margin-top:4px">Box ${box.n} of ${box.of}</div><div>${esc(box.name ?? "Custom")}</div>${box.tracking ? `<div class="lbl" style="margin-top:4px">Tracking</div><div>${esc(box.tracking)}</div>` : ""}</div>`
+      : `<div class="sec"><div class="lbl">Shipping</div><div>${esc(o.requestedService || "—")}</div>${o.plan?.preset && boxes.length ? `<div class="lbl" style="margin-top:4px">${boxes.length > 1 ? `Boxes (${boxes.length})` : "Box"}</div><div>${esc(boxes.map((b) => b.preset?.name ?? "Custom").join(" + "))}</div>` : ""}</div>`,
     items: () => {
-      const rows = o.lineItems.nodes.map((l) => {
+      const lines = box
+        ? o.lineItems.nodes.filter((l) => (box.qty[l.id] ?? 0) > 0).map((l) => ({ ...l, quantity: box.qty[l.id] }))
+        : o.lineItems.nodes;
+      const rows = lines.map((l) => {
         const sub = [l.variantTitle ? esc(l.variantTitle) : "", L.showSku && l.sku ? `SKU ${esc(l.sku)}` : "", L.showItemBarcode && l.variant?.barcode ? `Barcode ${esc(l.variant.barcode)}` : ""].filter(Boolean).join(" · ");
         const price = l.discountedUnitPriceAfterAllDiscountsSet ? Number(l.discountedUnitPriceAfterAllDiscountsSet.shopMoney.amount) * l.quantity : null;
-        return `<tr><td class="q">${l.quantity}</td>${L.itemImages ? `<td class="img">${l.image?.url ? `<img src="${esc(l.image.url)}" alt="">` : ""}</td>` : ""}<td><b>${esc(l.title)}</b>${sub ? `<div class="v">${sub}</div>` : ""}</td>${L.showPrices ? `<td class="p">${price !== null ? `$${price.toFixed(2)}` : ""}</td>` : ""}</tr>`;
+        return `<tr><td class="q">${l.quantity}</td>${L.itemImages ? `<td class="img">${l.image?.url ? `<img src="${esc(l.image.url)}" alt="">` : ""}</td>` : ""}<td><b class="it">${esc(l.title)}</b>${sub ? `<div class="v">${sub}</div>` : ""}</td>${L.showPrices ? `<td class="p">${price !== null ? `$${price.toFixed(2)}` : ""}</td>` : ""}</tr>`;
       }).join("");
       return `<table><thead><tr><th class="q">Qty</th>${L.itemImages ? "<th></th>" : ""}<th>Item</th>${L.showPrices ? '<th class="p">Price</th>' : ""}</tr></thead><tbody>${rows}</tbody></table>`;
     },
@@ -154,6 +168,7 @@ header.center .logo { object-position: center; }
 .letter .logo.s { max-height: 0.5in; } .letter .logo.m { max-height: 0.8in; } .letter .logo.l { max-height: 1.2in; }
 .brand { font: 400 1.35em Georgia, serif; text-transform: uppercase; letter-spacing: .04em; }
 .order { font-size: 1.45em; font-weight: 800; text-align: right; white-space: nowrap; }
+.boxno { display: inline-block; margin: 2px 0; padding: 1px 8px; border: 2px solid #000; border-radius: 4px; font-weight: 800; font-size: 1.15em; white-space: nowrap; }
 .right { text-align: right; }
 .v { color: #333; font-size: .86em; }
 .lbl { font-size: .78em; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #333; }
@@ -162,7 +177,9 @@ table { width: 100%; border-collapse: collapse; }
 tr { break-inside: avoid; }
 th { text-align: left; font-size: .78em; text-transform: uppercase; letter-spacing: .08em; color: #333; border-bottom: 1px solid #000; padding: 3px 0; }
 td { border-bottom: 1px solid #bbb; padding: 4px 4px 4px 0; vertical-align: top; }
-td.q, th.q { width: 2.4em; } td.q { font-weight: 800; font-size: 1.1em; }
+td.q, th.q { width: 2.6em; } td.q { font-weight: 800; font-size: 1.5em; line-height: 1.15; }
+td .it { font-size: 1.3em; font-weight: 700; line-height: 1.25; display: block; } /* item names, easy to read while packing */
+td .it + .v { font-size: .95em; margin-top: 1px; }
 td.img { width: 0.5in; } td.img img { width: 0.45in; height: 0.45in; object-fit: cover; filter: grayscale(1) contrast(1.2); display: block; }
 td.p, th.p { text-align: right; white-space: nowrap; padding-right: 0; }
 .note { border: 1px dashed #000; padding: 5px; }

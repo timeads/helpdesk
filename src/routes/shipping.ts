@@ -19,7 +19,7 @@ import { demoOrders } from "../lib/demo";
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
-import { SLIP_CSS, cleanSlip, renderSlip, slipLayout } from "../lib/slip";
+import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
 
 const shipping = new Hono<AppEnv>();
 const demo = (env: Env) => !shopifyConfigured(env) && env.DEMO_DATA === "1";
@@ -656,6 +656,42 @@ shipping.get("/batches", async (c) => {
 });
 
 // ---- Packing slips (layout from Settings → Packing slip)
+
+/**
+ * The slips to print for each order: one per box when it ships in several. Once a label is bought
+ * the boxes (and their tracking numbers) come from that shipment; before that, from the boxes
+ * chosen on the order page or remembered for these items.
+ */
+async function slipsFor(env: Env, orders: Described[]): Promise<{ order: Described; box?: SlipBox }[]> {
+  const ids = orders.map((o) => o.id);
+  const bought = new Map<string, { packages: string; tracking_numbers: string }>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    if (!chunk.length) continue;
+    const { results } = await env.DB.prepare(
+      `SELECT order_id, packages, tracking_numbers FROM shipments WHERE status = 'purchased' AND order_id IN (${chunk.map(() => "?").join(",")}) ORDER BY id`,
+    ).bind(...chunk).all<{ order_id: string; packages: string; tracking_numbers: string }>();
+    for (const r of results) bought.set(r.order_id, r); // the latest shipment wins
+  }
+  const out: { order: Described; box?: SlipBox }[] = [];
+  for (const o of orders) {
+    const s = bought.get(o.id);
+    let boxes: { name: string | null; tracking: string | null; qty: Record<string, number> }[] = [];
+    if (s) {
+      const pk = JSON.parse(s.packages || "[]") as { box?: string; contents?: { id: string; qty: number }[] }[];
+      const tn = JSON.parse(s.tracking_numbers || "[]") as string[];
+      if (pk.length > 1 && pk.every((p) => p.contents)) {
+        boxes = pk.map((p, i) => ({ name: p.box ?? null, tracking: tn[i] ?? null, qty: Object.fromEntries(p.contents!.map((x) => [x.id, x.qty])) }));
+      }
+    } else if (o.plan.boxes.length > 1) {
+      boxes = o.plan.boxes.map((b) => ({ name: b.preset?.name ?? null, tracking: null, qty: b.items }));
+    }
+    const filled = boxes.filter((b) => Object.values(b.qty).some((q) => q > 0));
+    if (filled.length > 1) filled.forEach((b, i) => out.push({ order: o, box: { ...b, n: i + 1, of: filled.length } }));
+    else out.push({ order: o });
+  }
+  return out;
+}
 const slipPage = (body: string, count: number, size: "4x6" | "letter", autoPrint: boolean, guard?: ReturnType<typeof printGuard>) => `<!doctype html><html><head><meta charset="utf-8"><title>Packing slips</title><style>
 @page { size: ${size === "letter" ? "8.5in 11in" : "4in 6in"}; }
 ${SLIP_CSS}
@@ -733,7 +769,7 @@ shipping.get("/packing-slips/data", async (c) => {
   const prints = await idMap(c.env, "SELECT order_id, printed_at || '|' || print_count AS v FROM packing_slip_prints WHERE order_id IN (?)", described.map((o) => o.id));
   return c.json({
     css: SLIP_CSS,
-    slips: described.map((o) => ({ id: o.id, name: o.name, html: renderSlip(o, "4x6", from, layout) })),
+    slips: (await slipsFor(c.env, described)).map(({ order: o, box }) => ({ id: o.id, name: box ? `${o.name} (box ${box.n} of ${box.of})` : o.name, html: renderSlip(o, "4x6", from, layout, box) })),
     printed: described.filter((o) => prints.has(o.id)).map((o) => { const [at, n] = prints.get(o.id)!.split("|"); return { id: o.id, name: o.name, at, count: Number(n) || 1 }; }),
   });
 });
@@ -757,7 +793,8 @@ shipping.get("/packing-slips", async (c) => {
     total: described.length,
     newOnlyUrl: already.length && fresh.length ? `/api/shipping/packing-slips?size=${size}&ids=${fresh.map((o) => encodeURIComponent(o.id)).join(",")}` : null,
   });
-  return c.html(slipPage(described.map((o) => renderSlip(o, size, from, layout)).join(""), described.length, size, true, guard));
+  const slips = await slipsFor(c.env, described);
+  return c.html(slipPage(slips.map(({ order: o, box }) => renderSlip(o, size, from, layout, box)).join(""), slips.length, size, true, guard));
 });
 
 export default shipping;

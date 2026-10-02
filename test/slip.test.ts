@@ -46,3 +46,17 @@ describe("renderSlip", () => {
     expect(html).toContain("slip letter");
   });
 });
+
+describe("split orders", () => {
+  it("prints one slip per box with only that box's items", () => {
+    const o = order() as any;
+    const [a, b] = o.lineItems.nodes;
+    const layout = cleanSlip({ ...DEFAULT_SLIP });
+    const html = renderSlip(o, "4x6", null, layout, { n: 2, of: 2, name: "Kit Box 8\"", tracking: "1ZTRACK2", qty: { [b.id]: 1 } });
+    expect(html).toContain("Box 2 of 2");
+    expect(html).toContain("1ZTRACK2");
+    expect(html).toContain("Kit Box 8&quot;");
+    expect(html).toContain(b.title);
+    expect(html).not.toContain(`<b class="it">${a.title}</b>`);
+  });
+});

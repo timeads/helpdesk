@@ -143,10 +143,11 @@ export async function printSlipsToZebra(orderIds, { sample = false } = {}) {
     if (data.printed.length && !sample) {
       const when = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
       const lines = data.printed.slice(0, 8).map((p) => `${p.name} — printed ${when(p.at)}${p.count > 1 ? ` (${p.count} times)` : ""}`);
-      const freshCount = slips.length - data.printed.length;
-      const choice = await reprintChoice(data.printed.length === slips.length
-        ? (slips.length === 1 ? "This packing slip was already printed" : `All ${slips.length} packing slips were already printed`)
-        : `${data.printed.length} of ${slips.length} packing slips were already printed`, lines, freshCount, "packing slip");
+      const orders = new Set(slips.map((x) => x.id)).size; // a split order has one slip per box
+      const freshCount = orders - data.printed.length;
+      const choice = await reprintChoice(data.printed.length === orders
+        ? (orders === 1 ? `This order's packing slip${slips.length > 1 ? "s were" : " was"} already printed` : `All ${orders} orders' packing slips were already printed`)
+        : `${data.printed.length} of ${orders} orders' packing slips were already printed`, lines, freshCount, "packing slip");
       if (choice === "cancel") return;
       if (choice === "new") slips = slips.filter((s) => !data.printed.some((p) => p.id === s.id));
     }
