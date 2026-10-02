@@ -288,7 +288,7 @@ export async function findOrderByName(env: Env, raw: string) {
 export async function fulfillOrder(
   env: Env,
   orderId: string,
-  tracking: { number: string; url: string; company: string },
+  tracking: { numbers: string[]; urls: string[]; company: string },
   notifyCustomer: boolean,
 ) {
   const fo = await shopify<{ order: { fulfillmentOrders: { nodes: { id: string; status: string }[] } } }>(

@@ -347,7 +347,9 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
   let fulfillError: string | null = null;
   if (input.fulfill && o && result.trackingNumbers[0]) {
     try {
-      await fulfillOrder(env, o.id, { company: result.carrier, number: result.trackingNumbers[0], url: trackingUrlFor(result.carrier, result.trackingNumbers[0]) }, input.notifyCustomer);
+      // Every box's tracking number goes on the one fulfillment, so the customer's email lists them all
+      const numbers = result.trackingNumbers;
+      await fulfillOrder(env, o.id, { company: result.carrier, numbers, urls: numbers.map((n) => trackingUrlFor(result.carrier, n)) }, input.notifyCustomer);
       await env.DB.prepare("UPDATE shipments SET fulfilled = 1 WHERE id = ?").bind(row!.id).run();
     } catch (e) {
       fulfillError = (e as Error).message;

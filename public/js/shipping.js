@@ -710,12 +710,42 @@ function buildLabelForm(root, o, presets, opts) {
     }, delay);
   };
 
-  // ---- Packages (+ which items go in each box)
-  const parcelsEl = h("div", { class: "stack" });
-  const allocEl = h("div");
-  const drawParcels = () => {
-    mount(parcelsEl, s.parcels.map((p, i) => {
-      const presetSel = h("select", { class: "input" },
+  // ---- Items & boxes: the boxes across the top, every item below with which box it goes in
+  const boxesEl = h("div", { class: "pack-boxes" });
+  const itemsEl = h("div");
+  const packHeadEl = h("div", { class: "row", style: { gap: "8px" } });
+  const lineInfo = new Map((o?.lineItems.nodes ?? []).map((l) => [l.id, l]));
+  const inBox = (p) => lines.reduce((n, l) => n + (p.alloc[l.id] || 0), 0);
+  const left = (l) => l.qty - s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0);
+  const changed = () => { reweigh(); drawParcels(); quote(); };
+
+  /** Puts n of an item in box i and takes the difference out of the other boxes (or hands it back). */
+  const setQty = (l, i, n) => {
+    n = Math.max(0, Math.min(l.qty, Math.round(+n || 0)));
+    if (weightsKnown) for (const p of s.parcels) p.auto = true; // contents changed, so recompute each box's weight
+    const target = s.parcels[i];
+    let diff = n - (target.alloc[l.id] || 0);
+    target.alloc[l.id] = n;
+    const others = s.parcels.filter((_, j) => j !== i);
+    if (diff > 0) {
+      // take from whichever boxes hold the most of it
+      for (const p of [...others].sort((a, b) => (b.alloc[l.id] || 0) - (a.alloc[l.id] || 0))) {
+        const take = Math.min(diff, p.alloc[l.id] || 0);
+        p.alloc[l.id] = (p.alloc[l.id] || 0) - take;
+        diff -= take;
+        if (!diff) break;
+      }
+    } else if (diff < 0 && others.length) {
+      // units taken out go to the next box so nothing is left unpacked
+      const to = s.parcels[(i + 1) % s.parcels.length];
+      to.alloc[l.id] = (to.alloc[l.id] || 0) - diff;
+    }
+    changed();
+  };
+
+  const drawBoxes = () => {
+    mount(boxesEl, s.parcels.map((p, i) => {
+      const presetSel = h("select", { class: "input", "aria-label": `Box ${i + 1} size` },
         h("option", { value: "" }, "Custom size"),
         presets.map((b) => h("option", { value: b.id, selected: String(b.id) === String(p.preset) }, b.name + (b.is_default ? " (default)" : ""))));
       presetSel.onchange = () => {
@@ -735,28 +765,72 @@ function buildLabelForm(root, o, presets, opts) {
         inp.oninput = () => { p[key] = inp.value; if (key !== "weight") p.preset = ""; else p.auto = false; quote(); };
         return h("label", { class: "field" }, key === "weight" && p.auto ? h("span", { title: "Box + the items in it, from Shopify product weights" }, "Weight lb · auto") : label, inp);
       };
-      return h("div", { class: "parcel" },
-        h("label", { class: "field" }, split() ? `Box ${i + 1} of ${s.parcels.length}` : "Box", presetSel),
-        num("length", "L in"), num("width", "W in"), num("height", "H in"), num("weight", "Weight lb"),
-        split() ? h("button", { class: "btn ghost sm icon-only", "aria-label": `Remove box ${i + 1}`, onclick: () => removeBox(i) }, icon("x")) : h("span"));
-    }));
-    drawAlloc();
+      const n = inBox(p);
+      return h("div", { class: "pack-box" + (split() ? " multi" : "") },
+        h("div", { class: "pack-box-head" },
+          h("b", {}, split() ? `Box ${i + 1}` : "Box"),
+          lines.length && split() ? h("span", { class: "small muted" }, `${n} item${n === 1 ? "" : "s"}`) : null,
+          split() ? h("button", { class: "btn ghost sm icon-only", style: { marginLeft: "auto" }, "aria-label": `Remove box ${i + 1}`, title: "Remove this box (its items go to another box)", onclick: () => removeBox(i) }, icon("x")) : null),
+        presetSel,
+        h("div", { class: "pack-dims" }, num("length", "L in"), num("width", "W in"), num("height", "H in"), num("weight", "Weight lb")));
+    }),
+    h("button", { class: "pack-add", onclick: addBox, title: "Too much for one box? Each box gets its own label and tracking number." }, icon("plus"), h("span", {}, "Add another box")));
+  };
+
+  const drawItems = () => {
+    const anyLeft = lines.some((l) => left(l) !== 0);
+    mount(packHeadEl,
+      totalWeightEl,
+      split() && anyLeft ? h("span", { class: "badge warn" }, "Some items aren't in a box") : null,
+      split() && lines.length ? h("button", { class: "btn sm", title: "Spread the items so each box weighs about the same", onclick: () => { splitEvenly(); changed(); } }, "Split evenly") : null);
+    if (!lines.length) return mount(itemsEl);
+    const meta = (l) => {
+      const src = lineInfo.get(l.id);
+      const each = src ? (src.discountedUnitPriceAfterAllDiscountsSet ? Number(src.discountedUnitPriceAfterAllDiscountsSet.shopMoney.amount) : null) : null;
+      return { sub: [src?.variantTitle, src?.sku].filter(Boolean).join(" · "), price: each !== null ? money(each * l.qty, cur) : null, title: src?.title ?? l.title };
+    };
+    const head = (l) => {
+      const m = meta(l);
+      return [
+        l.image ? h("img", { src: l.image, alt: "" }) : h("div", { class: "ph" }),
+        h("div", { class: "pack-item-text" }, h("div", { class: "op-item-title" }, m.title), m.sub ? h("div", { class: "small muted" }, m.sub) : null),
+        h("div", { class: "qty" }, h("span", { class: l.qty > 1 ? "many" : null }, `× ${l.qty}`), m.price ? h("div", { class: "small" }, m.price) : null),
+      ];
+    };
+    if (!split()) {
+      return mount(itemsEl, h("div", { class: "op-items" }, lines.map((l) => h("div", { class: "line" }, head(l)))));
+    }
+    mount(itemsEl, h("div", { class: "pack-rows" }, lines.map((l) => {
+      const assign = l.qty === 1
+        ? h("div", { class: "seg", role: "radiogroup", "aria-label": `Box for ${l.title}` }, s.parcels.map((p, i) =>
+          h("button", { class: p.alloc[l.id] ? "on" : "", role: "radio", "aria-checked": !!p.alloc[l.id], onclick: () => setQty(l, i, 1) }, `Box ${i + 1}`)))
+        : h("div", { class: "pack-qtys" }, s.parcels.map((p, i) => {
+          const inp = h("input", { class: "input qty-in", type: "number", min: "0", max: String(l.qty), value: p.alloc[l.id] || 0, inputmode: "numeric", "aria-label": `${l.title} in box ${i + 1}` });
+          inp.onchange = () => setQty(l, i, inp.value);
+          return h("label", {}, h("span", { class: "small muted" }, `Box ${i + 1}`), inp);
+        }));
+      return h("div", { class: "pack-row" + (left(l) ? " short" : "") },
+        h("div", { class: "line" }, head(l)),
+        h("div", { class: "pack-assign" }, assign, left(l) ? h("span", { class: "small neg" }, `${left(l)} not in a box`) : null));
+    })));
+  };
+
+  const drawParcels = () => {
+    drawBoxes();
+    drawItems();
   };
   const addBox = () => {
     const last = s.parcels.at(-1) ?? {};
     s.parcels.push({ preset: last.preset ?? "", length: last.length, width: last.width, height: last.height, weight: "", alloc: Object.fromEntries(lines.map((l) => [l.id, 0])), auto: weightsKnown });
     if (s.parcels.length === 2 && weightsKnown) s.parcels[0].auto = true;
     if (lines.length) splitEvenly();
-    reweigh();
-    drawParcels();
-    quote();
+    changed();
   };
   const removeBox = (i) => {
     const [gone] = s.parcels.splice(i, 1);
-    for (const l of lines) s.parcels[0].alloc[l.id] = (s.parcels[0].alloc[l.id] || 0) + (gone.alloc[l.id] || 0); // items go back to box 1
-    reweigh();
-    drawParcels();
-    quote();
+    const to = s.parcels[Math.max(0, i - 1)];
+    for (const l of lines) to.alloc[l.id] = (to.alloc[l.id] || 0) + (gone.alloc[l.id] || 0); // its items go to the box before it
+    changed();
   };
   /** Deal units out so each box gets about the same weight (heaviest units first). */
   const splitEvenly = () => {
@@ -769,29 +843,6 @@ function buildLabelForm(root, o, presets, opts) {
       load[i] += u.lb ?? 1;
     }
   };
-  const drawAlloc = () => {
-    if (!split() || !lines.length) return mount(allocEl);
-    const left = (l) => l.qty - s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0);
-    const anyLeft = lines.some((l) => left(l) !== 0);
-    const evenBtn = h("button", { class: "btn sm", onclick: () => { splitEvenly(); reweigh(); drawParcels(); quote(); } }, "Split evenly");
-    mount(allocEl, h("div", { class: "alloc card" },
-      h("div", { class: "row", style: { justifyContent: "space-between", marginBottom: "8px" } },
-        h("b", {}, "What goes in each box"), h("div", { class: "row", style: { gap: "6px" } },
-          anyLeft ? h("span", { class: "badge warn" }, "Some items aren't in a box") : h("span", { class: "badge good" }, "Every item is packed"), evenBtn)),
-      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl alloc-tbl" },
-        h("thead", {}, h("tr", {}, h("th", {}, "Item"), s.parcels.map((_, i) => h("th", { class: "num" }, `Box ${i + 1}`)), h("th", { class: "num" }, "Left"))),
-        h("tbody", {}, lines.map((l) => h("tr", {},
-          h("td", {}, h("div", { class: "alloc-item" }, l.image ? h("img", { src: l.image, alt: "" }) : null, h("span", {}, l.title, h("span", { class: "muted" }, ` × ${l.qty}`)))),
-          s.parcels.map((p) => {
-            const inp = h("input", { class: "input qty-in", type: "number", min: "0", max: String(l.qty), value: p.alloc[l.id] || 0, inputmode: "numeric", "aria-label": `${l.title} in box` });
-            inp.onchange = () => { p.alloc[l.id] = Math.max(0, Math.min(l.qty, Math.round(+inp.value || 0))); reweigh(); drawParcels(); quote(); };
-            return h("td", { class: "num" }, inp);
-          }),
-          h("td", { class: "num " + (left(l) ? "neg" : "muted") }, left(l))))),
-        h("tfoot", {}, h("tr", {}, h("td", { class: "small muted" }, weightsKnown ? "Box weight (box + items)" : "Product weights missing in Shopify — enter box weights above"),
-          s.parcels.map((p) => h("td", { class: "num small" }, p.weight ? lbOz(+p.weight) : "—")), h("td")))))));
-  };
-  drawParcels();
 
   const sigSel = h("select", { class: "input" },
     [["", "No signature"], ["standard", "Signature required"], ["adult", "Adult signature required"]].map(([v, t]) => h("option", { value: v, selected: s.signature === v }, t)));
@@ -832,9 +883,8 @@ function buildLabelForm(root, o, presets, opts) {
     h("div", { class: "op-card-head" }, h("h3", {}, "Ship to"), o ? h("span", { class: "small muted" }, "Changes apply to this label only") : null),
     addrEl,
     h("div", { class: "stack" },
-      h("div", { class: "grid2" }, field("Name", "name"), field("Company", "company")),
-      field("Address", "address1"),
-      h("div", { class: "grid2" }, field("Apt / suite", "address2"), field("Phone", "phone")),
+      h("div", { class: "grid3" }, field("Name", "name"), field("Company", "company"), field("Phone", "phone", { type: "tel" })),
+      h("div", { class: "grid-street" }, field("Address", "address1"), field("Apt / suite", "address2")),
       h("div", { class: "grid-addr" }, field("City", "city"), field("State", "state", { maxlength: 2 }), field("ZIP", "zip"), field("Country", "country", { maxlength: 2 })),
       h("div", { class: "row", style: { justifyContent: "space-between" } },
         (() => {
@@ -846,12 +896,9 @@ function buildLabelForm(root, o, presets, opts) {
         h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel))));
 
   const packages = h("section", { class: "card op-card" },
-    h("div", { class: "op-card-head" }, h("h3", {}, "Packages"), totalWeightEl),
-    parcelsEl,
-    h("div", { class: "row", style: { marginTop: "10px", justifyContent: "space-between" } },
-      h("button", { class: "btn sm", onclick: addBox }, icon("plus"), "Add another box"),
-      h("span", { class: "small muted" }, "Each box gets its own label and tracking number.")),
-    allocEl);
+    h("div", { class: "op-card-head" }, h("h3", {}, o ? `Items & boxes · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}` : "Packages"), packHeadEl),
+    boxesEl,
+    itemsEl);
 
   const service = h("section", { class: "card op-card" }, ratesEl);
 
@@ -881,17 +928,6 @@ function buildLabelForm(root, o, presets, opts) {
       amount(o.totalTaxSet) !== null ? kv("Tax", money(amount(o.totalTaxSet), cur)) : null,
       h("div", { class: "kv total" }, h("span", {}, "Total"), h("b", {}, money(o.totalPriceSet.shopMoney.amount, cur))))) : null;
 
-  const itemsCard = o ? h("section", { class: "card op-card" },
-    h("div", { class: "op-card-head" }, h("h3", {}, `Order items · ${o.itemCount}`),
-      h("span", { class: "small muted" }, `${items.length} line${items.length === 1 ? "" : "s"}`)),
-    h("div", { class: "op-items" }, items.map((l) => {
-      const each = amount(l.discountedUnitPriceAfterAllDiscountsSet);
-      return h("div", { class: "line" },
-        l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
-        h("div", { style: { minWidth: 0 } }, h("div", { class: "op-item-title" }, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
-        h("div", { class: "qty" }, h("span", { class: l.quantity > 1 ? "many" : null }, `× ${l.quantity}`), each !== null ? h("div", { class: "small" }, money(each * l.quantity, cur)) : null));
-    }))) : null;
-
   mount(root,
     h("div", { class: "op-title" },
       h("div", { style: { minWidth: 0 } },
@@ -904,10 +940,10 @@ function buildLabelForm(root, o, presets, opts) {
       h("div", { class: "op-main" },
         buyEl,
         notices.length ? h("div", { class: "stack" }, notices) : null,
-        itemsCard,
-        h("div", { class: "op-cols" },
-          h("div", { class: "op-col" }, shipTo, noteCard),
-          h("div", { class: "op-col" }, packages, service)),
+        shipTo,
+        noteCard,
+        packages,
+        service,
         customsEl),
       aside));
 
@@ -1037,6 +1073,7 @@ function buildLabelForm(root, o, presets, opts) {
     buyEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  drawParcels();
   drawRates();
   quote(0);
   verifySoon(0);
