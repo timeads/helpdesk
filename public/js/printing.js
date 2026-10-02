@@ -1,6 +1,6 @@
 // Per-computer print settings + Zebra Browser Print (Zebra's free local print agent).
 // Each packing computer keeps its own choice in this browser, like Redo's "workstations".
-import { h, modal, toast } from "./ui.js";
+import { actionToast, h, modal, toast } from "./ui.js";
 
 const KEY = "helpdesk.printing";
 const DEFAULTS = { labels: "browser", slips: "4x6" }; // labels: "browser" | "zebra"; slips: "4x6" | "letter"
@@ -212,7 +212,13 @@ export async function printLabels({ ids, batch }, win = null) {
         for (const d of l.data) jobs.push(await imageToZpl(d, l.format, dpi));
       }
     }
-    const device = await sendZpl(jobs.join("\n"));
+    let device;
+    try {
+      device = await sendZpl(jobs.join("\n"));
+    } catch (e) {
+      actionToast(`Zebra didn't take it: ${e.message}`, "Print with dialog instead", () => window.open(`/api/shipping/labels/print?ids=${labels.map((l) => l.id).join(",")}`, "_blank"), 20000);
+      return;
+    }
     fetch("/api/shipping/labels/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: labels.map((l) => l.id) }) }).catch(() => {});
     toast(`${labels.length === 1 ? "Label" : `${labels.length} labels`} sent to ${device.name || "Zebra printer"}`);
     return;
@@ -262,7 +268,9 @@ export async function printSlipsToZebra(orderIds, { sample = false } = {}) {
     if (!sample) fetch("/api/shipping/packing-slips/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: slips.map((s) => s.id) }) }).catch(() => {});
     toast(`${slips.length} packing slip${slips.length === 1 ? "" : "s"} sent to ${device.name || "the Zebra"}`);
   } catch (e) {
-    toast(e.message, true);
+    // Never stuck at the packing station: offer the normal print dialog for the same slips
+    const url = `/api/shipping/packing-slips?size=4x6&ids=${orderIds.map(encodeURIComponent).join(",")}`;
+    actionToast(`Zebra didn't take it: ${e.message}`, "Print with dialog instead", () => window.open(url, "_blank"), 20000);
   }
 }
 

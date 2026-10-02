@@ -1220,3 +1220,4 @@ body.order-open { overflow: hidden; }
   .manual-case { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .manual-status { flex-wrap: wrap; }
 }
+.toast > span { max-width: 560px; }
