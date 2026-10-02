@@ -460,6 +460,8 @@ interface SendBody {
   include_attachments?: boolean;
   macro_ids?: number[];
   macro_actions?: MacroAction[];
+  tags?: string[]; // new emails: tags for the ticket (e.g. "Shipping" from the order page)
+  order_name?: string; // new emails sent from an order: noted on the ticket
 }
 
 const validEmails = (list: string[] | undefined) =>
@@ -613,7 +615,7 @@ tickets.post("/new", async (c) => {
   });
   const sent = await sendRaw(c.env, encodeRaw(mime), null);
   const now = nowIso();
-  const status = body.status === "closed" ? "closed" : "in_progress";
+  const status = body.status === "closed" ? "closed" : body.status === "open" ? "open" : "in_progress";
   const t = await c.env.DB.prepare(
     `INSERT INTO tickets (gmail_thread_id, subject, customer_email, customer_name, status, unread, snippet, created_at, last_message_at, assignee_id, first_response_at, closed_at)
      VALUES (?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?) RETURNING id`,
@@ -621,8 +623,13 @@ tickets.post("/new", async (c) => {
     .bind(sent.threadId, subject, to[0].toLowerCase(), status, text.slice(0, 200), now, now, me.id, now, status === "closed" ? now : null)
     .first<{ id: number }>();
   await c.env.DB.prepare("INSERT OR IGNORE INTO ticket_threads (thread_id, ticket_id, subject) VALUES (?, ?, ?)").bind(sent.threadId, t!.id, subject).run();
-  await logEvent(c.env, t!.id, "created", "New email", me.id);
+  await logEvent(c.env, t!.id, "created", body.order_name ? `New email about order ${String(body.order_name).slice(0, 40)} (from Shipping)` : "New email", me.id);
   await importMessage(c.env, sent.id, { agentId: me.id, force: true, skipRules: true });
+  const tags = (Array.isArray(body.tags) ? body.tags : []).map((x) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 10);
+  if (tags.length) {
+    const row = await getTicket(c.env, t!.id);
+    if (row) await setTags(c.env, row, tags, me.id);
+  }
   return c.json({ ok: true, ticketId: t!.id });
 });
 

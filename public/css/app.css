@@ -1232,3 +1232,6 @@ body.order-open { overflow: hidden; }
 .pickup-step.done { background: var(--mint-soft); color: var(--mint-ink); }
 .pickup-step.done .dot { background: var(--mint-ink); color: #fff; border-color: transparent; }
 .notice.good { background: var(--mint-soft); color: var(--mint-ink); }
+.email-addr { overflow-wrap: anywhere; }
+.op-aside .email-customer { width: 100%; justify-content: center; margin-top: 10px; }
+.new-email .starters { flex-wrap: wrap; }

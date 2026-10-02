@@ -478,6 +478,7 @@ async function openOrderPage(order, opts = {}) {
 
   const keys = (e) => {
     if (e.defaultPrevented) return;
+    if (document.querySelector(".modal, .pop")) return; // a dialog (e.g. Email customer) is open: its keys are its own
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
       e.preventDefault();
       page?.buy?.();
@@ -640,6 +641,33 @@ function orderLabelsCard(o, onChange) {
   load();
   el.reload = load;
   return el;
+}
+
+/** "Email customer" from the order page: a new email about this order that becomes a Shipping ticket. */
+async function emailCustomer(o) {
+  const { newEmail } = await import("./composer.js");
+  const a = o.shippingAddress || {};
+  const name = a.name || o.customer?.displayName || "";
+  const first = name.split(/\s+/)[0] || "there";
+  const hi = `Hi ${first},\n\n`;
+  const addr = [a.name, a.company, a.address1, a.address2, [a.city, a.provinceCode, a.zip].filter(Boolean).join(" "), a.countryCodeV2 && a.countryCodeV2 !== "US" ? a.country : ""].filter(Boolean).join("\n");
+  const items = o.lineItems.nodes;
+  const boxes = o.plan?.boxes?.length ?? 1;
+  const starters = [
+    { label: "Delay", text: `${hi}Thanks for your order ${o.name}! It's taking a little longer to ship than we'd like — we expect it to go out in the next few days, and you'll get tracking as soon as it does.\n\nThanks for your patience!` },
+    { label: "Check address", text: `${hi}Before we ship order ${o.name}, could you confirm your shipping address? We have:\n\n${addr}\n\nIf anything needs changing, just reply to this email.` },
+    { label: "Out of stock", text: `${hi}One of the items in order ${o.name}${items[0] ? ` (${items[0].title})` : ""} is out of stock right now. We can ship the rest now and send it when it's back, or hold the order so everything ships together — which would you prefer?` },
+    boxes > 1 ? { label: "Split shipment", text: `${hi}Your order ${o.name} is shipping in ${boxes} boxes, so you'll get a separate tracking number for each. They may arrive on different days.` } : null,
+    o.pickup ? { label: "Ready for pickup", text: `${hi}Your order ${o.name} is ready for pickup! Come by any time during our open hours and let us know your name or order number.` } : null,
+  ].filter(Boolean);
+  newEmail({
+    to: o.email || "",
+    subject: `Your Tuft the World order ${o.name}`,
+    body: hi,
+    order: { name: o.name, customer: name || o.email },
+    starters,
+    tags: ["Shipping"],
+  });
 }
 
 // ---- Holds: "until I release it" or until a day, when the order comes back to the queue by itself
@@ -1151,11 +1179,12 @@ function buildLabelForm(root, o, presets, opts) {
       kv("Order", o.name),
       kv("Placed", fullTime(o.createdAt)),
       kv("Customer", a.name || null),
-      kv("Email", o.email ? h("a", { href: `mailto:${o.email}` }, o.email) : null),
+      kv("Email", o.email ? h("span", { class: "email-kv" }, h("span", { class: "email-addr", title: o.email }, o.email)) : null),
       kv("Phone", o.phone || a.phone || null),
       kv("Payment", o.displayFinancialStatus ? o.displayFinancialStatus.replace(/_/g, " ").toLowerCase() : null),
       kv("Customer chose", o.requestedService || "—"),
       o.tags?.length ? h("div", { class: "op-tags" }, o.tags.map((t) => h("span", { class: "badge plain" }, t))) : null,
+      o.email ? h("button", { class: "btn sm email-customer", onclick: () => emailCustomer(o).catch((e) => toast(e.message, true)) }, icon("mail"), "Email customer") : null,
       h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
         h("button", { class: "btn sm", onclick: () => openPackingSlips([o.id]), title: o.slipPrintedAt ? `Printed ${fullTime(o.slipPrintedAt)}` : null },
           "Packing slip", o.slipPrintedAt ? h("span", { class: "badge plain", style: { marginLeft: "4px" } }, icon("check"), "printed") : null),

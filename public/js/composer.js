@@ -486,8 +486,13 @@ export function buildComposer(inbox, t, data) {
 
 // ---------------------------------------------------------------- New email (creates a ticket)
 
-export function newEmail({ to = "", subject = "" } = {}) {
+/**
+ * New email (becomes a ticket). From an order page: { order, body, starters, tags } prefill it,
+ * "Send & keep open" / "Send & close" replace the status picker, and you stay where you are.
+ */
+export function newEmail({ to = "", subject = "", body = "", order = null, starters = null, tags = null, onSent = null } = {}) {
   const { ed, toolbar } = richEditor("Write your email…");
+  if (body) ed.innerHTML = textToHtml(body);
   const toIn = h("input", { class: "input", value: to, placeholder: "customer@example.com", "aria-label": "To" });
   const ccIn = h("input", { class: "input", placeholder: "Optional", "aria-label": "Cc" });
   const bccIn = h("input", { class: "input", placeholder: "Optional", "aria-label": "Bcc" });
@@ -503,27 +508,49 @@ export function newEmail({ to = "", subject = "" } = {}) {
   const attachBtn = h("button", { class: "tb wide", type: "button", onclick: () => fileInput.click() }, icon("clip"), "Attach");
   const status = h("select", { class: "input", style: { width: "auto" }, "aria-label": "After sending" },
     h("option", { value: "in_progress" }, "Then mark in progress"), h("option", { value: "closed" }, "Then close"));
-  const create = h("button", { class: "btn primary" }, icon("send"), "Send & create ticket");
+  const create = h("button", { class: "btn primary" }, icon("send"), order ? "Send & keep open" : "Send & create ticket");
+  const createClose = order ? h("button", { class: "btn" }, icon("check"), "Send & close") : null;
+  // Quick starters for common shipment messages (they replace what's written)
+  const startersEl = starters?.length ? h("div", { class: "row starters", style: { gap: "6px" } }, h("span", { class: "small muted" }, "Start from:"),
+    starters.map((st) => h("button", { class: "view-chip", type: "button", onclick: () => {
+      const cur = editorText(ed).trim();
+      if (cur && cur !== body.trim() && !confirm("Replace what you've written with this starter?")) return;
+      ed.innerHTML = textToHtml(st.text);
+      if (st.subject) subj.value = st.subject;
+      ed.focus();
+    } }, st.label))) : null;
   const ccRow = h("div", { class: "grid2", hidden: true }, h("label", { class: "field" }, h("span", {}, "Cc"), ccIn), h("label", { class: "field" }, h("span", {}, "Bcc"), bccIn));
-  const dlg = modal("New email", h("div", { class: "stack new-email" },
+  const dlg = modal(order ? `Email ${order.customer || "the customer"} about ${order.name}` : "New email", h("div", { class: "stack new-email" },
     h("label", { class: "field" }, h("span", { class: "row", style: { justifyContent: "space-between" } }, "To", h("button", { class: "linkish", type: "button", onclick: () => (ccRow.hidden = !ccRow.hidden) }, "Cc / Bcc")), toIn),
     ccRow,
     h("label", { class: "field" }, h("span", {}, "Subject"), subj),
+    startersEl,
     h("div", { class: "composer-box" }, toolbar, ed, filesEl, h("div", { class: "composer-bar" }, macroBtn, attachBtn, fileInput)),
-    h("div", { class: "row", style: { justifyContent: "flex-end" } }, h("span", { class: "small muted", style: { marginRight: "auto" } }, `From ${settingsCache.integrations?.gmail?.email || "support@"}`), status, create)), { width: 720 });
-  create.onclick = busy(create, async () => {
+    h("div", { class: "row", style: { justifyContent: "flex-end" } },
+      h("span", { class: "small muted", style: { marginRight: "auto" } }, `From ${settingsCache.integrations?.gmail?.email || "support@"}${order ? " · creates a ticket tagged Shipping" : ""}`),
+      order ? null : status, createClose, create)), { width: 720 });
+  const send = async (statusValue) => {
     const text = editorText(ed);
     if (!parseList(toIn.value).length) { toIn.focus(); throw new Error("Add who to send to"); }
     if (!subj.value.trim()) { subj.focus(); throw new Error("Add a subject"); }
     if (!text) { ed.focus(); throw new Error("Write the email first"); }
     const r = await api("/tickets/new", { method: "POST", body: {
       to: parseList(toIn.value), cc: parseList(ccIn.value), bcc: parseList(bccIn.value), subject: subj.value.trim(),
-      html: cleanHtml(ed.innerHTML), text, status: status.value, attachments: files.map(({ size, ...f }) => f),
+      html: cleanHtml(ed.innerHTML), text, status: statusValue, attachments: files.map(({ size, ...f }) => f),
+      tags: tags ?? undefined, order_name: order?.name,
     } });
     dlg.close();
-    toast("Sent — ticket created");
     refreshCounts();
+    if (order) {
+      actionToast(statusValue === "closed" ? "Sent — ticket created and closed" : "Sent — ticket created (waiting on the customer)", "Open ticket", () => navigate(`/tickets/${r.ticketId}?view=all`), 8000);
+      onSent?.(r.ticketId);
+      return;
+    }
+    toast("Sent — ticket created");
     navigate(`/tickets/${r.ticketId}?view=all`);
-  });
-  if (to) setTimeout(() => subj.focus(), 0);
+  };
+  create.onclick = busy(create, () => send(order ? "in_progress" : status.value));
+  if (createClose) createClose.onclick = busy(createClose, () => send("closed"));
+  if (order) setTimeout(() => { ed.focus(); const r = document.createRange(); r.selectNodeContents(ed); r.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(r); }, 0);
+  else if (to) setTimeout(() => subj.focus(), 0);
 }
