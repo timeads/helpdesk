@@ -11,6 +11,7 @@ import shippingRoutes from "./routes/shipping";
 import adminRoutes from "./routes/admin";
 import analyticsRoutes from "./routes/analytics";
 import manualRoutes from "./routes/manual";
+import rateCheckRoutes from "./routes/ratecheck";
 
 const app = new Hono<AppEnv>();
 
@@ -28,6 +29,7 @@ api.route("/tickets", ticketRoutes);
 api.route("/shipping", shippingRoutes);
 api.route("/analytics", analyticsRoutes);
 api.route("/manual", manualRoutes);
+api.route("/rate-check", rateCheckRoutes);
 api.route("/", adminRoutes);
 app.route("/api", api);
 

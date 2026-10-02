@@ -1,6 +1,7 @@
 // Dashboard: shipping & support analytics. Chart palette validated with the dataviz checks (light + dark, CVD-safe).
 import { api } from "./api.js";
 import { h, mount, money, toast, skeletonRows } from "./ui.js";
+import { rateCheckCard } from "./ratecheck.js";
 
 const PERIODS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], ["ytd", "Year to date"], [365, "12 months"]];
 const SVG = "http://www.w3.org/2000/svg";
@@ -137,6 +138,7 @@ export function renderAnalytics(main) {
   let days = params.get("days") === "ytd" ? "ytd" : Number(params.get("days")) || 30;
   const body = h("div", { class: "stack", style: { gap: "16px" } }, h("div", { class: "card" }, skeletonRows(4)));
   const chips = h("div", { class: "view-chips" });
+  let checkCard = null; // kept across period changes (it has its own period)
   mount(main, h("div", { class: "page" },
     h("header", { class: "page-head" }, h("div", { class: "inner" },
       h("div", { class: "row", style: { justifyContent: "space-between", paddingBottom: "16px" } },
@@ -181,6 +183,7 @@ export function renderAnalytics(main) {
               h("td", { class: "num" }, r.shipping_paid == null ? "—" : usd(r.shipping_paid)), h("td", { class: "num" }, usd(r.cost)),
               h("td", { class: "num margin " + (m === null ? "" : m >= 0 ? "pos" : "neg") }, m === null ? "—" : `${m >= 0 ? "+" : "−"}${usd(Math.abs(m))}`));
           })))) : h("p", { class: "muted" }, "No labels in this period.")),
+      checkCard ??= rateCheckCard(),
       h("h2", { class: "analytics-h" }, "Support"),
       h("div", { class: "kpis" },
         tile("New tickets", String(sp.created), a.ytd ? "this year" : `in the last ${days} days`),
