@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { state } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
-import { printSettings, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
+import { printSettings, resetZebra, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
 import { slipCard } from "./settings-slip.js";
 import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
@@ -247,6 +247,17 @@ function printing() {
           const steps = await zebraDiagnostics();
           status.replaceChildren(h("div", { class: "stack", style: { gap: "4px" } }, steps.map((x) =>
             h("div", { class: "small", style: { color: x.ok ? "var(--mint-ink)" : "var(--brick)" } }, x.ok ? "✓ " : "✗ ", x.text))));
+        });
+        return b;
+      })(), (() => {
+        const b = h("button", { class: "btn", title: "Clears stuck or half-sent jobs and un-pauses the printer" }, "Reset printer");
+        b.onclick = busy(b, async () => {
+          try {
+            const d = await resetZebra();
+            status.replaceChildren(h("span", { class: "badge good" }, `Cleared ${d.name || "the printer"}'s queue and resumed it — try again`));
+          } catch (e) {
+            status.replaceChildren(h("span", { class: "badge bad", style: { height: "auto", whiteSpace: "normal", padding: "3px 9px" } }, e.message));
+          }
         });
         return b;
       })()),

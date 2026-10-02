@@ -61,30 +61,52 @@ export async function zebraPrinter() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+let chunkSize = 4000; // shrinks for this session if Browser Print rejects pieces
+// text/plain keeps this a "simple" request (no CORS preflight), as Zebra's own library does
+const write = (device, data) => agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device, data }) });
+const read = async (device) => (await agentFetch("/read", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device }) })).text();
+
+/** Asks the Zebra how it is (~HQES): paused, head open, out of labels, errors. */
+export async function zebraStatus(device) {
+  await read(device).catch(() => ""); // drop anything old waiting to be read
+  await write(device, "~HQES");
+  let text = "";
+  for (let i = 0; i < 6 && !/WARNINGS/.test(text); i++) { await sleep(250); text += await read(device).catch(() => ""); }
+  const m = /ERRORS:\s+(\d)\s+(\w+)\s+(\w+)[\s\S]*?WARNINGS:\s+(\d)\s+(\w+)\s+(\w+)/.exec(text);
+  if (!m) return { known: false, text: text.trim() || "no answer" };
+  const err = parseInt(m[3], 16);
+  const ERR = [[0x1, "out of labels (media out)"], [0x2, "out of ribbon"], [0x4, "print head open"], [0x8, "cutter jam"], [0x10, "print head too hot"], [0x20, "motor too hot"], [0x40, "bad print head element"], [0x80, "print head detected"], [0x100, "paused"]];
+  const problems = m[1] === "1" ? ERR.filter(([bit]) => err & bit).map(([, t]) => t) : [];
+  return { known: true, ok: !problems.length, problems, text: text.trim() };
+}
+
+/** Clears stuck or half-sent jobs and takes the printer out of pause. */
+export async function resetZebra() {
+  const device = await zebraPrinter();
+  await write(device, "~JA"); // cancel everything waiting in the printer
+  await sleep(300);
+  await write(device, "^XA^XZ~PS"); // close any open format and resume
+  return device;
+}
+
 /** Sends ZPL to the default Zebra one label at a time (big jobs in one request can fail), retrying a label once. */
 export async function sendZpl(zpl) {
   const device = await zebraPrinter();
   const jobs = zpl.match(/\^XA[\s\S]*?\^XZ/g) ?? [zpl];
   for (const [i, job] of jobs.entries()) {
-    // Browser Print rejects large requests (500), so each label goes in small pieces; the printer joins them
-    const pieces = job.match(/[\s\S]{1,6000}/g);
-    for (const [k, piece] of pieces.entries()) {
-      const body = JSON.stringify({ device, data: piece });
-      let sent = false;
-      let last;
-      for (let attempt = 0; attempt < 2 && !sent; attempt++) {
-        try {
-          // text/plain keeps this a "simple" request (no CORS preflight), as Zebra's own library does
-          await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body });
-          sent = true;
-        } catch (e) {
-          last = e;
-          await sleep(800);
-        }
-      }
-      if (!sent) {
-        if (k > 0) await agentFetch("/write", { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ device, data: "^XZ" }) }).catch(() => {}); // close the half-sent label
-        throw new Error(`Found ${device.name || "the Zebra"} but couldn't send ${jobs.length > 1 ? `label ${i + 1} of ${jobs.length}` : "the label"} (${Math.round(job.length / 1024)} KB, part ${k + 1} of ${pieces.length})${i ? ` — the first ${i} printed` : ""}. Details: ${last?.message}`);
+    // Browser Print can reject large requests (500), so each label goes in pieces the printer joins;
+    // a rejected piece is retried in smaller pieces (down to 512 bytes) before giving up
+    let size = chunkSize;
+    for (let pos = 0; pos < job.length;) {
+      const piece = job.slice(pos, pos + size);
+      try {
+        await write(device, piece);
+        pos += piece.length;
+      } catch (e) {
+        if (size > 512) { size = Math.max(512, Math.floor(size / 4)); chunkSize = size; await sleep(300); continue; }
+        try { await write(device, piece); pos += piece.length; continue; } catch { /* give up below */ }
+        if (pos > 0) await write(device, "^XZ").catch(() => {}); // close the half-sent label
+        throw new Error(`Found ${device.name || "the Zebra"} but couldn't send ${jobs.length > 1 ? `label ${i + 1} of ${jobs.length}` : "the label"} (${Math.round(job.length / 1024)} KB, stopped at ${Math.round(pos / 1024)} KB)${i ? ` — the first ${i} printed` : ""}. Details: ${e.message}. Try Settings → Printing & slips → Reset printer.`);
       }
     }
     if (jobs.length > 1) await sleep(150); // let the printer take each one
@@ -111,14 +133,21 @@ export async function zebraDiagnostics() {
     out.push({ ok: false, text: e.message });
     return out;
   }
-  // a packing-slip-sized job sent the way slips are (in pieces): a comment that prints nothing
   try {
-    const job = `^XA^FX${"connection test ".repeat(2000)}^FS^XZ`;
-    await sendZpl(job);
-    out.push({ ok: true, text: `Sent a ${Math.round(job.length / 1024)} KB test job in pieces (a blank label may feed)` });
+    const st = await zebraStatus(device);
+    out.push(st.known ? { ok: st.ok, text: st.ok ? "Printer status: ready" : `Printer status: ${st.problems.join(", ")}` } : { ok: true, text: `Printer status: couldn't read (${st.text.slice(0, 60)})` });
   } catch (e) {
-    out.push({ ok: false, text: `Sending a packing-slip-sized job failed: ${e.message}` });
+    out.push({ ok: false, text: `Printer status: couldn't ask (${e.message})` });
   }
+  // how big a single request Browser Print takes (comments only: nothing prints)
+  const sizes = [100, 1000, 4000, 16000];
+  const passed = [];
+  for (const n of sizes) {
+    const job = `^XA^FX${"x".repeat(Math.max(0, n - 12))}^FS^XZ`;
+    try { await write(device, job); passed.push(n); } catch (e) { out.push({ ok: false, text: `A ${n >= 1000 ? `${n / 1000} KB` : `${n} byte`} request was refused (${e.message})` }); break; }
+  }
+  if (passed.length === sizes.length) out.push({ ok: true, text: "Requests up to 16 KB go through" });
+  else if (passed.length) out.push({ ok: true, text: `Requests up to ${passed.at(-1) >= 1000 ? `${passed.at(-1) / 1000} KB` : `${passed.at(-1)} bytes`} go through — slips will be sent in pieces that size` }), (chunkSize = Math.max(512, passed.at(-1) - 200));
   return out;
 }
 
