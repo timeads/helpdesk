@@ -1,5 +1,5 @@
 // Pure helpers for reading Gmail API message payloads and building outgoing MIME.
-import { base64UrlDecode, base64UrlEncode } from "./util";
+import { base64UrlDecode, base64UrlEncode, parseAddress } from "./util";
 
 export interface GmailPart {
   partId?: string;
@@ -201,3 +201,27 @@ export function buildMime(msg: OutgoingMessage, boundarySeed = crypto.randomUUID
 export function encodeRaw(mime: string): string {
   return base64UrlEncode(mime);
 }
+
+/**
+ * Website contact forms (Shopify's own, and most form apps) email the store from a no-reply or
+ * the store's own address, with the customer only in Reply-To or in the body ("Email: …").
+ * Returns the real customer when the message looks like one of those, else null.
+ */
+export function contactFormSender(
+  headers: Record<string, string>,
+  text: string,
+  supportEmail: string,
+): { email: string; name: string; message: string | null } | null {
+  const from = parseAddress(headers["from"] ?? "");
+  const relay = from.email === supportEmail.toLowerCase() || /(^|[.@])shopify(email)?\.com$|mailer@|no-?reply|forms?@|notifications?@/.test(from.email);
+  const field = (label: string) => text.match(new RegExp(`^\\s*${label}:[ \\t]*(.+)$`, "im"))?.[1].trim() ?? "";
+  const message = text.match(/^\s*(?:Body|Message|Comment):[ \t]*\n?([\s\S]+)$/im)?.[1].trim() || null;
+  const looksLikeForm = /contact form|new customer message/i.test(`${headers["subject"] ?? ""}\n${text.slice(0, 300)}`);
+  if (!relay && !looksLikeForm) return null;
+  const reply = parseAddress(headers["reply-to"] ?? "");
+  const bodyEmail = field("E-?mail").toLowerCase().match(/[^\s<>"]+@[^\s<>"]+\.[a-z]{2,}/)?.[0] ?? "";
+  const email = reply.email && reply.email !== from.email && reply.email !== supportEmail.toLowerCase() ? reply.email : bodyEmail;
+  if (!email || email === supportEmail.toLowerCase()) return null;
+  return { email, name: field("Name") || (reply.email === email ? reply.name ?? "" : ""), message };
+}
+

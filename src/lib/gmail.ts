@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { refreshAccessToken } from "./google";
-import { extractContent, headerMap, isAutomated, type GmailPart } from "./mime";
+import { contactFormSender, extractContent, headerMap, isAutomated, type GmailPart } from "./mime";
 import { HttpError, cachedToken, decrypt, getSetting, nowIso, parseAddress, setSetting, splitAddressList } from "./util";
 import { assign, logEvent, pickAssignee, runRules, setStatus, supportSettings, type TicketRow } from "./support";
 import { renderMacro } from "./macros";
@@ -127,6 +127,13 @@ async function skip(env: Env, id: string, reason: string): Promise<null> {
   return null;
 }
 
+/** Shopify titles every form email "New customer message on <date>"; use the message instead. */
+function formSubject(subject: string | undefined, form: { message: string | null } | null) {
+  if (!form || (subject && !/^new customer message|contact form/i.test(subject))) return subject;
+  const first = form.message?.split("\n").find((l) => l.trim())?.trim() ?? "";
+  return first ? `Contact form: ${first.length > 70 ? first.slice(0, 67) + "…" : first}` : subject;
+}
+
 async function storeMessage(env: Env, msg: GmailMessage, opts: ImportOpts): Promise<{ ticketId: number; created: boolean } | null> {
   const labels = msg.labelIds ?? [];
   if (labels.includes("DRAFT") || labels.includes("SPAM") || labels.includes("TRASH")) return opts.historical ? null : skip(env, msg.id, "draft/spam/trash");
@@ -134,8 +141,11 @@ async function storeMessage(env: Env, msg: GmailMessage, opts: ImportOpts): Prom
   const h = headerMap(msg.payload);
   const box = await getMailbox(env);
   const supportEmail = (box?.email ?? env.SUPPORT_EMAIL).toLowerCase();
-  const from = parseAddress(h["from"] ?? "");
-  const outbound = from.email === supportEmail || labels.includes("SENT");
+  const { text, html, attachments } = extractContent(msg.payload);
+  // A website contact form: the customer is in Reply-To / the body, not From
+  const viaForm = labels.includes("SENT") ? null : contactFormSender(h, text, supportEmail);
+  const from = viaForm ? { email: viaForm.email, name: viaForm.name } : parseAddress(h["from"] ?? "");
+  const outbound = !viaForm && (from.email === supportEmail || labels.includes("SENT"));
   const rules = { ...DEFAULT_RULES, ...(await getSetting<Partial<MailRules>>(env, "mail_rules", {})) };
   const support = await supportSettings(env);
 
@@ -145,11 +155,10 @@ async function storeMessage(env: Env, msg: GmailMessage, opts: ImportOpts): Prom
     // Only inbound customer mail in the inbox starts a ticket
     if (outbound || (!opts.force && !opts.historical && !labels.includes("INBOX"))) return opts.historical ? null : skip(env, msg.id, outbound ? "sent by us" : "not in inbox");
     if (!opts.force && blocked(rules, from.email)) return opts.historical ? null : skip(env, msg.id, "blocked sender");
-    if (!opts.force && rules.skipAutomated && isAutomated(h)) return opts.historical ? null : skip(env, msg.id, "newsletter / automated");
+    if (!opts.force && !viaForm && rules.skipAutomated && isAutomated(h)) return opts.historical ? null : skip(env, msg.id, "newsletter / automated");
   }
 
   const sentAt = new Date(Number(msg.internalDate)).toISOString();
-  const { text, html, attachments } = extractContent(msg.payload);
   const snippet = (msg.snippet ?? text.slice(0, 200)).replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
   let created = false;
   let mergedIntoExisting = false;
@@ -180,7 +189,7 @@ async function storeMessage(env: Env, msg: GmailMessage, opts: ImportOpts): Prom
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(gmail_thread_id) DO UPDATE SET gmail_thread_id = excluded.gmail_thread_id RETURNING *`,
     )
-      .bind(msg.threadId, h["subject"] || "(no subject)", from.email, from.name, archived ? "closed" : "open", archived ? 0 : 1, snippet, sentAt, sentAt, sentAt)
+      .bind(msg.threadId, formSubject(h["subject"], viaForm) || "(no subject)", from.email, from.name, archived ? "closed" : "open", archived ? 0 : 1, snippet, sentAt, sentAt, sentAt)
       .first<TicketRow>();
     ticket = row!;
     await env.DB.prepare("INSERT OR IGNORE INTO ticket_threads (thread_id, ticket_id, subject) VALUES (?, ?, ?)").bind(msg.threadId, ticket.id, h["subject"] ?? null).run();
