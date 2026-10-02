@@ -1250,3 +1250,12 @@ body.order-open { overflow: hidden; }
 .scan-item .count-btn { background: none; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 2px 6px; color: inherit; cursor: pointer; }
 .scan-item .count-btn:not(:disabled):hover { border-color: var(--border-strong); background: var(--surface); }
 .scan-item .count-btn:disabled { cursor: default; }
+/* Scan & pack: readable from arm's length — the variant picks the right item off the shelf */
+.scan-item { padding: 12px 14px; }
+.scan-item img, .scan-item .ph { width: 56px; height: 56px; }
+.scan-item-text { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.scan-title { font: 700 17px/1.25 var(--ui); }
+.scan-variant { display: inline-block; justify-self: start; font: 800 21px/1.2 var(--ui); color: var(--text); background: var(--ochre-soft); border: 1.5px solid var(--ochre); border-radius: 8px; padding: 2px 10px; }
+.scan-item.done .scan-variant { background: rgba(255,255,255,.55); border-color: #2c7a43; }
+.scan-item .count { font-size: 22px; }
+@media (max-width: 760px) { .scan-variant { font-size: 18px; } .scan-title { font-size: 15.5px; } }

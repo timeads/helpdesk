@@ -279,7 +279,11 @@ export function renderScan(root, { openSlideout }) {
         return h("div", { class: "scan-item" + (done ? " done" : "") },
           h("span", { class: "tick" }, done ? icon("check") : null),
           l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
-          h("div", { style: { minWidth: 0, flex: 1 } }, h("b", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku && `SKU ${l.sku}`, l.variant?.barcode && `Barcode ${l.variant.barcode}`].filter(Boolean).join(" · "))),
+          // The variant (length, colour, size) decides which item to grab, so it's the biggest thing on the line
+          h("div", { class: "scan-item-text" },
+            h("div", { class: "scan-title" }, l.title),
+            l.variantTitle && l.variantTitle !== "Default Title" ? h("div", { class: "scan-variant" }, l.variantTitle) : null,
+            h("div", { class: "small muted" }, [l.sku && `SKU ${l.sku}`, l.variant?.barcode && `Barcode ${l.variant.barcode}`].filter(Boolean).join(" · "))),
           h("button", { class: "count count-btn", title: done ? null : `Mark all ${target(l)} packed`, disabled: done, onclick: () => {
             st.counts.set(l.id, target(l));
             st.manual = true;
