@@ -132,7 +132,11 @@ export function renderSlip(o: SlipOrder, size: "4x6" | "letter", from: Address |
     },
     note: () => (o.note ? `<div class="note"><b>Note:</b> ${esc(o.note)}</div>` : ""),
     message: () => (L.message.trim() ? `<div class="msg">${br(L.message.trim())}</div>` : ""),
-    barcode: () => `<div class="code">${code128Svg(code, { height: 48, module: 2 })}<div class="v">${esc(code)}</div></div>`,
+    // A box's slip scans as that box (e.g. 1042/B2): the packing station then lists just its items
+    barcode: () => {
+      const scan = box ? `${code}/B${box.n}` : code;
+      return `<div class="code">${code128Svg(scan, { height: 48, module: 2 })}<div class="v">${esc(code)}${box ? ` · Box ${box.n} of ${box.of}` : ""}</div></div>`;
+    },
   };
   const on = L.sections.filter((s) => s.on).map((s) => s.id);
   // Ship to + Shipping side by side when they're next to each other

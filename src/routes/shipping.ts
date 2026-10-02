@@ -213,13 +213,21 @@ shipping.delete("/drafts/:id", async (c) => {
 
 /** Scan station: look up an order by the code on its packing slip ("68762-TG", "#68762-TG", "68762"). */
 shipping.get("/scan/:code", async (c) => {
-  const code = decodeURIComponent(c.req.param("code")).trim();
+  const raw = decodeURIComponent(c.req.param("code")).trim();
+  // A box's packing slip: "1042/B2" (some scanners turn "/" into "-" or "?", so be forgiving)
+  const boxMatch = /^(.*?)[\/?\-\s]B(\d{1,2})$/i.exec(raw);
+  const code = boxMatch ? boxMatch[1] : raw;
   let order: ShopifyOrder | undefined;
   if (demo(c.env)) order = demoOrders().find((o) => o.name.replace("#", "").toLowerCase() === code.replace("#", "").toLowerCase());
   else order = await findOrderByName(c.env, code);
   if (!order) throw new HttpError(404, `No order ${code}`);
   const [d] = await describe(c.env, [order]);
-  return c.json({ order: d });
+  // Every box of the order (from the bought shipment, else the planned boxes), so each slip can be packed on its own
+  const slips = await slipsFor(c.env, [d]);
+  const boxes = slips.filter((x) => x.box).map((x) => ({ n: x.box!.n, of: x.box!.of, name: x.box!.name, tracking: x.box!.tracking, qty: x.box!.qty }));
+  const n = boxMatch ? Number(boxMatch[2]) : null;
+  if (n && boxes.length && !boxes.some((b) => b.n === n)) throw new HttpError(404, `${d.name} doesn't have a box ${n} any more — its boxes changed. Reprint its packing slips.`);
+  return c.json({ order: d, boxes, box: n && boxes.length ? n : null });
 });
 
 // ---- Holds

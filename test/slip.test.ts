@@ -58,5 +58,7 @@ describe("split orders", () => {
     expect(html).toContain("Kit Box 8&quot;");
     expect(html).toContain(b.title);
     expect(html).not.toContain(`<b class="it">${a.title}</b>`);
+    // The box's own barcode (scans as "<order>/B2") is labelled under it
+    expect(html).toMatch(/class="v">\d+ · Box 2 of 2</);
   });
 });

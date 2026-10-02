@@ -33,7 +33,14 @@ const toAddress = (o) => {
 let presetsCache = null;
 
 export function renderScan(root, { openSlideout }) {
-  const st = { order: null, counts: new Map(), box: null, quote: null, qseq: 0 };
+  // boxes/boxN: a split order's boxes and the one whose slip was scanned; byBox keeps each box's counts and packed: which boxes are done
+  const st = { order: null, counts: new Map(), box: null, quote: null, qseq: 0, boxes: [], boxN: null, byBox: new Map(), packed: new Set() };
+  const curBox = () => st.boxes.find((b) => b.n === st.boxN) ?? null;
+  /** How many of this item belong in what's being packed (this box, or the whole order). */
+  const target = (l) => (curBox() ? curBox().qty[l.id] ?? 0 : l.quantity);
+  const shown = () => st.order.lineItems.nodes.filter((l) => target(l) > 0);
+  /** Scanned so far across every box (for shipping part of the order). */
+  const scannedTotal = (l) => (st.boxes.length ? [...st.byBox.values()].reduce((n, m) => n + (m.get(l.id) ?? 0), 0) : st.counts.get(l.id) ?? 0);
   const input = h("input", { class: "input scan-input", placeholder: "Scan a packing slip, or type an order number", autocomplete: "off", spellcheck: false, "aria-label": "Scan" });
   const area = h("div");
   mount(root, h("div", { class: "scan-layout" },
@@ -49,9 +56,16 @@ export function renderScan(root, { openSlideout }) {
   async function loadOrder(code) {
     mount(area, h("div", { class: "card loading" }, spinner()));
     try {
-      const { order } = await api(`/shipping/scan/${encodeURIComponent(code)}`);
+      const { order, boxes, box } = await api(`/shipping/scan/${encodeURIComponent(code)}`);
+      const same = st.order?.id === order.id;
       st.order = order;
-      st.counts = new Map(order.lineItems.nodes.map((l) => [l.id, 0]));
+      st.boxes = boxes ?? [];
+      if (!same) { st.byBox = new Map(); st.packed = new Set(); }
+      // A split order scanned by its order number (an older slip) packs as a whole; a box's slip packs that box
+      st.boxN = st.boxes.length && box ? box : null;
+      const key = st.boxN ?? 0;
+      if (!st.byBox.has(key)) st.byBox.set(key, new Map(order.lineItems.nodes.map((l) => [l.id, 0])));
+      st.counts = st.byBox.get(key);
       presetsCache ??= (await api("/shipping/presets").catch(() => ({ presets: [] }))).presets;
       // The box this order is planned to go in (single-box orders can be changed right here)
       const b = order.plan.boxes?.length === 1 ? order.plan.boxes[0] : null;
@@ -69,26 +83,30 @@ export function renderScan(root, { openSlideout }) {
 
   function scanItem(code) {
     const c = norm(code);
-    const line = st.order.lineItems.nodes.find((l) => (norm(l.sku) === c || norm(l.variant?.barcode) === c) && st.counts.get(l.id) < l.quantity)
-      ?? st.order.lineItems.nodes.find((l) => norm(l.sku) === c || norm(l.variant?.barcode) === c);
+    const match = (l) => norm(l.sku) === c || norm(l.variant?.barcode) === c;
+    const line = shown().find((l) => match(l) && st.counts.get(l.id) < target(l)) ?? shown().find(match);
     if (!line) {
       beep(false);
-      toast(`${code} isn't in ${st.order.name}`, true);
+      const elsewhere = st.boxN && st.order.lineItems.nodes.find(match);
+      toast(elsewhere ? `${elsewhere.title} goes in another box, not box ${st.boxN}` : `${code} isn't in ${st.order.name}`, true);
       return;
     }
     const n = st.counts.get(line.id);
-    if (n >= line.quantity) {
+    if (n >= target(line)) {
       beep(false);
-      toast(`Already scanned all ${line.quantity} × ${line.title}`, true);
+      toast(`Already scanned all ${target(line)} × ${line.title}${st.boxN ? ` for box ${st.boxN}` : ""}`, true);
       return;
     }
     st.counts.set(line.id, n + 1);
+    if (st.boxN && shown().every((l) => st.counts.get(l.id) >= target(l))) st.packed.add(st.boxN);
     beep(true);
     draw();
   }
 
-  const allVerified = () => st.order && st.order.lineItems.nodes.every((l) => st.counts.get(l.id) >= l.quantity);
-  const scannedAny = () => st.order && st.order.lineItems.nodes.some((l) => st.counts.get(l.id) > 0);
+  /** The whole order checked: every box packed (split orders), or every item scanned. */
+  const allVerified = () => st.order && (st.boxes.length && st.boxN ? st.boxes.every((b) => st.packed.has(b.n)) : st.order.lineItems.nodes.every((l) => st.counts.get(l.id) >= l.quantity));
+  const boxVerified = () => st.order && shown().every((l) => st.counts.get(l.id) >= target(l));
+  const scannedAny = () => st.order && st.order.lineItems.nodes.some((l) => scannedTotal(l) > 0);
   const weightsKnown = () => st.order.lineItems.nodes.every((l) => lineLb(l) !== null);
   const tare = () => presetsCache?.find((p) => String(p.id) === String(st.box?.presetId))?.weight ?? 0;
   /** Box + these items, from Shopify product weights. */
@@ -141,6 +159,18 @@ export function renderScan(root, { openSlideout }) {
   let qtimer;
   const boxChanged = () => { st.box.changed = true; saveBox(); clearTimeout(qtimer); qtimer = setTimeout(requote, 500); };
 
+  /** Split orders: which box this is, which are packed, and what to scan next. */
+  function boxStrip() {
+    const b = curBox();
+    const next = st.boxes.find((x) => !st.packed.has(x.n));
+    return h("div", { class: "scan-boxes" },
+      h("div", { class: "row", style: { gap: "6px" } }, st.boxes.map((x) => h("span", { class: "scan-box-pill" + (x.n === st.boxN ? " current" : "") + (st.packed.has(x.n) ? " packed" : "") },
+        st.packed.has(x.n) ? icon("check") : null, `Box ${x.n}${x.name ? ` · ${x.name}` : ""}`))),
+      boxVerified() && next ? h("div", { class: "notice good", style: { marginTop: "8px" } }, `Box ${b.n} of ${b.of} packed ✓ — scan the packing slip for box ${next.n}.`) : null,
+      boxVerified() && !next ? h("div", { class: "notice good", style: { marginTop: "8px" } }, `All ${st.boxes.length} boxes packed ✓ — print the labels.`) : null,
+      b?.tracking ? h("div", { class: "small muted", style: { marginTop: "6px" } }, `Tracking for this box: ${b.tracking}`) : null);
+  }
+
   function boxRow() {
     const o = st.order;
     if (!st.box) {
@@ -178,8 +208,10 @@ export function renderScan(root, { openSlideout }) {
     const o = st.order;
     if (!o) return mount(area);
     const verified = allVerified();
-    const go = h("button", { class: "btn primary big" }, icon("printer"), verified ? "Verify & print label" : "Print label anyway");
-    const missing = () => o.lineItems.nodes.filter((l) => st.counts.get(l.id) < l.quantity).map((l) => `${l.quantity - st.counts.get(l.id)} × ${l.title}`);
+    const multi = st.boxes.length > 1 && st.boxN;
+    const go = h("button", { class: verified ? "btn primary big" : multi && boxVerified() ? "btn big" : "btn primary big" }, icon("printer"),
+      multi ? (verified ? `Verify & print ${st.boxes.length} labels` : `Print all ${st.boxes.length} labels now`) : verified ? "Verify & print label" : "Print label anyway");
+    const missing = () => o.lineItems.nodes.filter((l) => scannedTotal(l) < l.quantity).map((l) => `${l.quantity - scannedTotal(l)} × ${l.title}`);
     const shipPart = !verified && scannedAny() ? h("button", { class: "btn big", title: "Out of stock? Ship the scanned items now; the rest of the order goes on hold" }, "Ship what's scanned") : null;
     const buy = async (btn, partial) => {
       btn.disabled = true;
@@ -211,29 +243,33 @@ export function renderScan(root, { openSlideout }) {
       focus();
     };
     go.onclick = () => {
-      if (!verified && !confirm("Not every item has been scanned. Print the label for the whole order anyway?")) return;
+      const msg = st.boxN ? `Not every box has been packed and checked (${st.packed.size} of ${st.boxes.length}). Print the labels for all ${st.boxes.length} boxes anyway?` : "Not every item has been scanned. Print the label for the whole order anyway?";
+      if (!verified && !confirm(msg)) return;
       buy(go, false);
     };
     if (shipPart) shipPart.onclick = () => {
-      if (!st.box) return openSlideout(o, { shipQty: Object.fromEntries(st.counts) }); // several boxes: choose on the order page
+      if (!st.box) return openSlideout(o, { shipQty: Object.fromEntries(o.lineItems.nodes.map((l) => [l.id, scannedTotal(l)])) }); // several boxes: choose on the order page
       if (!confirm(`Ship only what's been scanned?\n\nHeld back (the order goes on hold):\n${missing().join("\n")}\n\nShopify marks only the shipped items fulfilled.`)) return;
       buy(shipPart, true);
     };
     const blocked = o.hasLabel ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending ? "Payment is still pending." : null;
     mount(area, h("div", { class: "card" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
-        h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`)),
+        h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name, st.boxN ? h("span", { class: "badge plain", style: { marginLeft: "8px", fontSize: "13px" } }, `Box ${st.boxN} of ${st.boxes.length}`) : null), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`)),
         h("button", { class: "btn sm", onclick: () => openSlideout(o) }, "Open label builder")),
       blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked) : null,
-      h("div", { class: "scan-items" }, o.lineItems.nodes.map((l) => {
+      st.boxN ? boxStrip() : null,
+      h("div", { class: "scan-items" }, shown().map((l) => {
         const n = st.counts.get(l.id);
-        const done = n >= l.quantity;
-        const plus = h("button", { class: "btn sm ghost", title: "Count one without scanning", onclick: () => { if (n < l.quantity) { st.counts.set(l.id, n + 1); draw(); focus(); } } }, icon("plus"));
+        const done = n >= target(l);
+        const plus = h("button", { class: "btn sm ghost", title: "Count one without scanning", onclick: () => {
+          if (n < target(l)) { st.counts.set(l.id, n + 1); if (st.boxN && boxVerified()) st.packed.add(st.boxN); draw(); focus(); }
+        } }, icon("plus"));
         return h("div", { class: "scan-item" + (done ? " done" : "") },
           h("span", { class: "tick" }, done ? icon("check") : null),
           l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
           h("div", { style: { minWidth: 0, flex: 1 } }, h("b", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku && `SKU ${l.sku}`, l.variant?.barcode && `Barcode ${l.variant.barcode}`].filter(Boolean).join(" · "))),
-          h("span", { class: "count" }, `${n} / ${l.quantity}`), plus);
+          h("span", { class: "count" }, `${n} / ${target(l)}`), plus);
       })),
       h("div", { class: "row", style: { marginTop: "14px", justifyContent: "space-between" } },
         h("div", { class: "small muted" },
@@ -250,7 +286,7 @@ export function renderScan(root, { openSlideout }) {
     input.value = "";
     if (!code) return;
     // An order-looking code (e.g. 68762-TG, #1042) loads a new order; anything else is an item
-    const looksLikeOrder = /^#?\d{3,}(-[a-z]+)?$/i.test(code);
+    const looksLikeOrder = /^#?\d{3,}(-[a-z]+)?([\/?\-\s]B\d{1,2})?$/i.test(code);
     if (!st.order || (looksLikeOrder && !st.order.lineItems.nodes.some((l) => norm(l.sku) === norm(code) || norm(l.variant?.barcode) === norm(code)))) loadOrder(code);
     else scanItem(code);
   });
