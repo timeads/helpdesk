@@ -1150,3 +1150,21 @@ body.order-open { overflow: hidden; }
 }
 .slip-designer .field { display: grid; gap: 6px; }
 .box-cost { margin-left: auto; font-variant-numeric: tabular-nums; } .pack-box-head .box-cost + .btn { margin-left: 0 !important; } .per-box { margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+/* Settings pages */
+.page-head .inner.settings-inner { max-width: 1120px; }
+.settings-layout { max-width: 1120px; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 28px; align-items: start; }
+.settings-pages { position: sticky; top: 16px; display: grid; gap: 2px; }
+.settings-pages a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--text-2); text-decoration: none; font: 600 13.5px var(--ui); }
+.settings-pages a svg { width: 16px; height: 16px; flex: none; opacity: .8; }
+.settings-pages a:hover { background: var(--sunken); color: var(--text); }
+.settings-pages a.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); border: 1px solid var(--border); padding: 7px 9px; }
+.settings-body { min-width: 0; max-width: 880px; }
+@media (max-width: 900px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .settings-pages { position: static; display: flex; overflow-x: auto; gap: 6px; padding-bottom: 4px; scrollbar-width: none; margin: 0 -4px; padding-inline: 4px; }
+  .settings-pages::-webkit-scrollbar { display: none; }
+  .settings-pages a { flex: none; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; background: var(--surface); }
+  .settings-pages a.active { background: var(--teal); color: var(--on-teal); border-color: transparent; padding: 6px 12px; }
+  .settings-pages a svg { display: none; }
+}

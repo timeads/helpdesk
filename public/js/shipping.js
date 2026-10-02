@@ -54,7 +54,7 @@ export function renderShipping(main) {
   const body = h("div");
   const notices = h("div");
   const blank = h("button", { class: "btn sm", onclick: () => openOrderPage(null) }, icon("plus"), "Blank label");
-  const printerChip = h("a", { class: "badge plain", href: "/settings#printing", "data-link": "", title: "Printer for this computer — change in Settings", style: { textDecoration: "none" } },
+  const printerChip = h("a", { class: "badge plain", href: "/settings/printing", "data-link": "", title: "Printer for this computer — change in Settings", style: { textDecoration: "none" } },
     icon("printer"), printSettings().labels === "zebra" ? "Zebra printer" : "Browser printing");
   const tabLink = (id, href, label) => h("a", { class: "tab" + (tab === id ? " active" : ""), href, "data-link": "" }, label);
   mount(main, h("div", { class: "page" },
@@ -69,8 +69,8 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     const n = [];
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
-    if (!st.ups && !st.usps) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or USPS (EasyPost) keys in Settings → Credentials to get rates and buy labels."));
-    else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Credentials when ready."));
+    if (!st.ups && !st.usps) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or USPS (EasyPost) keys in Settings → Connections to get rates and buy labels."));
+    else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Connections when ready."));
     mount(notices, n.length ? h("div", { class: "stack", style: { marginBottom: "16px" } }, n) : null);
   }).catch(() => {});
 

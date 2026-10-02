@@ -95,7 +95,7 @@ function createInbox(main, loc) {
     const dlg = modal("Save as view", h("div", { class: "stack" },
       h("label", { class: "field" }, h("span", {}, "Name"), name),
       h("label", { class: "field" }, h("span", {}, "Folder"), folder),
-      h("p", { class: "small muted", style: { margin: 0 } }, "The view keeps these filters and shows open and in-progress tickets. Edit it any time in Settings → Views."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "The view keeps these filters and shows open and in-progress tickets. Edit it any time in Settings → Macros, tags & views."),
       h("div", { class: "row", style: { justifyContent: "flex-end" } }, go)), { width: 420 });
     go.onclick = busy(go, async () => {
       if (!name.value.trim()) return name.focus();
@@ -111,7 +111,7 @@ function createInbox(main, loc) {
   moreBtn.onclick = () => popover(moreBtn, menuList([
     { label: "Export this view (CSV)", icon: "download", run: () => { location.href = `/api/tickets/export.csv?${qs()}${self.q ? `&q=${encodeURIComponent(self.q)}` : ""}`; } },
     { label: "Keyboard shortcuts", icon: "keyboard", hint: "?", run: shortcutsHelp },
-    { label: "Manage views", icon: "layers", run: () => navigate("/settings#views") },
+    { label: "Manage views", icon: "layers", run: () => navigate("/settings/macros#views") },
   ]), { width: 250, align: "right" });
 
   // ---- Bulk actions

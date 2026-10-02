@@ -102,7 +102,7 @@ async function token(env: Env): Promise<string> {
 const authHelp = (env: Env) =>
   `UPS accepted your keys but refused this request (Invalid Authentication Information). In developer.ups.com → Apps → your app: ` +
   `1) under Products, make sure Rating and Shipping are added (and Address Validation if you use it); ` +
-  `2) make sure UPS account ${env.UPS_ACCOUNT_NUMBER} is the billing account linked to the app, and that the Account number in Settings → Credentials matches it exactly (6 characters, no spaces).`;
+  `2) make sure UPS account ${env.UPS_ACCOUNT_NUMBER} is the billing account linked to the app, and that the Account number in Settings → Connections matches it exactly (6 characters, no spaces).`;
 
 async function ups<T = any>(env: Env, method: string, path: string, body?: unknown): Promise<T> {
   const send = async () =>

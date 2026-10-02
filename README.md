@@ -24,7 +24,7 @@ You'll need about 30 minutes. Do the steps in order. **Never paste a secret into
 There are two places keys can go:
 
 - **Cloudflare secrets** (only `SESSION_SECRET`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` must go here, because the app needs them before anyone can sign in). Add them with `npx wrangler secret put NAME`, or in the dashboard under **Workers & Pages → helpdesk → Settings → Variables and Secrets → Add → Secret**.
-- **Settings → Credentials inside the app** for Shopify, UPS and the Anthropic key. Values are encrypted before they're stored, and secrets are never shown again (only their last four characters). Each service has a **Test connection** button. Values entered here override any set in Cloudflare.
+- **Settings → Connections inside the app** for Shopify, UPS and the Anthropic key. Values are encrypted before they're stored, and secrets are never shown again (only their last four characters). Each service has a **Test connection** button. Values entered here override any set in Cloudflare.
 
 ### 0. Get the code onto your computer
 
@@ -74,13 +74,13 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 2. Create an app named **Helpdesk** with these Admin API scopes:
    `read_customers, read_orders, read_products, read_fulfillments, write_fulfillments, read_merchant_managed_fulfillment_orders, write_merchant_managed_fulfillment_orders, write_discounts` (the last one is only needed for discount codes from the composer)
 3. Install or release it on **Tuft the World**.
-4. After you've signed in (step 6), open **Settings → Credentials → Shopify**. Enter the store address and **either** the Client ID + Client secret (Dev Dashboard apps) **or** the Admin API access token (`shpat_…`, older custom apps). Click **Save**, and the connection test runs automatically.
+4. After you've signed in (step 6), open **Settings → Connections → Shopify**. Enter the store address and **either** the Client ID + Client secret (Dev Dashboard apps) **or** the Admin API access token (`shpat_…`, older custom apps). Click **Save**, and the connection test runs automatically.
 
 ### 4. UPS: rates and labels
 
 1. Sign in at [developer.ups.com](https://developer.ups.com) with your UPS.com login and go to **Apps → Add Apps**.
 2. Link your **UPS shipper account**, then add the **Authorization (OAuth)**, **Rating**, **Shipping** and **Address Validation – Street Level** products.
-3. In the app, open **Settings → Credentials → UPS**. Enter the Client ID, Client secret and your 6-character UPS account number, then click **Save**.
+3. In the app, open **Settings → Connections → UPS**. Enter the Client ID, Client secret and your 6-character UPS account number, then click **Save**.
 
 Mode starts on **test**, so labels aren't billed. When a test label prints correctly, switch Mode to **production** in the same place.
 
@@ -90,11 +90,11 @@ Mode starts on **test**, so labels aren't billed. When a test label prints corre
 
 1. Create an account at [easypost.com](https://www.easypost.com) and add a payment method. ACH (bank) avoids the 3.75% card fee on wallet top-ups.
 2. Go to **Account → API Keys** and copy the **Production** key (starts with `EZAK`).
-3. In the app: **Settings → Credentials → USPS (EasyPost)**, paste it, **Save**. USPS Ground Advantage, Priority Mail and Priority Mail Express then show next to UPS everywhere rates appear, each with its margin. USPS labels are US-only for now.
+3. In the app: **Settings → Connections → USPS (EasyPost)**, paste it, **Save**. USPS Ground Advantage, Priority Mail and Priority Mail Express then show next to UPS everywhere rates appear, each with its margin. USPS labels are US-only for now.
 
 ### 5. (Optional) AI drafts
 
-Create a key at [console.anthropic.com](https://console.anthropic.com) and add some credit. Then paste the key into **Settings → Credentials → AI drafts** and pick a model. Each draft costs roughly 1–2¢ on the default model; `claude-haiku-4-5` is cheaper still.
+Create a key at [console.anthropic.com](https://console.anthropic.com) and add some credit. Then paste the key into **Settings → Connections → AI drafts** and pick a model. Each draft costs roughly 1–2¢ on the default model; `claude-haiku-4-5` is cheaper still.
 
 ### 6. Deploy, sign in and connect
 

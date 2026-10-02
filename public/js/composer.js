@@ -147,7 +147,7 @@ export async function pickMacro(ticketId, onAdd) {
     const q = search.value.toLowerCase();
     const found = macros.filter((m) => (m.name + " " + m.body).toLowerCase().includes(q)).sort((a, b) => b.uses - a.uses || a.name.localeCompare(b.name));
     mount(list, found.length ? found.map((m) => h("button", { "data-id": m.id, role: "option", onclick: () => show(m), ondblclick: () => { show(m).then(() => add.click()); } },
-      h("b", {}, m.name), m.actions.length ? h("span", { class: "auto" }, icon("bolt"), m.actions.length) : null)) : h("p", { class: "muted small", style: { padding: "8px" } }, macros.length ? "No matches" : "No macros yet. Add them in Settings → Macros."));
+      h("b", {}, m.name), m.actions.length ? h("span", { class: "auto" }, icon("bolt"), m.actions.length) : null)) : h("p", { class: "muted small", style: { padding: "8px" } }, macros.length ? "No matches" : "No macros yet. Add them in Settings → Macros, tags & views."));
   };
   search.oninput = draw;
   search.onkeydown = (e) => { if (e.key === "Enter") list.querySelector("button")?.click(); if (e.key === "ArrowDown") { list.querySelector("button")?.focus(); e.preventDefault(); } };
@@ -159,7 +159,7 @@ export async function pickMacro(ticketId, onAdd) {
   });
   draw();
   const dlg = modal("Macros", h("div", { class: "macro-picker" },
-    h("div", { class: "macro-left" }, search, list, h("a", { href: "/settings#macros", "data-link": "", class: "small", onclick: () => dlg.close() }, "Manage macros")),
+    h("div", { class: "macro-left" }, search, list, h("a", { href: "/settings/macros#macros", "data-link": "", class: "small", onclick: () => dlg.close() }, "Manage macros")),
     h("div", { class: "macro-right" }, preview, h("div", { class: "row", style: { justifyContent: "flex-end", marginTop: "auto", paddingTop: "12px" } }, add))), { width: 860 });
   add.onclick = () => {
     if (!current || !rendered) return;

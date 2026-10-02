@@ -693,7 +693,7 @@ tickets.post("/:id{[0-9]+}/render-macro", async (c) => {
 tickets.post("/:id{[0-9]+}/ai-draft", async (c) => {
   const id = Number(c.req.param("id"));
   const { instruction } = await c.req.json<{ instruction?: string }>().catch(() => ({ instruction: undefined }));
-  if (!aiConfigured(c.env)) throw new HttpError(409, "AI drafts are off — add an Anthropic API key in Settings → Credentials.");
+  if (!aiConfigured(c.env)) throw new HttpError(409, "AI drafts are off — add an Anthropic API key in Settings → Connections.");
   const ticket = await loadTicket(c.env, id);
   const [{ results: messages }, { results: notes }] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT direction, from_email, sent_at, body_text FROM messages WHERE ticket_id = ? ORDER BY sent_at").bind(id),
@@ -746,7 +746,7 @@ tickets.post("/:id{[0-9]+}/ai-insights", async (c) => {
 tickets.post("/:id{[0-9]+}/discount", async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json<{ kind: "percentage" | "amount"; value: number; code?: string; days?: number }>();
-  if (!shopifyConfigured(c.env)) throw new HttpError(409, "Connect Shopify in Settings → Credentials first");
+  if (!shopifyConfigured(c.env)) throw new HttpError(409, "Connect Shopify in Settings → Connections first");
   const value = Number(body.value);
   if (!(value > 0) || (body.kind === "percentage" && value > 100)) throw new HttpError(400, "Enter a discount amount");
   const code = (body.code?.trim() || `TTW-${crypto.randomUUID().slice(0, 6).toUpperCase()}`).replace(/\s+/g, "").toUpperCase();

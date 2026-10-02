@@ -109,7 +109,7 @@ const INSIGHTS_SCHEMA = {
 
 /** Summary, sentiment and conversation type for a ticket (Redo "AI insights"). */
 export async function ticketInsights(env: Env, subject: string, thread: DraftInput["thread"]): Promise<Insights> {
-  if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key in Settings → Credentials to use AI insights");
+  if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key in Settings → Connections to use AI insights");
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const model = env.AI_MODEL || "claude-opus-5-5";
   const convo = thread.map((m) => `--- ${m.direction === "in" ? "Customer" : "Us"} (${m.sentAt}) ---\n${m.text.slice(0, 4000)}`).join("\n\n");

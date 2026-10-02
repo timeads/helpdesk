@@ -76,7 +76,7 @@ auth.get("/google/callback", async (c) => {
       lastError: null,
     });
     await deleteSetting(c.env, "mailbox_access");
-    return c.redirect("/settings?connected=gmail");
+    return c.redirect("/settings/connections?connected=gmail");
   }
 
   const agent = await findOrProvisionAgent(c.env, claims.email, claims.name ?? "");

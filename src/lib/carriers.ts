@@ -12,7 +12,7 @@ export async function getAllRates(env: Env, from: Address, to: Address, parcels:
   const jobs: Promise<Rate[]>[] = [];
   if (upsConfigured(env)) jobs.push(getUpsRates(env, from, to, parcels, signature, customs).then((r) => r.map((x) => ({ ...x, carrier: "UPS" }))));
   if (easypostConfigured(env)) jobs.push(getUspsRates(env, from, to, parcels, signature, customs));
-  if (!jobs.length) throw new HttpError(409, "Connect UPS or USPS in Settings → Credentials to get rates");
+  if (!jobs.length) throw new HttpError(409, "Connect UPS or USPS in Settings → Connections to get rates");
   const settled = await Promise.allSettled(jobs);
   const rates = settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
   const errors = settled.filter((s): s is PromiseRejectedResult => s.status === "rejected").map((s) => s.reason);

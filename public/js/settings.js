@@ -5,55 +5,85 @@ import { printSettings, savePrintSettings, testZebra, zebraPrinter } from "./pri
 import { slipCard } from "./settings-slip.js";
 import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
+// Settings is split into pages (/settings/<page>); each loads only what it shows.
+const PAGES = [
+  { id: "account", label: "Profile & team", icon: "user", desc: "Your profile, signature and who's on the team." },
+  { id: "connections", label: "Connections", icon: "link", desc: "Gmail, Shopify, UPS, USPS and AI — and the keys behind them." },
+  { id: "tickets", label: "Tickets & email", icon: "inbox", desc: "How tickets are assigned and merged, which email becomes a ticket, and automatic ticket rules.", admin: true },
+  { id: "macros", label: "Macros, tags & views", icon: "tag", desc: "Saved replies, tags and the ticket views in the sidebar." },
+  { id: "knowledge", label: "AI knowledge", icon: "spark", desc: "What AI drafts know about your products and policies." },
+  { id: "shipping", label: "Shipping & boxes", icon: "truck", desc: "Ship-from address, boxes, packing memory and shipping rules.", admin: true },
+  { id: "customs", label: "International", icon: "flag", desc: "Customs defaults for orders going abroad.", admin: true },
+  { id: "printing", label: "Printing & slips", icon: "printer", desc: "This computer's printer and the packing slip design." },
+];
+
+// Old single-page links (/settings#views) go to the page that now holds that section
+const HASH_PAGE = {
+  profile: "account", team: "account", connections: "connections", credentials: "connections",
+  support: "tickets", email: "tickets", rules: "tickets", macros: "macros", tags: "macros", views: "macros",
+  knowledge: "knowledge", shipping: "shipping", "shipping-rules": "shipping", learned: "shipping", customs: "customs", printing: "printing", slip: "printing",
+};
+
 export function renderSettings(main) {
-  const inner = h("div", { class: "page-inner", style: { maxWidth: "880px" } }, h("div", { class: "card" }, skeletonRows(4)));
+  const isAdmin = state.me.role === "admin";
+  const pages = PAGES.filter((p) => !p.admin || isAdmin);
+  let id = location.pathname.split("/")[2] || "";
+  const hash = location.hash.slice(1);
+  if (!pages.some((p) => p.id === id)) {
+    id = (HASH_PAGE[hash] && pages.some((p) => p.id === HASH_PAGE[hash]) ? HASH_PAGE[hash] : pages[0].id);
+    history.replaceState(null, "", `/settings/${id}${hash ? `#${hash}` : ""}${location.search}`);
+  }
+  const page = pages.find((p) => p.id === id);
+  const inner = h("div", { class: "settings-body" }, h("div", { class: "card" }, skeletonRows(4)));
   mount(main, h("div", { class: "page" },
-    h("header", { class: "page-head" }, h("div", { class: "inner", style: { maxWidth: "880px", paddingBottom: "4px" } },
+    h("header", { class: "page-head" }, h("div", { class: "inner settings-inner", style: { paddingBottom: "4px" } },
       h("h1", {}, "Settings"),
-      h("p", { class: "sub" }, "Connections, team, support automation and shipping defaults."),
-      h("nav", { class: "settings-nav", "aria-label": "Settings sections" }, [["connections", "Connections"], ["team", "Team"], ["support", "Tickets"], ["macros", "Macros"], ["tags", "Tags"], ["views", "Views"], ["rules", "Rules"], ["knowledge", "AI knowledge"], ["email", "Email"], ["shipping", "Shipping"], ["customs", "Customs"], ["printing", "Printing"], ["slip", "Packing slip"]]
-        .map(([id, label]) => h("a", { href: `#${id}`, onclick: (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); history.replaceState(null, "", `#${id}`); } }, label))))),
-    inner));
-  load(inner);
+      h("p", { class: "sub" }, page.desc))),
+    h("div", { class: "page-inner settings-layout" },
+      h("nav", { class: "settings-pages", "aria-label": "Settings pages" }, pages.map((p) =>
+        h("a", { href: `/settings/${p.id}`, "data-link": "", class: p.id === id ? "active" : "", "aria-current": p.id === id ? "page" : null }, icon(p.icon), h("span", {}, p.label)))),
+      inner)));
+  document.querySelector(".settings-pages a.active")?.scrollIntoView({ block: "nearest", inline: "center" });
+  load(inner, id);
   return () => {};
 }
 
-async function load(inner) {
-  let s, agents, macros, variables, presets, creds = null, rulesData = null, tags, views, supportRules, knowledge;
-  const isAdminUser = state.me.role === "admin";
-  try {
-    [s, { agents }, { macros, variables }, { presets }, creds, rulesData, { tags }, { views }, supportRules, { knowledge }] = await Promise.all([
-      api("/settings"), api("/agents"), api("/macros"), api("/shipping/presets"),
-      isAdminUser ? api("/credentials") : null,
-      isAdminUser ? api("/shipping/rules") : null,
-      api("/tags"), api("/views"), api("/support-rules"), api("/knowledge"),
-    ]);
-  } catch (e) {
-    return mount(inner, h("div", { class: "notice bad" }, e.message));
-  }
+async function load(inner, id = location.pathname.split("/")[2]) {
   const isAdmin = state.me.role === "admin";
-  if (location.hash) setTimeout(() => document.querySelector(location.hash)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   inner.oninput = markDirty;
   inner.onchange = markDirty;
   if (new URLSearchParams(location.search).get("connected") === "gmail") toast("Gmail connected — importing recent mail");
-  mount(inner,
-    connections(s, isAdmin, inner),
-    isAdmin && creds ? credentials(creds.fields, inner) : null,
-    printing(),
-    isAdmin ? slipCard() : null,
-    profile(),
-    team(agents, isAdmin, inner),
-    isAdmin ? supportBehavior(s) : null,
-    macrosCard(macros, variables, () => reload(inner)),
-    tagsCard(tags, () => reload(inner)),
-    viewsCard(views, tags, () => reload(inner)),
-    isAdmin ? supportRulesCard(supportRules, macros, tags, () => reload(inner)) : null,
-    knowledgeCard(knowledge, () => reload(inner)),
-    isAdmin ? mailRules(s) : null,
-    isAdmin ? shipping(s, presets, inner) : null,
-    isAdmin && rulesData ? shippingRules(rulesData, presets, inner) : null,
-    isAdmin ? customsCard(s) : null,
-  );
+  const get = (path, ok = true) => (ok ? api(path) : Promise.resolve(null));
+  let cards;
+  try {
+    if (id === "account") {
+      const [{ agents }] = await Promise.all([api("/agents")]);
+      cards = [profile(), team(agents, isAdmin, inner)];
+    } else if (id === "connections") {
+      const [s, creds] = await Promise.all([api("/settings"), get("/credentials", isAdmin)]);
+      cards = [connections(s, isAdmin, inner), isAdmin && creds ? credentials(creds.fields, inner) : null];
+    } else if (id === "tickets") {
+      const [s, { macros }, { tags }, supportRules] = await Promise.all([api("/settings"), api("/macros"), api("/tags"), api("/support-rules")]);
+      cards = [supportBehavior(s), mailRules(s), supportRulesCard(supportRules, macros, tags, () => reload(inner))];
+    } else if (id === "macros") {
+      const [{ macros, variables }, { tags }, { views }] = await Promise.all([api("/macros"), api("/tags"), api("/views")]);
+      cards = [macrosCard(macros, variables, () => reload(inner)), tagsCard(tags, () => reload(inner)), viewsCard(views, tags, () => reload(inner))];
+    } else if (id === "knowledge") {
+      const { knowledge } = await api("/knowledge");
+      cards = [knowledgeCard(knowledge, () => reload(inner))];
+    } else if (id === "shipping") {
+      const [s, { presets }, rulesData] = await Promise.all([api("/settings"), api("/shipping/presets"), get("/shipping/rules", isAdmin)]);
+      cards = [shipping(s, presets, inner), rulesData ? shippingRules(rulesData, presets, inner) : null];
+    } else if (id === "customs") {
+      cards = [customsCard(await api("/settings"))];
+    } else if (id === "printing") {
+      cards = [printing(), isAdmin ? slipCard() : null];
+    }
+  } catch (e) {
+    return mount(inner, h("div", { class: "notice bad" }, e.message));
+  }
+  mount(inner, ...(cards ?? []));
+  if (location.hash) setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 }
 
 const reload = (inner) => load(inner);

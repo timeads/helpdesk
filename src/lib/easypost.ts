@@ -22,7 +22,7 @@ export const isUspsCode = (code: string) => code.startsWith("usps:");
 export const easypostConfigured = (env: Env) => !!env.EASYPOST_API_KEY;
 
 async function ep<T = any>(env: Env, method: string, path: string, body?: unknown): Promise<T> {
-  if (!env.EASYPOST_API_KEY) throw new HttpError(409, "Add your EasyPost API key in Settings → Credentials → USPS");
+  if (!env.EASYPOST_API_KEY) throw new HttpError(409, "Add your EasyPost API key in Settings → Connections → USPS");
   const res = await fetch(API + path, {
     method,
     headers: { authorization: `Basic ${btoa(`${env.EASYPOST_API_KEY}:`)}`, "content-type": "application/json" },
