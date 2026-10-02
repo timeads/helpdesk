@@ -3,7 +3,7 @@ import type { Agent, Env } from "../env";
 import type { ShopifyOrder } from "./shopify";
 import { fulfillOrder } from "./shopify";
 import { evaluateRules, type RuleResult, type ShippingRule } from "./rules";
-import { type Address, type Parcel, type Rate, type Signature } from "./ups";
+import { normalizePhone, type Address, type Parcel, type Rate, type Signature } from "./ups";
 import { getAllRates, purchase, trackingUrlFor } from "./carriers";
 import { saveProfiles, type Customs } from "./customs";
 import { HttpError, getSetting } from "./util";
@@ -286,10 +286,13 @@ export function chooseRate(rates: Rate[], policy: string | null | undefined): Ra
   return byPrice[0];
 }
 
+/** The UI recognizes this message and offers to add the number right there. */
+export const SHIP_FROM_PHONE = "Your ship-from (return) address needs a phone number — carriers print it on every label. This is your number, not the customer's.";
+
 export async function shipFrom(env: Env): Promise<Address> {
   const a = await getSetting<Address | null>(env, "ship_from", null);
   if (!a?.address1) throw new HttpError(409, "Add your ship-from address in Settings → Shipping first");
-  if (!a.phone?.replace(/\D/g, "")) throw new HttpError(409, "Add a phone number to your ship-from address (Settings → Shipping) — UPS requires it");
+  if (normalizePhone(a.phone, a.country).length < 10) throw new HttpError(409, SHIP_FROM_PHONE);
   return a;
 }
 

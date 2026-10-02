@@ -489,6 +489,22 @@ export function addressFromOrder(o) {
   return { name: a.name || "", company: a.company || "", phone: a.phone || o.phone || "", address1: a.address1 || "", address2: a.address2 || "", city: a.city || "", state: a.provinceCode || "", zip: a.zip || "", country: a.countryCodeV2 || "US", residential: !a.company };
 }
 
+/** Shown instead of rates when our own return address has no phone: add it here and carry on. */
+function shipFromPhoneFix(message, done) {
+  const input = h("input", { class: "input", type: "tel", placeholder: "e.g. (813) 555-0123", autocomplete: "tel", "aria-label": "Your business phone number" });
+  const save = h("button", { class: "btn primary sm" }, "Save & get rates");
+  save.onclick = busy(save, async () => {
+    const r = await api("/shipping/ship-from/phone", { method: "POST", body: { phone: input.value } });
+    toast(`Ship-from phone saved: ${r.phone}`);
+    done();
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+  return h("div", { class: "notice info" },
+    h("b", {}, message),
+    h("div", { class: "row", style: { marginTop: "10px", gap: "8px", flexWrap: "nowrap" } }, input, save),
+    h("div", { class: "small", style: { marginTop: "6px" } }, "Saved to Settings → Shipping, so you only do this once. Any format works — it's cleaned up for the carriers."));
+}
+
 const marginText = (m) => `${m >= 0 ? "+" : "−"}${money(Math.abs(m), "USD")}`;
 
 function buildLabelForm(root, o, presets, opts) {
@@ -622,6 +638,7 @@ function buildLabelForm(root, o, presets, opts) {
       if (my !== seq) return;
       s.rates = [];
       s.rate = null;
+      if (/ship-from \(return\) address needs a phone/.test(e.message)) return mount(ratesEl, shipFromPhoneFix(e.message, () => quote(0)));
       mount(ratesEl, h("div", { class: "notice bad" }, e.message, " ", h("button", { class: "btn sm", onclick: () => quote(0) }, "Try again")));
     } finally {
       if (my === seq) ratesEl.classList.remove("refreshing");
@@ -942,6 +959,11 @@ function buildLabelForm(root, o, presets, opts) {
       queueApi?.reload();
     } catch (e) {
       win?.close();
+      if (/ship-from \(return\) address needs a phone/.test(e.message)) {
+        mount(ratesEl, shipFromPhoneFix(e.message, () => { drawRates(); toast("Saved — buy the label again"); }));
+        ratesEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
       throw e;
     }
   }

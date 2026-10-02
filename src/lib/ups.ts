@@ -123,11 +123,24 @@ export function upsAddress(a: Address, opts: { residential?: boolean } = {}) {
   };
 }
 
+/**
+ * Carriers want plain digits. US/Canada numbers become the 10-digit form (a leading +1 or 1 is
+ * dropped, extensions are cut off); others keep their country code without the + or 00.
+ */
+export function normalizePhone(phone: string | null | undefined, country = "US"): string {
+  if (!phone) return "";
+  const main = phone.split(/\s*(?:ext\.?|x|#)\s*\d*$/i)[0];
+  let d = main.replace(/\D/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (["US", "CA", "PR"].includes((country || "US").toUpperCase()) && d.length === 11 && d.startsWith("1")) d = d.slice(1);
+  return d.slice(0, 15);
+}
+
 function party(a: Address, residential = false) {
   return {
     Name: trunc(a.company || a.name, 35),
     AttentionName: trunc(a.name, 35),
-    ...(a.phone ? { Phone: { Number: a.phone.replace(/[^\d]/g, "").slice(0, 15) } } : {}),
+    ...(normalizePhone(a.phone, a.country) ? { Phone: { Number: normalizePhone(a.phone, a.country) } } : {}),
     Address: upsAddress(a, { residential }),
   };
 }
@@ -234,7 +247,7 @@ export function buildShipRequest(
 ) {
   const intl = isInternationalAddress(to);
   if (intl && !opts.customs) throw new HttpError(422, "International shipments need customs details");
-  if (intl && !to.phone?.replace(/\D/g, "")) throw new HttpError(422, "UPS needs the recipient's phone number for international shipments");
+  if (intl && !normalizePhone(to.phone, to.country)) throw new HttpError(422, "UPS needs the recipient's phone number for international shipments");
   const signature = intl ? undefined : opts.signature;
   const charges: any[] = [{ Type: "01", BillShipper: { AccountNumber: account } }];
   if (intl && opts.customs?.dutiesPaidBy === "sender") charges.push({ Type: "02", BillShipper: { AccountNumber: account } });

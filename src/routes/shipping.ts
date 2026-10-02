@@ -6,7 +6,7 @@ import { anyCarrier, getAllRates as getRates, voidLabel } from "../lib/carriers"
 import { easypostConfigured } from "../lib/easypost";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles } from "../lib/customs";
-import { isInternationalAddress } from "../lib/ups";
+import { isInternationalAddress, normalizePhone } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
   addressFromOrder, buyLabel, chooseRate, isInternational, isPaymentPending, isPriority, itemCount, itemsWeightLb,
@@ -606,3 +606,15 @@ ${described.map((o) => packingSlip(o, size, from)).join("")}
 });
 
 export default shipping;
+
+// ---- Ship-from phone, added from the order page when a label can't be bought without it
+shipping.post("/ship-from/phone", async (c) => {
+  requireAdmin(c);
+  const { phone } = await c.req.json<{ phone?: string }>();
+  const from = await getSetting<Address | null>(c.env, "ship_from", null);
+  if (!from?.address1) throw new HttpError(409, "Add your ship-from address in Settings → Shipping first");
+  const clean = normalizePhone(phone, from.country);
+  if (clean.length < 10) throw new HttpError(400, "That doesn't look like a full phone number (10 digits with the area code)");
+  await setSetting(c.env, "ship_from", { ...from, phone: clean });
+  return c.json({ ok: true, phone: clean });
+});

@@ -1,7 +1,7 @@
 // USPS through EasyPost (EasyPost's own USPS account, paid from the EasyPost wallet).
 // One box = one EasyPost shipment; several boxes = an EasyPost order (one label per box).
 import type { Env } from "../env";
-import type { Address, Parcel, Rate, ShipResult, Signature } from "./ups";
+import { normalizePhone, type Address, type Parcel, type Rate, type ShipResult, type Signature } from "./ups";
 import { HttpError } from "./util";
 import type { Customs, CustomsItem } from "./customs";
 
@@ -46,7 +46,7 @@ const address = (a: Address) => ({
   state: a.state,
   zip: a.zip,
   country: a.country || "US",
-  phone: a.phone || undefined,
+  phone: normalizePhone(a.phone, a.country) || undefined,
   email: a.email || undefined,
   residential: a.residential ?? undefined,
 });
