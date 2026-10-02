@@ -879,16 +879,18 @@ function buildLabelForm(root, o, presets, opts) {
       amount(o.totalDiscountsSet) ? kv("Discounts", `−${money(amount(o.totalDiscountsSet), cur)}`) : null,
       kv("Shipping paid", money(paid, cur)),
       amount(o.totalTaxSet) !== null ? kv("Tax", money(amount(o.totalTaxSet), cur)) : null,
-      h("div", { class: "kv total" }, h("span", {}, "Total"), h("b", {}, money(o.totalPriceSet.shopMoney.amount, cur)))),
-    h("section", { class: "card op-card" },
-      h("h3", {}, `Order items · ${o.itemCount}`),
-      h("div", { class: "stack" }, items.map((l) => {
-        const each = amount(l.discountedUnitPriceAfterAllDiscountsSet);
-        return h("div", { class: "line" },
-          l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
-          h("div", { style: { minWidth: 0 } }, h("div", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
-          h("div", { class: "qty" }, `× ${l.quantity}`, each !== null ? h("div", { class: "small" }, money(each * l.quantity, cur)) : null));
-      })))) : null;
+      h("div", { class: "kv total" }, h("span", {}, "Total"), h("b", {}, money(o.totalPriceSet.shopMoney.amount, cur))))) : null;
+
+  const itemsCard = o ? h("section", { class: "card op-card" },
+    h("div", { class: "op-card-head" }, h("h3", {}, `Order items · ${o.itemCount}`),
+      h("span", { class: "small muted" }, `${items.length} line${items.length === 1 ? "" : "s"}`)),
+    h("div", { class: "op-items" }, items.map((l) => {
+      const each = amount(l.discountedUnitPriceAfterAllDiscountsSet);
+      return h("div", { class: "line" },
+        l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
+        h("div", { style: { minWidth: 0 } }, h("div", { class: "op-item-title" }, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku].filter(Boolean).join(" · "))),
+        h("div", { class: "qty" }, h("span", { class: l.quantity > 1 ? "many" : null }, `× ${l.quantity}`), each !== null ? h("div", { class: "small" }, money(each * l.quantity, cur)) : null));
+    }))) : null;
 
   mount(root,
     h("div", { class: "op-title" },
@@ -903,7 +905,7 @@ function buildLabelForm(root, o, presets, opts) {
         buyEl,
         notices.length ? h("div", { class: "stack" }, notices) : null,
         h("div", { class: "op-cols" },
-          h("div", { class: "op-col" }, shipTo, noteCard),
+          h("div", { class: "op-col" }, shipTo, itemsCard, noteCard),
           h("div", { class: "op-col" }, packages, service)),
         customsEl),
       aside));
