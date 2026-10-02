@@ -47,7 +47,24 @@ async function agentFetch(path, init) {
   throw err;
 }
 
-export async function zebraPrinter() {
+const usable = (d) => d && typeof d === "object" && d.uid && d.name;
+
+/** Printers Browser Print can see (USB first). */
+async function availablePrinters() {
+  try {
+    const r = await agentFetch("/available");
+    const list = ((await r.json())?.printer ?? []).filter(usable);
+    return list.sort((x, y) => (y.connection === "usb") - (x.connection === "usb"));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The printer to send to: Browser Print's default when it's complete; otherwise (it can come back
+ * with no name after a restart, and then every send fails with 500) the one it can actually see.
+ */
+export async function zebraPrinter({ skipDefault = false } = {}) {
   let res;
   try {
     res = await agentFetch("/default?type=printer");
@@ -55,8 +72,15 @@ export async function zebraPrinter() {
     throw new Error(`Can't reach Zebra Browser Print on this computer. Check that it's running (its icon is in the system tray / menu bar). Details: ${e.message}`);
   }
   const text = await res.text();
-  if (!text.trim()) throw new Error("Zebra Browser Print is running but has no default printer — pick one in its settings");
-  return JSON.parse(text);
+  let def = null;
+  try { def = text.trim() ? JSON.parse(text) : null; } catch { /* not JSON */ }
+  if (usable(def) && !skipDefault) return def;
+  const list = await availablePrinters();
+  const saved = printSettings().zebraName;
+  const pick = list.find((d) => d.name === saved) ?? list[0];
+  if (pick) return pick;
+  if (usable(def)) return def;
+  throw new Error("Zebra Browser Print is running but can't see a printer — check the USB cable and that the Zebra is on, then pick it in Browser Print's settings");
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -91,7 +115,14 @@ export async function resetZebra() {
 
 /** Sends ZPL to the default Zebra one label at a time (big jobs in one request can fail), retrying a label once. */
 export async function sendZpl(zpl) {
-  const device = await zebraPrinter();
+  let device = await zebraPrinter();
+  // If the printer Browser Print calls default won't take anything, use the one it can see
+  try {
+    await write(device, "");
+  } catch {
+    const other = await zebraPrinter({ skipDefault: true }).catch(() => null);
+    if (other && other.uid !== device.uid) device = other;
+  }
   const jobs = zpl.match(/\^XA[\s\S]*?\^XZ/g) ?? [zpl];
   for (const [i, job] of jobs.entries()) {
     // Browser Print can reject large requests (500), so each label goes in pieces the printer joins;
@@ -127,9 +158,13 @@ export async function zebraDiagnostics() {
   }
   let device;
   try {
+    const raw = await (await agentFetch("/default?type=printer")).json().catch(() => null);
+    out.push(usable(raw)
+      ? { ok: true, text: `Default printer: ${raw.name} · ${raw.connection}` }
+      : { ok: true, text: "Default printer: incomplete in Browser Print — using the printer it can see instead" });
     device = await zebraPrinter();
-    const info = [device.name || "(no name)", device.connection, device.uid].filter(Boolean).join(" · ");
-    out.push({ ok: !!device.name, text: `Default printer: ${info}${device.name ? "" : " — Browser Print returned an incomplete printer; pick the ZT220 again in Browser Print's settings"}` });
+    try { await write(device, ""); } catch { device = await zebraPrinter({ skipDefault: true }); }
+    out.push({ ok: true, text: `Sending to: ${device.name} · ${device.connection}` });
     try {
       const r = await agentFetch("/available");
       const list = (await r.json())?.printer ?? [];
