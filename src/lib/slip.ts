@@ -137,9 +137,9 @@ export function renderSlip(o: SlipOrder, size: "4x6" | "letter", from: Address |
 
 export const SLIP_CSS = `
 @page { margin: 0; }
-html, body { margin: 0; background: #fff; color: #000; font: 11px/1.35 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+html, body, .slip-root { margin: 0; background: #fff; color: #000; font: 11px/1.35 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
 .slip { box-sizing: border-box; break-after: page; padding: 0.2in; display: flex; flex-direction: column; gap: 8px; }
-.slip.s4x6 { width: 4in; min-height: 6in; }
+.slip.s4x6 { width: 4in; min-height: 6in; padding: 0.3in 0.32in; } /* thermal printers drift a little: keep text well clear of the edges */
 .slip.letter { width: 8.5in; min-height: 11in; padding: 0.5in; gap: 14px; }
 .slip.fs { font-size: 9.5px; } .slip.fm { font-size: 11px; } .slip.fl { font-size: 12.5px; }
 .slip.letter.fs { font-size: 11.5px; } .slip.letter.fm { font-size: 13px; } .slip.letter.fl { font-size: 15px; }

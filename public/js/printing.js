@@ -64,13 +64,13 @@ export function reserveWindow() {
 }
 
 /** Asks what to do about labels that were printed before: "again" | "new" | "cancel". */
-function reprintChoice(title, lines, freshCount) {
+function reprintChoice(title, lines, freshCount, what = "label") {
   return new Promise((resolve) => {
     let answered = false;
     const pick = (v) => { answered = true; resolve(v); document.querySelector(".modal")?.remove(); };
     modal(title, h("div", { class: "stack" },
       h("ul", { style: { margin: 0, paddingLeft: "20px" } }, lines.map((l) => h("li", {}, l))),
-      h("p", { class: "small muted", style: { margin: 0 } }, "Printing again makes a duplicate label for the same shipment."),
+      h("p", { class: "small muted", style: { margin: 0 } }, what === "label" ? "Printing again makes a duplicate label for the same shipment." : "Printing again makes a duplicate slip."),
       h("div", { class: "row" },
         freshCount ? h("button", { class: "btn primary", onclick: () => pick("new") }, `Print only the ${freshCount} new one${freshCount === 1 ? "" : "s"}`) : null,
         h("button", { class: freshCount ? "btn" : "btn primary", onclick: () => pick("again") }, freshCount ? "Print all again" : "Print again"),
@@ -83,31 +83,36 @@ function reprintChoice(title, lines, freshCount) {
 export async function printLabels({ ids, batch }, win = null) {
   const q = batch ? `batch=${encodeURIComponent(batch)}` : `ids=${ids.join(",")}`;
   if (printSettings().labels === "zebra") {
-    // Ask before sending labels that were printed before (the browser print page shows its own warning)
-    const st = await fetch(`/api/shipping/labels/print-status?${q}`).then((r) => (r.ok ? r.json() : { labels: [] })).catch(() => ({ labels: [] }));
-    const done = st.labels.filter((l) => l.printedAt);
+    const res = await fetch(`/api/shipping/labels/print-data?${q}`, { credentials: "same-origin" });
+    const st = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(st.error || "Couldn't load the labels");
+    if (!st.labels.length) throw new Error("These were imported from Redo — reprint them in Redo or UPS");
+    let labels = st.labels;
+    // Ask before sending labels that were printed before
+    const done = labels.filter((l) => l.printedAt);
     if (done.length) {
       const when = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
       const lines = done.slice(0, 8).map((l) => `${l.name || "Label"} — printed ${when(l.printedAt)}${l.count > 1 ? ` (${l.count} times)` : ""}`);
-      const fresh = st.labels.filter((l) => !l.printedAt).map((l) => l.id);
-      const choice = await reprintChoice(done.length === st.labels.length
+      const freshCount = labels.length - done.length;
+      const choice = await reprintChoice(done.length === labels.length
         ? `${done.length === 1 ? "This label was" : `All ${done.length} labels were`} already printed`
-        : `${done.length} of ${st.labels.length} labels were already printed`, lines, fresh.length);
+        : `${done.length} of ${labels.length} labels were already printed`, lines, freshCount);
       if (choice === "cancel") return;
-      if (choice === "new") return printLabels({ ids: fresh });
+      if (choice === "new") labels = labels.filter((l) => !l.printedAt);
     }
-    const res = await fetch(`/api/shipping/labels/print?${q}&format=zpl`);
-    if (!res.ok) throw new Error("Couldn't load the labels");
-    const zpl = await res.text();
-    if (!zpl.trim()) {
-      // Labels bought as images (before switching to Zebra) still print through the browser
-      window.open(`/api/shipping/labels/print?${q}`, "_blank");
-      return;
+    // ZPL labels go as they are; labels bought as images (UPS GIF / USPS PNG) are converted for the Zebra
+    const dpi = Number(printSettings().zebraDpi) || 203;
+    const jobs = [];
+    for (const l of labels) {
+      if (l.format === "ZPL") jobs.push(...l.data);
+      else {
+        const { imageToZpl } = await import("./zpl.js");
+        for (const d of l.data) jobs.push(await imageToZpl(d, l.format, dpi));
+      }
     }
-    const device = await sendZpl(zpl);
-    const ids = st.labels.map((l) => l.id);
-    if (ids.length) fetch("/api/shipping/labels/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }) }).catch(() => {});
-    toast(`Sent to ${device.name || "Zebra printer"}`);
+    const device = await sendZpl(jobs.join("\n"));
+    fetch("/api/shipping/labels/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: labels.map((l) => l.id) }) }).catch(() => {});
+    toast(`${labels.length === 1 ? "Label" : `${labels.length} labels`} sent to ${device.name || "Zebra printer"}`);
     return;
   }
   const url = `/api/shipping/labels/print?${q}`;
@@ -115,10 +120,47 @@ export async function printLabels({ ids, batch }, win = null) {
   else window.open(url, "_blank");
 }
 
+/** Zebra + 4×6 slips: send them straight to the printer (unless turned off on this computer). */
+export const slipsDirect = () => printSettings().labels === "zebra" && printSettings().slips === "4x6" && printSettings().slipsDirect !== false;
+
 export function openPackingSlips(orderIds, win = null) {
+  if (slipsDirect()) {
+    if (win && !win.closed) win.close();
+    return printSlipsToZebra(orderIds);
+  }
   const url = `/api/shipping/packing-slips?size=${printSettings().slips}&ids=${orderIds.map(encodeURIComponent).join(",")}`;
   if (win && !win.closed) win.location.href = url;
   else if (!window.open(url, "_blank")) toast("Allow pop-ups for this site to print packing slips", true);
+}
+
+/** Draws each slip, converts it to ZPL and sends it to the Zebra — no window, no dialog. */
+export async function printSlipsToZebra(orderIds, { sample = false } = {}) {
+  try {
+    const res = await fetch(`/api/shipping/packing-slips/data?ids=${orderIds.map(encodeURIComponent).join(",")}`, { credentials: "same-origin" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Couldn't load the packing slips");
+    let slips = data.slips;
+    if (data.printed.length && !sample) {
+      const when = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      const lines = data.printed.slice(0, 8).map((p) => `${p.name} — printed ${when(p.at)}${p.count > 1 ? ` (${p.count} times)` : ""}`);
+      const freshCount = slips.length - data.printed.length;
+      const choice = await reprintChoice(data.printed.length === slips.length
+        ? (slips.length === 1 ? "This packing slip was already printed" : `All ${slips.length} packing slips were already printed`)
+        : `${data.printed.length} of ${slips.length} packing slips were already printed`, lines, freshCount, "packing slip");
+      if (choice === "cancel") return;
+      if (choice === "new") slips = slips.filter((s) => !data.printed.some((p) => p.id === s.id));
+    }
+    toast(`Preparing ${slips.length} packing slip${slips.length === 1 ? "" : "s"}…`);
+    const { slipToZpl } = await import("./zpl.js");
+    const dpi = Number(printSettings().zebraDpi) || 203;
+    const zpl = [];
+    for (const s of slips) zpl.push(await slipToZpl(s.html, data.css, dpi));
+    const device = await sendZpl(zpl.join("\n"));
+    if (!sample) fetch("/api/shipping/packing-slips/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: slips.map((s) => s.id) }) }).catch(() => {});
+    toast(`${slips.length} packing slip${slips.length === 1 ? "" : "s"} sent to ${device.name || "the Zebra"}`);
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 export async function testZebra() {

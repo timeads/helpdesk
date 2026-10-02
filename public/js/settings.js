@@ -246,7 +246,29 @@ function printing() {
         ", set your ZT220 as its default printer, then open ", h("a", { href: "https://localhost:9101/ssl_support", target: "_blank", rel: "noopener" }, "localhost:9101/ssl_support"), " once and accept it so this page can talk to it."),
       h("h3", { class: "section", style: { margin: "6px 0 0" } }, "Packing slips"),
       radio("slips", "4x6", "4×6", "Same stock as labels"),
-      radio("slips", "letter", "Letter (8.5×11)", "Office printer")));
+      radio("slips", "letter", "Letter (8.5×11)", "Office printer"),
+      (() => {
+        const c = h("input", { type: "checkbox", checked: ps.slipsDirect !== false });
+        c.onchange = () => { savePrintSettings({ slipsDirect: c.checked }); toast("Saved for this computer"); };
+        return h("label", { class: "check" }, c, h("span", {}, h("b", {}, "Print 4×6 slips straight to the Zebra"),
+          h("div", { class: "small muted" }, "No window or print dialog — the slip is drawn as designed and sent like a label. Applies when labels print to the Zebra.")));
+      })(),
+      (() => {
+        const sel = h("select", { class: "input", style: { width: "auto" } },
+          [["203", "203 dpi (ZT220, ZD420 and most Zebras)"], ["300", "300 dpi"]].map(([v, t]) => h("option", { value: v, selected: String(ps.zebraDpi || 203) === v }, t)));
+        sel.onchange = () => { savePrintSettings({ zebraDpi: Number(sel.value) }); toast("Saved for this computer"); };
+        return h("label", { class: "field", style: { maxWidth: "360px" } }, "Zebra print resolution", sel);
+      })(),
+      h("div", { class: "row" }, (() => {
+        const b = h("button", { class: "btn" }, "Print a sample slip");
+        b.onclick = busy(b, async () => {
+          const { orders } = await api("/shipping/queue");
+          if (!orders?.length) return toast("No orders in the queue to use as a sample", true);
+          const { printSlipsToZebra } = await import("./printing.js");
+          await printSlipsToZebra([orders[0].id], { sample: true }); // a test: not counted as printed
+        });
+        return b;
+      })())));
 }
 
 function profile() {

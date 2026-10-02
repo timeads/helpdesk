@@ -584,6 +584,17 @@ shipping.get("/labels/print-status", async (c) => {
   return c.json({ labels: rows.filter((r: any) => r.labels !== "[]").map((r: any) => ({ id: r.id, name: r.order_name, printedAt: r.printed_at, count: r.print_count })) });
 });
 
+/** For Zebra printing: every label in the selection (ZPL as text, images as base64) and whether it was printed before. */
+shipping.get("/labels/print-data", async (c) => {
+  const rows = await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") });
+  return c.json({
+    labels: rows.filter((r: any) => r.labels !== "[]").map((r: any) => {
+      const data = JSON.parse(r.labels) as string[];
+      return { id: r.id, name: r.order_name, format: r.label_format, data: r.label_format === "ZPL" ? data.map((l) => zplOf([l])) : data, printedAt: r.printed_at, count: r.print_count };
+    }),
+  });
+});
+
 shipping.post("/labels/printed", async (c) => {
   const { ids } = await c.req.json<{ ids: number[] }>();
   const list = (Array.isArray(ids) ? ids : []).map(Number).filter((n) => n > 0).slice(0, 200);
@@ -689,6 +700,42 @@ shipping.post("/packing-slips/printed", async (c) => {
     ).bind(id)));
   }
   return c.json({ ok: true });
+});
+
+/**
+ * Slips for printing straight to a Zebra: the HTML of each slip (product photos inlined so the
+ * browser can draw them) plus which were printed before. The browser turns each into ZPL.
+ */
+shipping.get("/packing-slips/data", async (c) => {
+  const ids = (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 50);
+  if (!ids.length) throw new HttpError(400, "No orders selected");
+  const orders = demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids);
+  const described = await describe(c.env, orders);
+  const from = await getSetting<Address | null>(c.env, "ship_from", null);
+  const layout = await slipLayout(c.env);
+  if (layout.itemImages) {
+    const urls = [...new Set(described.flatMap((o) => o.lineItems.nodes.map((l) => l.image?.url).filter((u): u is string => !!u && !u.startsWith("data:"))))].slice(0, 25);
+    const inlined = new Map<string, string>();
+    await Promise.all(urls.map(async (u) => {
+      try {
+        const r = await fetch(u);
+        if (!r.ok) return;
+        const type = r.headers.get("content-type") ?? "image/jpeg";
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        if (bytes.length > 400_000) return;
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        inlined.set(u, `data:${type};base64,${btoa(bin)}`);
+      } catch { /* that photo is left blank */ }
+    }));
+    for (const o of described) for (const l of o.lineItems.nodes) if (l.image?.url) l.image = { ...l.image, url: inlined.get(l.image.url) ?? "" };
+  }
+  const prints = await idMap(c.env, "SELECT order_id, printed_at || '|' || print_count AS v FROM packing_slip_prints WHERE order_id IN (?)", described.map((o) => o.id));
+  return c.json({
+    css: SLIP_CSS,
+    slips: described.map((o) => ({ id: o.id, name: o.name, html: renderSlip(o, "4x6", from, layout) })),
+    printed: described.filter((o) => prints.has(o.id)).map((o) => { const [at, n] = prints.get(o.id)!.split("|"); return { id: o.id, name: o.name, at, count: Number(n) || 1 }; }),
+  });
 });
 
 shipping.get("/packing-slips", async (c) => {
