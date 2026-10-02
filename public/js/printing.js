@@ -128,7 +128,13 @@ export async function zebraDiagnostics() {
   let device;
   try {
     device = await zebraPrinter();
-    out.push({ ok: true, text: `Default printer: ${device.name || "found"}` });
+    const info = [device.name || "(no name)", device.connection, device.uid].filter(Boolean).join(" · ");
+    out.push({ ok: !!device.name, text: `Default printer: ${info}${device.name ? "" : " — Browser Print returned an incomplete printer; pick the ZT220 again in Browser Print's settings"}` });
+    try {
+      const r = await agentFetch("/available");
+      const list = (await r.json())?.printer ?? [];
+      out.push({ ok: list.length > 0, text: list.length ? `Printers Browser Print can see: ${list.map((d) => `${d.name} (${d.connection})`).join(", ")}` : "Browser Print can't see any printer — check the USB cable and that the printer is on" });
+    } catch { /* older Browser Print versions don't list */ }
   } catch (e) {
     out.push({ ok: false, text: e.message });
     return out;
