@@ -1246,3 +1246,7 @@ body.order-open { overflow: hidden; }
 .scan-box-pill svg { width: 13px; height: 13px; }
 .scan-box-pill.current { border-color: var(--ochre); color: var(--text); box-shadow: 0 0 0 2px var(--ochre-soft); }
 .scan-box-pill.packed { background: var(--mint-soft); color: var(--mint-ink); border-color: transparent; }
+.scan-fill { justify-content: space-between; margin-top: 12px; }
+.scan-item .count-btn { background: none; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 2px 6px; color: inherit; cursor: pointer; }
+.scan-item .count-btn:not(:disabled):hover { border-color: var(--border-strong); background: var(--surface); }
+.scan-item .count-btn:disabled { cursor: default; }

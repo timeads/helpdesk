@@ -60,7 +60,7 @@ export function renderScan(root, { openSlideout }) {
       const same = st.order?.id === order.id;
       st.order = order;
       st.boxes = boxes ?? [];
-      if (!same) { st.byBox = new Map(); st.packed = new Set(); }
+      if (!same) { st.byBox = new Map(); st.packed = new Set(); st.manual = false; }
       // A split order scanned by its order number (an older slip) packs as a whole; a box's slip packs that box
       st.boxN = st.boxes.length && box ? box : null;
       const key = st.boxN ?? 0;
@@ -218,7 +218,8 @@ export function renderScan(root, { openSlideout }) {
       const win = reserveWindow();
       try {
         const qty = partial ? (l) => st.counts.get(l.id) : (l) => l.quantity;
-        const body = { orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: verified };
+        // Counts filled in by hand don't count as checked with the scanner
+        const body = { orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: verified && !st.manual };
         if (partial) body.partial = o.lineItems.nodes.map((l) => ({ id: l.id, qty: st.counts.get(l.id) }));
         // The box on screen (when changed, or for a partial shipment with only the scanned items in it)
         if (st.box && (st.box.changed || partial)) {
@@ -259,17 +260,33 @@ export function renderScan(root, { openSlideout }) {
         h("button", { class: "btn sm", onclick: () => openSlideout(o) }, "Open label builder")),
       blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked) : null,
       st.boxN ? boxStrip() : null,
+      boxVerified() ? null : h("div", { class: "row scan-fill" },
+        h("span", { class: "small muted" }, `${shown().reduce((n, l) => n + target(l), 0)} items${st.boxN ? ` in box ${st.boxN}` : ""} · ${shown().reduce((n, l) => n + Math.min(st.counts.get(l.id), target(l)), 0)} packed`),
+        h("button", { class: "btn sm", title: "Count every item as packed without scanning each one", onclick: () => {
+          for (const l of shown()) st.counts.set(l.id, target(l));
+          st.manual = true;
+          if (st.boxN) st.packed.add(st.boxN);
+          beep(true);
+          draw();
+          focus();
+        } }, icon("check"), st.boxN ? `Mark all of box ${st.boxN} packed` : "Mark all packed")),
       h("div", { class: "scan-items" }, shown().map((l) => {
         const n = st.counts.get(l.id);
         const done = n >= target(l);
         const plus = h("button", { class: "btn sm ghost", title: "Count one without scanning", onclick: () => {
-          if (n < target(l)) { st.counts.set(l.id, n + 1); if (st.boxN && boxVerified()) st.packed.add(st.boxN); draw(); focus(); }
+          if (n < target(l)) { st.counts.set(l.id, n + 1); st.manual = true; if (st.boxN && boxVerified()) st.packed.add(st.boxN); draw(); focus(); }
         } }, icon("plus"));
         return h("div", { class: "scan-item" + (done ? " done" : "") },
           h("span", { class: "tick" }, done ? icon("check") : null),
           l.image ? h("img", { src: l.image.url, alt: "" }) : h("div", { class: "ph" }),
           h("div", { style: { minWidth: 0, flex: 1 } }, h("b", {}, l.title), h("div", { class: "small muted" }, [l.variantTitle, l.sku && `SKU ${l.sku}`, l.variant?.barcode && `Barcode ${l.variant.barcode}`].filter(Boolean).join(" · "))),
-          h("span", { class: "count" }, `${n} / ${target(l)}`), plus);
+          h("button", { class: "count count-btn", title: done ? null : `Mark all ${target(l)} packed`, disabled: done, onclick: () => {
+            st.counts.set(l.id, target(l));
+            st.manual = true;
+            if (st.boxN && boxVerified()) st.packed.add(st.boxN);
+            draw();
+            focus();
+          } }, `${n} / ${target(l)}`), plus);
       })),
       h("div", { class: "row", style: { marginTop: "14px", justifyContent: "space-between" } },
         h("div", { class: "small muted" },
