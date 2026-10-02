@@ -76,6 +76,17 @@ async function idSet(env: Env, sql: string, ids: string[]) {
   return out;
 }
 
+async function idMap(env: Env, sql: string, ids: string[]) {
+  const out = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    if (!chunk.length) continue;
+    const { results } = await env.DB.prepare(sql.replace("(?)", `(${chunk.map(() => "?").join(",")})`)).bind(...chunk).all<{ order_id: string; v: string }>();
+    results.forEach((r) => out.set(r.order_id, r.v));
+  }
+  return out;
+}
+
 /** Everything the queue and slideout need about an order, computed once on the server. */
 async function describe(env: Env, orders: ShopifyOrder[]) {
   const ids = orders.map((o) => o.id);
@@ -83,7 +94,7 @@ async function describe(env: Env, orders: ShopifyOrder[]) {
     planOrders(env, orders),
     holdsFor(env, ids),
     idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND order_id IN (?)", ids),
-    idSet(env, "SELECT order_id FROM packing_slip_prints WHERE order_id IN (?)", ids),
+    idMap(env, "SELECT order_id, printed_at AS v FROM packing_slip_prints WHERE order_id IN (?)", ids),
     loadDrafts(env, ids),
     loadPresets(env),
   ]);
@@ -102,6 +113,7 @@ async function describe(env: Env, orders: ShopifyOrder[]) {
       hold,
       hasLabel: labelled.has(o.id),
       slipPrinted: slips.has(o.id),
+      slipPrintedAt: slips.get(o.id) ?? null,
       itemCount: itemCount(o),
       itemsWeight: itemsWeightLb(o),
       shippingPaid: shippingPaid(o),
@@ -432,7 +444,42 @@ function zplOf(labels: string[]): string {
   return labels.map((l) => new TextDecoder().decode(base64UrlDecodeBytes(l.replace(/\+/g, "-").replace(/\//g, "_")))).join("\n");
 }
 
-function labelPage(title: string, labels: { data: string; format: string }[]) {
+/**
+ * Print-page header: prints straight away when nothing was printed before; otherwise shows what
+ * was already printed (and when) and waits, with "print again" and "only the new ones" buttons.
+ * The print is recorded only when it's actually sent to the printer.
+ */
+function printGuard(o: { what: string; markUrl: string; markIds: (string | number)[]; already: { name: string; at: string; count: number }[]; total: number; newOnlyUrl?: string | null }) {
+  const warn = o.already.length > 0;
+  const list = o.already.slice(0, 12).map((a) => `<li><b>${escapeHtml(a.name)}</b> — <time data-at="${escapeHtml(a.at)}">${escapeHtml(a.at)}</time>${a.count > 1 ? ` (${a.count} times)` : ""}</li>`).join("");
+  const banner = warn
+    ? `<div class="guard"><div class="guard-head">⚠ ${o.already.length === o.total ? (o.total === 1 ? `This ${o.what} was already printed` : `All ${o.total} ${o.what}s were already printed`) : `${o.already.length} of ${o.total} ${o.what}s were already printed`}</div>
+       <ul>${list}${o.already.length > 12 ? `<li>…and ${o.already.length - 12} more</li>` : ""}</ul>
+       <div class="guard-actions"><button class="again" onclick="go()">Print ${o.total === 1 ? "it" : "all"} again</button>${o.newOnlyUrl ? `<a class="only" href="${escapeHtml(o.newOnlyUrl)}">Print only the ${o.total - o.already.length} not printed yet</a>` : ""}<button onclick="close()">Cancel</button></div></div>`
+    : "";
+  const script = `<script>
+const MARK = ${JSON.stringify({ url: o.markUrl, ids: o.markIds })};
+let marked = false;
+function go() {
+  if (!marked) { marked = true; fetch(MARK.url, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: MARK.ids }) }).catch(() => {}); }
+  document.querySelector(".guard")?.remove();
+  print();
+}
+document.querySelectorAll("time[data-at]").forEach((t) => { t.textContent = new Date(t.dataset.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); });
+${warn ? "" : "addEventListener('load', () => setTimeout(go, 300));"}
+</script>`;
+  return { banner, script };
+}
+
+const GUARD_CSS = `.guard { font: 14px/1.4 system-ui, sans-serif; margin: 12px; padding: 14px 16px; border-radius: 10px; background: #fff4d6; border: 2px solid #c8892b; color: #3d2a00; max-width: 520px; }
+.guard-head { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+.guard ul { margin: 6px 0 12px; padding-left: 20px; }
+.guard-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.guard button, .guard a { font: 600 14px system-ui, sans-serif; padding: 8px 14px; border-radius: 8px; border: 1px solid #b07a20; background: #fff; color: #3d2a00; cursor: pointer; text-decoration: none; }
+.guard .only { background: #213838; border-color: #213838; color: #fff; }
+@media print { .guard { display: none; } }`;
+
+function labelPage(title: string, labels: { data: string; format: string }[], guard?: ReturnType<typeof printGuard>) {
   // UPS GIF labels are landscape and get rotated onto the 4×6 page; USPS PNG labels are already 4×6 portrait
   const pages = labels
     .map((l) => (l.format === "PNG"
@@ -448,10 +495,12 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .page img.portrait { width: 4in; height: 6in; object-fit: contain; display: block; }
 .bar { font: 14px system-ui, sans-serif; padding: 12px; display: flex; gap: 8px; align-items: center; }
 @media print { .bar { display: none; } }
+${GUARD_CSS}
 </style></head><body>
-<div class="bar"><button onclick="print()">Print</button> <span>${labels.length} label${labels.length === 1 ? "" : "s"} · 4×6 in, margins none, scale 100%</span></div>
+${guard?.banner ?? ""}
+<div class="bar"><button onclick="${guard ? "go()" : "print()"}">Print</button> <span>${labels.length} label${labels.length === 1 ? "" : "s"} · 4×6 in, margins none, scale 100%</span></div>
 ${pages}
-<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>
+${guard?.script ?? "<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>"}
 </body></html>`;
 }
 
@@ -515,14 +564,40 @@ shipping.get("/labels/print", async (c) => {
   if (!gif.length && zpl.length) {
     return new Response(zplOf(zpl), { headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="labels.zpl"` } });
   }
-  return c.html(labelPage(rows.length === 1 ? `Label ${rows[0].order_name ?? ""}` : `${rows.length} labels`, gif));
+  const printable = rows.filter((r) => r.labels !== "[]");
+  const already = printable.filter((r) => r.printed_at);
+  const fresh = printable.filter((r) => !r.printed_at);
+  const guard = printGuard({
+    what: "label",
+    markUrl: "/api/shipping/labels/printed",
+    markIds: printable.map((r) => r.id),
+    already: already.map((r) => ({ name: r.order_name ?? `Label ${r.id}`, at: r.printed_at, count: r.print_count })),
+    total: printable.length,
+    newOnlyUrl: already.length && fresh.length ? `/api/shipping/labels/print?ids=${fresh.map((r) => r.id).join(",")}` : null,
+  });
+  return c.html(labelPage(rows.length === 1 ? `Label ${rows[0].order_name ?? ""}` : `${rows.length} labels`, gif, guard));
+});
+
+/** For Zebra printing: which of these labels were printed before (the browser asks before resending). */
+shipping.get("/labels/print-status", async (c) => {
+  const rows = await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") });
+  return c.json({ labels: rows.filter((r: any) => r.labels !== "[]").map((r: any) => ({ id: r.id, name: r.order_name, printedAt: r.printed_at, count: r.print_count })) });
+});
+
+shipping.post("/labels/printed", async (c) => {
+  const { ids } = await c.req.json<{ ids: number[] }>();
+  const list = (Array.isArray(ids) ? ids : []).map(Number).filter((n) => n > 0).slice(0, 200);
+  if (list.length) {
+    await c.env.DB.prepare(`UPDATE shipments SET printed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), print_count = print_count + 1 WHERE id IN (${list.map(() => "?").join(",")})`).bind(...list).run();
+  }
+  return c.json({ ok: true });
 });
 
 /** Printable label page (GIF) or raw ZPL for thermal printers. */
 shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
-  const s = await c.env.DB.prepare("SELECT labels, label_format, tracking_numbers, order_name FROM shipments WHERE id = ?")
+  const s = await c.env.DB.prepare("SELECT id, labels, label_format, tracking_numbers, order_name, printed_at, print_count FROM shipments WHERE id = ?")
     .bind(Number(c.req.param("id")))
-    .first<{ labels: string; label_format: string; tracking_numbers: string; order_name: string | null }>();
+    .first<{ id: number; labels: string; label_format: string; tracking_numbers: string; order_name: string | null; printed_at: string | null; print_count: number }>();
   if (!s) throw new HttpError(404, "Label not found");
   const labels: string[] = JSON.parse(s.labels);
   if (!labels.length) throw new HttpError(404, "Imported from Redo — reprint it in Redo or UPS");
@@ -532,7 +607,11 @@ shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
       headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="ups-${JSON.parse(s.tracking_numbers)[0]}.zpl"` },
     });
   }
-  return c.html(labelPage(`Label ${s.order_name ?? ""}`, labels.map((data) => ({ data, format: s.label_format }))));
+  const guard = printGuard({
+    what: "label", markUrl: "/api/shipping/labels/printed", markIds: [s.id], total: 1,
+    already: s.printed_at ? [{ name: s.order_name ?? `Label ${s.id}`, at: s.printed_at, count: s.print_count }] : [],
+  });
+  return c.html(labelPage(`Label ${s.order_name ?? ""}`, labels.map((data) => ({ data, format: s.label_format })), guard));
 });
 
 shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
@@ -566,15 +645,17 @@ shipping.get("/batches", async (c) => {
 });
 
 // ---- Packing slips (layout from Settings → Packing slip)
-const slipPage = (body: string, count: number, size: "4x6" | "letter", autoPrint: boolean) => `<!doctype html><html><head><meta charset="utf-8"><title>Packing slips</title><style>
+const slipPage = (body: string, count: number, size: "4x6" | "letter", autoPrint: boolean, guard?: ReturnType<typeof printGuard>) => `<!doctype html><html><head><meta charset="utf-8"><title>Packing slips</title><style>
 @page { size: ${size === "letter" ? "8.5in 11in" : "4in 6in"}; }
 ${SLIP_CSS}
 .bar { font: 14px system-ui, sans-serif; padding: 12px; display: flex; gap: 8px; align-items: center; }
 @media print { .bar { display: none; } }
+${GUARD_CSS}
 </style></head><body>
-${autoPrint ? `<div class="bar"><button onclick="print()">Print</button><span>${count} packing slip${count === 1 ? "" : "s"} · ${size === "letter" ? "Letter" : "4×6"}</span></div>` : ""}
+${guard?.banner ?? ""}
+${autoPrint ? `<div class="bar"><button onclick="${guard ? "go()" : "print()"}">Print</button><span>${count} packing slip${count === 1 ? "" : "s"} · ${size === "letter" ? "Letter" : "4×6"}</span></div>` : ""}
 ${body}
-${autoPrint ? "<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>" : ""}
+${autoPrint ? guard?.script ?? "<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>" : ""}
 </body></html>`;
 
 shipping.get("/slip-layout", async (c) => c.json({ layout: await slipLayout(c.env) }));
@@ -598,6 +679,18 @@ shipping.post("/packing-slips/preview", async (c) => {
   return c.html(slipPage(renderSlip(described, size, from, cleanSlip(body.layout)), 1, size, false));
 });
 
+shipping.post("/packing-slips/printed", async (c) => {
+  const { ids } = await c.req.json<{ ids: string[] }>();
+  const list = (Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string" && x.startsWith("gid://")).slice(0, 100);
+  if (list.length) {
+    await c.env.DB.batch(list.map((id) => c.env.DB.prepare(
+      `INSERT INTO packing_slip_prints (order_id, printed_at, print_count) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 1)
+       ON CONFLICT(order_id) DO UPDATE SET printed_at = excluded.printed_at, print_count = print_count + 1`,
+    ).bind(id)));
+  }
+  return c.json({ ok: true });
+});
+
 shipping.get("/packing-slips", async (c) => {
   const ids = (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 100);
   if (!ids.length) throw new HttpError(400, "No orders selected");
@@ -605,15 +698,19 @@ shipping.get("/packing-slips", async (c) => {
   const orders = demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids);
   const described = await describe(c.env, orders);
   const from = await getSetting<Address | null>(c.env, "ship_from", null);
-  await c.env.DB.batch(
-    described.map((o) =>
-      c.env.DB.prepare(
-        "INSERT INTO packing_slip_prints (order_id, printed_at) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(order_id) DO UPDATE SET printed_at = excluded.printed_at",
-      ).bind(o.id),
-    ),
-  );
   const layout = await slipLayout(c.env);
-  return c.html(slipPage(described.map((o) => renderSlip(o, size, from, layout)).join(""), described.length, size, true));
+  const prints = await idMap(c.env, "SELECT order_id, printed_at || '|' || print_count AS v FROM packing_slip_prints WHERE order_id IN (?)", described.map((o) => o.id));
+  const already = described.filter((o) => prints.has(o.id));
+  const fresh = described.filter((o) => !prints.has(o.id));
+  const guard = printGuard({
+    what: "packing slip",
+    markUrl: "/api/shipping/packing-slips/printed",
+    markIds: described.map((o) => o.id),
+    already: already.map((o) => { const [at, n] = prints.get(o.id)!.split("|"); return { name: o.name, at, count: Number(n) || 1 }; }),
+    total: described.length,
+    newOnlyUrl: already.length && fresh.length ? `/api/shipping/packing-slips?size=${size}&ids=${fresh.map((o) => encodeURIComponent(o.id)).join(",")}` : null,
+  });
+  return c.html(slipPage(described.map((o) => renderSlip(o, size, from, layout)).join(""), described.length, size, true, guard));
 });
 
 export default shipping;

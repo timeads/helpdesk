@@ -251,7 +251,7 @@ function renderQueue(root, params) {
             o.hold ? h("span", { class: "badge bad", title: o.hold }, "On hold") : null,
             o.paymentPending ? h("span", { class: "badge warn" }, "Payment pending") : null,
             o.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
-            o.slipPrinted ? h("span", { class: "badge plain", title: "Packing slip printed" }, "Slip printed") : null,
+            o.slipPrinted ? h("span", { class: "badge plain", title: o.slipPrintedAt ? `Packing slip printed ${fullTime(o.slipPrintedAt)}` : "Packing slip printed" }, "Slip printed") : null,
             o.plan.signature ? h("span", { class: "badge plain" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null));
         return tr;
       })))));
@@ -981,7 +981,8 @@ function buildLabelForm(root, o, presets, opts) {
       kv("Customer chose", o.requestedService || "—"),
       o.tags?.length ? h("div", { class: "op-tags" }, o.tags.map((t) => h("span", { class: "badge plain" }, t))) : null,
       h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
-        h("button", { class: "btn sm", onclick: () => openPackingSlips([o.id]) }, "Packing slip"),
+        h("button", { class: "btn sm", onclick: () => openPackingSlips([o.id]), title: o.slipPrintedAt ? `Printed ${fullTime(o.slipPrintedAt)}` : null },
+          "Packing slip", o.slipPrintedAt ? h("span", { class: "badge plain", style: { marginLeft: "4px" } }, icon("check"), "printed") : null),
         holdBtn,
         h("a", { class: "btn sm ghost", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Shopify", icon("ext")))),
     h("section", { class: "card op-card" },
