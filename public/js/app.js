@@ -77,7 +77,7 @@ function renderNav() {
       count ? h("span", { class: "count" }, count) : null,
     );
   mount(navEl,
-    h("a", { class: "brand", href: "/", "data-link": "" }, h("span", { class: "word" }, "Tuft the World"), h("span", { class: "sub" }, "Support desk")),
+    h("a", { class: "brand", href: "/", "data-link": "", "aria-label": "Tuft the World support desk" }, h("img", { class: "brand-logo", src: "/img/logo.png", alt: "Tuft the World" }), h("span", { class: "sub" }, "Support desk")),
     item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " dash-item"),
     h("div", { class: "nav-scroll" },
       h("div", { class: "nav-label" }, "Tickets"),
@@ -143,7 +143,7 @@ function renderLogin() {
   mount(root,
     h("div", { class: "login-wrap" },
       h("main", { class: "login-card" },
-        h("h1", { class: "word", style: { margin: 0 } }, "Tuft the World"),
+        h("h1", { style: { margin: 0 } }, h("img", { class: "login-logo", src: "/img/logo.png", alt: "Tuft the World" })),
         h("div", { class: "sub" }, "Support desk"),
         h("p", {}, "Every email to support@ in one queue, with the customer's orders beside it."),
         err ? h("div", { class: "notice bad", style: { marginBottom: "16px", textAlign: "left" } }, err) : null,

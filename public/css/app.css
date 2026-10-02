@@ -905,8 +905,7 @@ textarea.grow-input { resize: none; overflow: hidden; min-height: 38px; line-hei
   #app { grid-template-columns: 64px 1fr; }
   .sidebar { padding: 14px 8px 10px; align-items: center; }
   .sidebar .brand { padding: 0 0 18px; }
-  .sidebar .brand .word { font-size: 0; }
-  .sidebar .brand .word::first-letter { font-size: 26px; }
+  .sidebar .brand .brand-logo { width: 40px; height: 40px; }
   .sidebar .brand .sub, .sidebar .nav-label, .sidebar .me .name, .sidebar .me button span, .sidebar .me > .avatar { display: none; }
   .sidebar .me button { width: 40px; height: 40px; justify-content: center; border-radius: var(--radius-sm); }
   .sidebar .me button:hover { background: var(--teal-2); }
@@ -1168,3 +1167,8 @@ body.order-open { overflow: hidden; }
   .settings-pages a.active { background: var(--teal); color: var(--on-teal); border-color: transparent; padding: 6px 12px; }
   .settings-pages a svg { display: none; }
 }
+
+/* Logo */
+.brand { justify-items: start; }
+.brand-logo { width: 76px; height: auto; aspect-ratio: 587 / 580; display: block; filter: drop-shadow(0 2px 6px rgba(0,0,0,.25)); }
+.login-logo { width: 120px; height: auto; display: block; margin: 0 auto 6px; }
