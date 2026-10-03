@@ -117,3 +117,23 @@ export function splitAddressList(raw: string): string[] {
   if (cur.trim()) out.push(cur.trim());
   return out;
 }
+
+/**
+ * The real type of a base64 image from its first bytes. Email attachments are often labelled
+ * wrong (a JPEG sent as "image/png"), and the AI rejects a mismatch. Null when it isn't one we know.
+ */
+export function sniffImageType(base64: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null {
+  let head: string;
+  try {
+    const start = base64.slice(0, 24).replace(/-/g, "+").replace(/_/g, "/");
+    head = atob(start.slice(0, start.length - (start.length % 4)));
+  } catch {
+    return null;
+  }
+  const b = (i: number) => head.charCodeAt(i);
+  if (b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) return "image/jpeg";
+  if (b(0) === 0x89 && head.slice(1, 4) === "PNG") return "image/png";
+  if (head.startsWith("GIF8")) return "image/gif";
+  if (head.startsWith("RIFF") && head.slice(8, 12) === "WEBP") return "image/webp";
+  return null;
+}

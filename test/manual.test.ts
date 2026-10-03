@@ -70,6 +70,7 @@ describe("repair manual scan", () => {
     const first = calls[0].messages[0].content;
     const img = first.find((b: any) => b.type === "image");
     expect(img.source.data).toBe("iVBORw0KGgo+/");
+    expect(img.source.media_type).toBe("image/png"); // labelled image/jpeg, but the bytes are a PNG
     expect(first.some((b: any) => b.text?.includes("noise.mp4"))).toBe(true);
 
     const topic = db.raw.prepare("SELECT * FROM manual_topics").get() as any;

@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
-import { HttpError } from "./util";
+import { HttpError, sniffImageType } from "./util";
 import { manualKnowledge } from "./manual";
 
 export const aiConfigured = (env: Env) => !!env.ANTHROPIC_API_KEY;
@@ -132,4 +132,101 @@ export async function ticketInsights(env: Env, subject: string, thread: DraftInp
     if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
     throw e;
   }
+}
+
+// ---------------------------------------------------------------- Live chat
+
+export interface ChatAnswer {
+  reply: string;
+  handoff: boolean;
+  reason: string;
+}
+
+export interface ChatInput {
+  customerName: string | null;
+  open: boolean; // a person is around right now
+  hours: string;
+  transcript: { from: "visitor" | "ai" | "agent"; text: string; photos: number }[];
+  orders: unknown[]; // only orders whose email matches the chat's email
+  mismatched: string[]; // order numbers mentioned that belong to another email
+  photos: { mime: string; data: string }[];
+  page: string | null;
+}
+
+const CHAT_SCHEMA = {
+  type: "object",
+  properties: {
+    reply: { type: "string", description: "The chat message to the customer: plain text, short." },
+    handoff: { type: "boolean", description: "True when a teammate needs to take over." },
+    reason: { type: "string", description: "One short internal line for the team: what the customer needs and why (not shown to the customer)." },
+  },
+  required: ["reply", "handoff", "reason"],
+  additionalProperties: false,
+};
+
+const CHAT_SYSTEM = `You are the live chat assistant on the website of Tuft the World, a rug-tufting supply store (tufting guns, yarn, cloth, frames, workshops in Philadelphia).
+
+What you can use: <store_knowledge> (policies, product info, repair guides and saved replies) and <verified_order> data. If they don't answer the question, don't guess — hand off to a teammate.
+
+How to write: this is a small chat window, so keep each reply to 1–4 short sentences of plain text (no markdown headings or bold). Short numbered steps are fine for troubleshooting. Write as "we" for the store. If asked, say you're the store's AI assistant; never claim to be a person.
+
+Orders: only discuss an order inside <verified_order>. If the customer asks about an order and none is verified, ask for the order number from their confirmation email (like #68762-TG); it must have been placed with the email they gave this chat. If an order they named is listed under <unverified>, say you can't share details for that order here and offer to have a teammate email the address on the order.
+
+Never promise refunds, replacements, discounts, warranty decisions, or delivery dates. For those, gather what the team needs (order number, what happened, a photo or video of the problem) and hand off.
+
+Set handoff to true when: they ask for a person; the request needs a decision or money; they're frustrated; you can't resolve it from the knowledge; or they've sent photos of a problem a teammate should look at. When handing off, acknowledge and give any useful last step — the system tells them whether a teammate is joining now or replying by email, so don't promise either.`;
+
+/** The AI's reply in a website chat, as JSON (reply + whether a person should take over). */
+export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer> {
+  if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key to use AI chat");
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const [knowledge, macros] = await Promise.all([knowledgeText(env), savedReplies(env)]);
+  const convo = input.transcript
+    .map((m) => `${m.from === "visitor" ? "Customer" : m.from === "ai" ? "You (AI)" : "Teammate"}: ${m.text.slice(0, 3000)}${m.photos ? ` [sent ${m.photos} photo${m.photos > 1 ? "s" : ""}]` : ""}`)
+    .join("\n");
+  const text = [
+    knowledge || macros ? `<store_knowledge>\n${[knowledge, macros].filter(Boolean).join("\n\n")}\n</store_knowledge>` : "",
+    input.orders.length ? `<verified_order>\n${JSON.stringify(input.orders).slice(0, 12000)}\n</verified_order>` : "<verified_order>none</verified_order>",
+    input.mismatched.length ? `<unverified>${input.mismatched.join(", ")}</unverified>` : "",
+    `<context>Customer name: ${input.customerName || "unknown"}. Team available right now: ${input.open ? "yes" : `no (hours: ${input.hours})`}.${input.page ? ` Chatting from: ${input.page.slice(0, 200)}` : ""}</context>`,
+    `<chat>\n${convo.slice(-30000)}\n</chat>`,
+    input.photos.length ? "The customer's most recent photos are attached above." : "",
+    "Write the next reply to the customer.",
+  ].filter(Boolean).join("\n\n");
+  const content: Anthropic.Beta.BetaContentBlockParam[] = [
+    ...input.photos.flatMap((p) => {
+      const type = sniffImageType(p.data);
+      return type ? [{ type: "image" as const, source: { type: "base64" as const, media_type: type, data: p.data } }] : [];
+    }),
+    { type: "text", text },
+  ];
+  const model = env.AI_MODEL || "claude-opus-5-5";
+  const isHaiku = model.startsWith("claude-haiku");
+  try {
+    const response = await client.beta.messages.create({
+      model,
+      max_tokens: 4000,
+      system: CHAT_SYSTEM,
+      messages: [{ role: "user", content }],
+      output_config: { format: { type: "json_schema", schema: CHAT_SCHEMA }, ...(isHaiku ? {} : { effort: "low" as const }) },
+      ...(isHaiku ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
+    });
+    if (response.stop_reason === "refusal") return { reply: "Let me get a teammate to help with this one.", handoff: true, reason: "The AI declined to answer" };
+    const out = response.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text").map((b) => b.text).join("");
+    const parsed = JSON.parse(out) as ChatAnswer;
+    if (!parsed.reply?.trim()) throw new HttpError(502, "The AI returned an empty reply");
+    return { reply: parsed.reply.trim().slice(0, 2000), handoff: !!parsed.handoff, reason: String(parsed.reason ?? "").slice(0, 300) };
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    if (e instanceof Anthropic.AuthenticationError) throw new HttpError(502, "Anthropic API key was rejected");
+    if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "AI is rate limited");
+    if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
+    throw e;
+  }
+}
+
+/** Saved replies (macros) as extra knowledge for chat answers. */
+async function savedReplies(env: Env): Promise<string> {
+  const { results } = await env.DB.prepare("SELECT name, body FROM macros ORDER BY uses DESC LIMIT 40").all<{ name: string; body: string }>().catch(() => ({ results: [] as { name: string; body: string }[] }));
+  return results.map((m) => `## Saved reply: ${m.name}\n${m.body}`).join("\n\n").slice(0, 15000);
 }

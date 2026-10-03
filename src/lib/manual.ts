@@ -4,7 +4,7 @@
 // also feed AI reply drafts.
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
-import { HttpError } from "./util";
+import { HttpError, sniffImageType } from "./util";
 import { getAttachment } from "./gmail";
 
 const REPAIR_WORDS = [
@@ -175,8 +175,11 @@ export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
         if (isImage && m.gmail_message_id && ticketImages < MAX_IMAGES_PER_TICKET && images < MAX_IMAGES) {
           try {
             const data = (await getAttachment(env, m.gmail_message_id, a.id)).replace(/-/g, "+").replace(/_/g, "/");
+            // Go by the file's bytes, not its label: a JPEG labelled "image/png" is rejected by the AI
+            const type = sniffImageType(data);
+            if (!type) continue;
             pics.push({ type: "text", text: `Photo ${ref} (ticket ${t.id}):` });
-            pics.push({ type: "image", source: { type: "base64", media_type: a.mimeType.toLowerCase() as "image/jpeg", data } });
+            pics.push({ type: "image", source: { type: "base64", media_type: type, data } });
             ticketImages++;
             images++;
           } catch { /* the photo is still listed by name */ }
