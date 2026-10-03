@@ -90,3 +90,32 @@ describe("knowledge base", () => {
     await expect(acceptSuggestion(env, s.id, {}, 1)).rejects.toThrow(/already handled/);
   });
 });
+
+describe("accepting suggestions in bulk", () => {
+  it("accepts every waiting suggestion in batches, keeping edits made on the page", async () => {
+    const { Hono } = await import("hono");
+    const { default: kbRoutes } = await import("../src/routes/kb");
+    const app = new Hono();
+    app.use("*", async (c: any, next) => { c.set("agent", { id: 1, name: "Tim", role: "admin" }); await next(); });
+    app.route("/kb", kbRoutes as any);
+    const ins = env.DB.raw.prepare("INSERT INTO kb_suggestions (article_id, topic_id, title, content_html, reason) VALUES (?, 'troubleshoot', ?, ?, 'r')");
+    for (let i = 0; i < 35; i++) ins.run("ts-jam", `Tip ${i}`, `<p>Tip number ${i}.</p>`);
+    ins.run(null, "Brand new guide", "<p>All about frames.</p>");
+    const first = (await env.DB.prepare("SELECT id FROM kb_suggestions ORDER BY id LIMIT 1").first()).id;
+
+    const post = (body: unknown) => app.request("/kb/suggestions/accept-all", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, env).then((r) => r.json() as any);
+    const edits = { [first]: { title: "Edited tip", content_html: "<p>Edited by Tim.</p>", article_id: "ts-jam" } };
+    const a = await post({ edits });
+    expect(a).toMatchObject({ accepted: 30, remaining: 6, failed: [] });
+    const b = await post({ edits });
+    expect(b).toMatchObject({ accepted: 6, remaining: 0 });
+
+    const body = (await one("SELECT body_html FROM kb_articles WHERE id = 'ts-jam'")).body_html;
+    expect(body).toContain("<h3>Edited tip</h3>");
+    expect(body).toContain("Edited by Tim.");
+    expect(body).not.toContain("Tip number 0.");
+    expect(body).toContain("Tip number 34.");
+    expect(await one("SELECT status FROM kb_articles WHERE title = 'Brand new guide'")).toEqual({ status: "draft" });
+    expect((await one("SELECT COUNT(*) AS n FROM kb_suggestions WHERE status = 'pending'")).n).toBe(0);
+  });
+});

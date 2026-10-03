@@ -241,23 +241,61 @@ export function renderKb(main) {
     mount(detailEl, h("div", { class: "card" }, skeletonRows(5)));
     const { suggestions } = await api("/kb/suggestions");
     if (!suggestions.length) return mount(detailEl, h("div", { class: "card empty" }, h("p", {}, "No suggestions waiting.")));
+    edited.clear();
+    const total = Math.max(st.suggestions, suggestions.length);
+    const progress = h("span", { class: "small muted" });
+    const all = h("button", { class: "btn primary sm" }, icon("check"), `Accept all ${total}`);
+    all.onclick = busy(all, async () => {
+      if (!confirm(`Accept all ${total} suggestions? Additions go into their articles; new articles are created as drafts for you to review before publishing.`)) return;
+      let done = 0;
+      const failed = [];
+      for (;;) {
+        const r = await api("/kb/suggestions/accept-all", { method: "POST", body: { edits: Object.fromEntries(edited) } });
+        done += r.accepted;
+        failed.push(...r.failed);
+        progress.textContent = `Accepted ${done}…`;
+        if (!r.remaining || !(r.accepted + r.failed.length)) break;
+      }
+      toast(failed.length ? `Accepted ${done}; ${failed.length} couldn't be added (${failed[0]}) and were set aside` : `Accepted ${done} suggestions — press “Publish to store” when you're ready`, !!failed.length);
+      history.pushState(null, "", "/manual/kb");
+      renderKb(main);
+    });
+    const none = isAdmin ? h("button", { class: "btn sm ghost" }, "Dismiss all") : null;
+    if (none) none.onclick = busy(none, async () => {
+      if (!confirm(`Dismiss all ${total} suggestions?`)) return;
+      const r = await api("/kb/suggestions/dismiss-all", { method: "POST" });
+      toast(`Dismissed ${r.dismissed}`);
+      history.pushState(null, "", "/manual/kb");
+      renderKb(main);
+    });
     mount(detailEl, h("div", { class: "stack", style: { gap: "14px" } },
-      h("p", { class: "muted", style: { margin: 0 } }, "What the AI noticed in finished support conversations that the knowledge base doesn't cover yet. Edit before accepting if you like — accepted additions go into the article (new articles start as drafts)."),
-      suggestions.map((s) => suggestionCard(s))));
+      h("div", { class: "card kb-bulk" },
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h("b", {}, `${total} suggested update${total === 1 ? "" : "s"}`),
+          h("div", { class: "small muted" }, "What the AI noticed in finished support conversations that the knowledge base doesn't cover yet. Edit any card first if you like — your edits are kept when you accept all. Accepted additions go into the article; new articles start as drafts."),
+          progress),
+        isAdmin ? [all, none] : null),
+      suggestions.map((s) => suggestionCard(s)),
+      total > suggestions.length ? h("p", { class: "small muted" }, `Showing the newest ${suggestions.length}; “Accept all” takes all ${total}.`) : null));
   }
+  const edited = new Map(); // suggestion id → changes made on the page, used by “Accept all”
 
   function suggestionCard(s) {
     const target = h("select", { class: "input" },
       h("option", { value: "", selected: !s.article_id }, "New article (draft)"),
       st.articles.map((a) => h("option", { value: a.id, selected: a.id === s.article_id }, `Add to: ${a.title}`)));
     const title = h("input", { class: "input", value: s.title, "aria-label": "Heading" });
-    const { el: editor, body } = articleEditor(s.content_html, () => {}, true);
+    const remember = () => edited.set(String(s.id), { title: title.value, content_html: body.innerHTML, article_id: target.value || null });
+    const { el: editor, body } = articleEditor(s.content_html, remember, true);
+    title.addEventListener("input", remember);
+    target.addEventListener("change", remember);
     const card = h("div", { class: "card kb-sugg-card" });
     const accept = h("button", { class: "btn primary sm" }, icon("check"), "Accept");
     accept.onclick = busy(accept, async () => {
       const r = await api(`/kb/suggestions/${s.id}/accept`, { method: "POST", body: { title: title.value, content_html: body.innerHTML, article_id: target.value || null } });
       toast(target.value ? "Added to the article" : "New draft article created");
       card.remove();
+      edited.delete(String(s.id));
       Object.assign(st, await api("/kb"));
       drawStatus();
       drawList();
@@ -267,6 +305,7 @@ export function renderKb(main) {
     dismiss.onclick = busy(dismiss, async () => {
       await api(`/kb/suggestions/${s.id}/dismiss`, { method: "POST" });
       card.remove();
+      edited.delete(String(s.id));
       st.suggestions = Math.max(0, st.suggestions - 1);
       drawStatus();
       drawList();

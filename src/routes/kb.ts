@@ -136,6 +136,36 @@ kb.post("/suggestions/:id{[0-9]+}/accept", async (c) => {
   return c.json(await acceptSuggestion(c.env, Number(c.req.param("id")), b, c.get("agent").id));
 });
 
+/**
+ * Accept every waiting suggestion (oldest first, a batch per call; the page repeats until none are
+ * left). `edits` carries changes made on the page to particular suggestions.
+ */
+kb.post("/suggestions/accept-all", async (c) => {
+  requireAdmin(c);
+  const b = await c.req.json<{ edits?: Record<string, { title?: string; content_html?: string; article_id?: string | null }> }>().catch(() => ({}) as { edits?: undefined });
+  const { results } = await c.env.DB.prepare("SELECT id FROM kb_suggestions WHERE status = 'pending' ORDER BY created_at, id LIMIT 30").all<{ id: number }>();
+  let accepted = 0;
+  const failed: string[] = [];
+  for (const { id } of results) {
+    try {
+      await acceptSuggestion(c.env, id, b.edits?.[id] ?? {}, c.get("agent").id);
+      accepted++;
+    } catch (e) {
+      // e.g. its article was deleted: set it aside so the rest go through
+      await c.env.DB.prepare("UPDATE kb_suggestions SET status = 'dismissed' WHERE id = ?").bind(id).run();
+      failed.push((e as Error).message);
+    }
+  }
+  const left = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM kb_suggestions WHERE status = 'pending'").first<{ n: number }>();
+  return c.json({ accepted, failed, remaining: left?.n ?? 0 });
+});
+
+kb.post("/suggestions/dismiss-all", async (c) => {
+  requireAdmin(c);
+  const r = await c.env.DB.prepare("UPDATE kb_suggestions SET status = 'dismissed' WHERE status = 'pending'").run();
+  return c.json({ dismissed: r.meta.changes ?? 0 });
+});
+
 kb.post("/suggestions/:id{[0-9]+}/dismiss", async (c) => {
   await c.env.DB.prepare("UPDATE kb_suggestions SET status = 'dismissed' WHERE id = ?").bind(Number(c.req.param("id"))).run();
   return c.json({ ok: true });

@@ -1323,3 +1323,4 @@ a.view-chip { text-decoration: none; }
 .site-row { align-items: flex-start; padding: 6px 0; }
 .site-row input { margin-top: 4px; }
 .site-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; }
+.kb-bulk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 16px; position: sticky; top: 0; z-index: 2; }
