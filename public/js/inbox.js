@@ -256,7 +256,7 @@ function createInbox(main, loc) {
         h("div", { class: "top" },
           h("span", { class: "who" }, t.customer_name || t.customer_email),
           h("span", { class: "when", title: fullTime(t.last_message_at) }, relTime(t.last_message_at))),
-        h("div", { class: "subj" }, priorityChip(t.priority), h("span", {}, t.subject)),
+        h("div", { class: "subj" }, priorityChip(t.priority), t.channel === "chat" ? h("span", { class: "chat-tag", title: "Website chat" }, icon("chat")) : null, h("span", {}, t.subject)),
         h("div", { class: "snip" }, t.snippet),
         h("div", { class: "meta" },
           showStatus || t.status === "snoozed" ? statusBadge(t.status) : null,

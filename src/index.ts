@@ -12,6 +12,9 @@ import adminRoutes from "./routes/admin";
 import analyticsRoutes from "./routes/analytics";
 import manualRoutes from "./routes/manual";
 import rateCheckRoutes from "./routes/ratecheck";
+import chatPublicRoutes from "./routes/chat-public";
+import chatRoutes from "./routes/chat";
+import { sweepChats } from "./lib/chat";
 
 const app = new Hono<AppEnv>();
 
@@ -22,6 +25,7 @@ app.onError((err, c) => {
 });
 
 app.route("/auth", authRoutes);
+app.route("/chat-api", chatPublicRoutes);
 
 const api = new Hono<AppEnv>();
 api.use("*", requireAgent);
@@ -30,6 +34,7 @@ api.route("/shipping", shippingRoutes);
 api.route("/analytics", analyticsRoutes);
 api.route("/manual", manualRoutes);
 api.route("/rate-check", rateCheckRoutes);
+api.route("/chats", chatRoutes);
 api.route("/", adminRoutes);
 app.route("/api", api);
 
@@ -38,7 +43,8 @@ app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // Raw env stays reachable for the credentials screen, which must tell app-entered from Cloudflare values
-    if (!new URL(request.url).pathname.startsWith("/api/")) return app.fetch(request, env, ctx);
+    const path = new URL(request.url).pathname;
+    if (!path.startsWith("/api/") && !path.startsWith("/chat-api/")) return app.fetch(request, env, ctx);
     const merged = await withCredentials(env);
     // Layer RAW_ENV on top without copying (copies can lose secret bindings)
     const withRaw = Object.create(merged) as Env;
@@ -51,6 +57,7 @@ export default {
       Promise.all([
         syncMailbox(merged).catch((e) => console.error("Mail sync failed", e)),
         wakeSnoozed(merged).catch((e) => console.error("Snooze wake failed", e)),
+        sweepChats(merged).catch((e) => console.error("Chat sweep failed", e)),
       ]).then(() => runBackfill(merged).catch((e) => console.error("Backfill failed", e))),
     );
   },

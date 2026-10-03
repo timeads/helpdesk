@@ -5,6 +5,7 @@ import { state, navigate, refreshCounts } from "./app.js";
 import { h, mount, icon, relTime, fullTime, shortDate, money, humanize, initials, toast, busy, spinner, fileSize, skeletonRows, popover, menuList, modal } from "./ui.js";
 import { STATUS, statusLabel, statusBadge, PRIORITY, priorityChip, statusMenu, priorityMenu, assignMenu, snoozeMenu, tagMenu, whenLabel } from "./common.js";
 import { buildComposer, loadSettings, settingsCache, newEmail } from "./composer.js";
+import { chatBubble, chatControls } from "./chat-agent.js";
 
 const ticketHref = (id, view) => `/tickets/${id}?view=${view}`;
 
@@ -136,6 +137,14 @@ export async function openTicket(inbox, el, id) {
     thread,
     composer.el,
   );
+  // A website chat that's still a chat: the chat composer instead of email (until it moves to email)
+  if (data.chat && data.chat.state !== "email") {
+    const live = chatControls(t, data, thread, {
+      isCurrent: () => inbox.ticketId === id && document.body.contains(thread),
+      onEmail: () => live.el.replaceWith(composer.el),
+    });
+    composer.el.replaceWith(live.el);
+  }
 
   // ---- Right pane
   const side = h("aside", { class: "customer", "aria-label": "Details" });
@@ -239,7 +248,7 @@ function renderThread(t, data) {
     out.push(it);
   }
   const draw = (it) =>
-    it.kind === "msg" ? renderMessage(t, it.m)
+    it.kind === "msg" ? (it.m.kind ? chatBubble(t, it.m) : renderMessage(t, it.m))
       : it.kind === "note" ? h("div", { class: "note-item" },
         h("div", { class: "note-head" }, icon("note"), `Internal note · ${it.n.agent_name || "Someone"} · ${fullTime(it.n.created_at)}`),
         h("div", { class: "note-body" }, highlightMentions(it.n.body)))
@@ -248,7 +257,7 @@ function renderThread(t, data) {
 
   // Collapse older history: keep the last two messages (and everything after them) open
   const msgIdx = out.map((x, i) => (x.kind === "msg" ? i : -1)).filter((i) => i >= 0);
-  if (msgIdx.length <= 3) return out.map(draw);
+  if (msgIdx.length <= 3 || t.channel === "chat") return out.map(draw);
   const cut = msgIdx[msgIdx.length - 2];
   const hidden = out.slice(0, cut);
   const hiddenMsgs = hidden.filter((x) => x.kind === "msg").length;

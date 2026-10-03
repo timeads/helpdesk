@@ -5,6 +5,7 @@ import { buildMime, encodeRaw, escapeHtml, htmlToText, replySubject, textToHtml,
 import { createDiscountCode, customerProfile, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
 import { aiConfigured, draftReply, ticketInsights } from "../lib/ai";
 import { demoProfile } from "../lib/demo";
+import { chatForTicket, moveChatToEmail } from "../lib/chat";
 import { renderMacro, type MacroContext } from "../lib/macros";
 import {
   PRIORITIES,
@@ -33,6 +34,7 @@ interface ViewFilters {
   priority?: string;
   unread?: boolean;
   q?: string;
+  channel?: string; // "chat" for website chats
 }
 
 const BUILT_IN: Record<string, ViewFilters> = {
@@ -48,6 +50,7 @@ const BUILT_IN: Record<string, ViewFilters> = {
   deleted: { status: "deleted" },
   all: { status: "any" },
   mentions: { status: "any" },
+  chats: { status: "active", channel: "chat" },
 };
 
 async function viewFilters(env: Env, view: string): Promise<ViewFilters> {
@@ -89,6 +92,10 @@ function whereFor(f: ViewFilters, agentId: number, view = ""): { sql: string; ar
     }
   }
   if (f.unread) clauses.push("t.unread = 1");
+  if (f.channel === "chat" || f.channel === "email") {
+    clauses.push("t.channel = ?");
+    args.push(f.channel);
+  }
   if (f.tags_any?.length) {
     clauses.push(`EXISTS (SELECT 1 FROM json_each(t.tags) j WHERE j.value COLLATE NOCASE IN (${f.tags_any.map(() => "?").join(",")}))`);
     args.push(...f.tags_any);
@@ -127,7 +134,7 @@ const ORDER: Record<string, string> = {
 };
 
 const LIST_COLUMNS = `t.id, t.subject, t.customer_email, t.customer_name, t.status, t.priority, t.tags, t.assignee_id, a.name AS assignee_name,
-  t.unread, t.snippet, t.message_count, t.last_message_at, t.last_inbound_at, t.created_at, t.snoozed_until, t.ai_sentiment`;
+  t.unread, t.snippet, t.message_count, t.last_message_at, t.last_inbound_at, t.created_at, t.snoozed_until, t.ai_sentiment, t.channel`;
 
 const withTags = <T extends { tags?: string }>(r: T) => ({ ...r, tags: parseTags(r.tags) });
 
@@ -141,7 +148,9 @@ tickets.get("/counts", async (c) => {
        SUM(status = 'in_progress') AS in_progress,
        SUM(status = 'snoozed') AS snoozed,
        SUM(status = 'spam') AS spam,
-       (SELECT COUNT(DISTINCT ticket_id) FROM mentions WHERE agent_id = ?1 AND seen = 0) AS mentions
+       (SELECT COUNT(DISTINCT ticket_id) FROM mentions WHERE agent_id = ?1 AND seen = 0) AS mentions,
+       (SELECT COUNT(*) FROM chats WHERE state = 'waiting') AS chats_waiting,
+       SUM(status IN ('open','in_progress') AND channel = 'chat') AS chats
      FROM tickets`,
   )
     .bind(me)
@@ -219,7 +228,7 @@ tickets.get("/:id{[0-9]+}", async (c) => {
   const [messages, notes, events, threads] = await c.env.DB.batch([
     c.env.DB.prepare(
       `SELECT m.id, m.direction, m.from_email, m.from_name, m.to_emails, m.cc_emails, m.bcc_emails, m.subject, m.sent_at,
-              m.body_text, m.body_html, m.attachments, m.gmail_message_id, m.thread_id, a.name AS agent_name
+              m.body_text, m.body_html, m.attachments, m.gmail_message_id, m.thread_id, m.kind, a.name AS agent_name
        FROM messages m LEFT JOIN agents a ON a.id = m.agent_id WHERE m.ticket_id = ? ORDER BY m.sent_at`,
     ).bind(id),
     c.env.DB.prepare(
@@ -239,6 +248,7 @@ tickets.get("/:id{[0-9]+}", async (c) => {
     notes: notes.results,
     events: events.results,
     threads: threads.results,
+    chat: ticket.channel === "chat" ? await chatForTicket(c.env, id).then((ch) => (ch ? { state: ch.state, email: ch.email } : null)) : null,
   });
 });
 
@@ -510,6 +520,14 @@ tickets.post("/:id{[0-9]+}/reply", async (c) => {
   const box = await getMailbox(c.env);
   if (!box) throw new HttpError(409, "Connect the support mailbox in Settings first");
   const mode = body.mode ?? "reply";
+  if (ticket.channel === "chat" && mode === "reply") {
+    const chat = await chatForTicket(c.env, id);
+    if (chat && chat.state !== "email") {
+      const { text } = bodies(body, await signatureFor(c.env, me));
+      await moveChatToEmail(c.env, chat, { reason: `${me.name} replied by email`, lead: text, agentId: me.id });
+      return c.json({ ok: true, ticket: publicTicket(await loadTicket(c.env, id)) });
+    }
+  }
 
   const { results: msgs } = await c.env.DB.prepare(
     `SELECT id, rfc_message_id, thread_id, direction, from_email, from_name, to_emails, cc_emails, subject, sent_at,
@@ -778,7 +796,9 @@ tickets.get("/:id{[0-9]+}/messages/:mid{[0-9]+}/attachments/:aid", async (c) => 
   if (!m) throw new HttpError(404, "Not found");
   const meta = (JSON.parse(m.attachments) as { id: string; filename: string; mimeType: string }[]).find((a) => a.id === c.req.param("aid"));
   if (!meta) throw new HttpError(404, "Attachment not found");
-  const data = await getAttachment(c.env, m.gmail_message_id, meta.id);
+  const data = !m.gmail_message_id && /^c\d+$/.test(meta.id)
+    ? (await c.env.DB.prepare("SELECT data FROM chat_files WHERE id = ?").bind(Number(meta.id.slice(1))).first<{ data: string }>())?.data ?? ""
+    : await getAttachment(c.env, m.gmail_message_id, meta.id);
   const inline = /^(image\/|video\/|application\/pdf)/.test(meta.mimeType) && c.req.query("download") === undefined;
   const bytes = base64UrlDecodeBytes(data);
   const headers: Record<string, string> = {

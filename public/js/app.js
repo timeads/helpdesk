@@ -15,6 +15,7 @@ const VIEWS = [
   { id: "unassigned", label: "Unassigned", short: "Unassigned", icon: "question", desktopOnly: true },
   { id: "open", label: "Open", short: "Open", icon: "inbox" },
   { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock" },
+  { id: "chats", label: "Live chats", short: "Chats", icon: "chat", desktopOnly: true },
   { id: "snoozed", label: "Snoozed", short: "Snoozed", icon: "moon", minor: true },
   { id: "mentions", label: "Mentions", short: "@", icon: "at", minor: true },
   { id: "closed", label: "Closed", short: "Closed", icon: "check", minor: true },
@@ -54,10 +55,23 @@ document.addEventListener("click", (e) => {
 });
 addEventListener("popstate", () => route());
 
+let lastWaiting = null;
 export async function refreshCounts() {
   try {
     state.counts = await api("/tickets/counts");
     renderNav();
+    // A customer waiting in chat: desktop alert (when allowed) the moment it happens
+    const waiting = state.counts.chats_waiting ?? 0;
+    if (lastWaiting !== null && waiting > lastWaiting) {
+      try {
+        if ("Notification" in window && Notification.permission === "granted") {
+          const n = new Notification("A customer is waiting in chat", { body: "Open Live chats to reply.", tag: "chat-waiting" });
+          n.onclick = () => { focus(); navigate("/?view=chats"); n.close(); };
+        }
+      } catch { /* not supported */ }
+      toast("A customer is waiting in chat");
+    }
+    lastWaiting = waiting;
   } catch {
     /* offline or signed out */
   }
@@ -82,7 +96,7 @@ function renderNav() {
     item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " dash-item"),
     h("div", { class: "nav-scroll" },
       h("div", { class: "nav-label" }, "Tickets"),
-      VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : state.counts[v.id], v.minor || v.desktopOnly ? " closed-view" : "")),
+      VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.short, v.icon, inInbox && (view === v.id || (v.id === "in_progress" && view === "pending")), v.id === "closed" ? 0 : v.id === "chats" ? state.counts.chats_waiting || state.counts.chats : state.counts[v.id], (v.minor || v.desktopOnly ? " closed-view" : "") + (v.id === "chats" && state.counts.chats_waiting ? " chat-waiting" : ""))),
       h("button", { class: "nav-item nav-more closed-view", "aria-expanded": String(moreOpen), onclick: () => {
         moreOpen = !moreOpen;
         try { localStorage.setItem("nav:more", moreOpen ? "1" : "0"); } catch { /* ignore */ }
@@ -174,7 +188,7 @@ async function boot() {
   mount(root, navEl, mainEl);
   route();
   refreshCounts();
-  setInterval(refreshCounts, 30000);
+  setInterval(refreshCounts, 20000);
 }
 
 boot();

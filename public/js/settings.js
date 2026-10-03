@@ -3,6 +3,7 @@ import { state } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
 import { printSettings, resetZebra, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
 import { slipCard } from "./settings-slip.js";
+import { chatCard } from "./settings-chat.js";
 import { supportBehavior, macrosCard, tagsCard, viewsCard, supportRulesCard, knowledgeCard } from "./settings-support.js";
 
 // Settings is split into pages (/settings/<page>); each loads only what it shows.
@@ -12,6 +13,7 @@ const PAGES = [
   { id: "tickets", label: "Tickets & email", icon: "inbox", desc: "How tickets are assigned and merged, which email becomes a ticket, and automatic ticket rules.", admin: true },
   { id: "macros", label: "Macros, tags & views", icon: "tag", desc: "Saved replies, tags and the ticket views in the sidebar." },
   { id: "knowledge", label: "AI knowledge", icon: "spark", desc: "What AI drafts know about your products and policies." },
+  { id: "chat", label: "Website chat", icon: "chat", desc: "The chat on your store: AI replies, office hours, how it looks and how to install it.", admin: true },
   { id: "shipping", label: "Shipping & boxes", icon: "truck", desc: "Ship-from address, boxes, packing memory and shipping rules.", admin: true },
   { id: "customs", label: "International", icon: "flag", desc: "Customs defaults for orders going abroad.", admin: true },
   { id: "printing", label: "Printing & slips", icon: "printer", desc: "This computer's printer and the packing slip design." },
@@ -74,6 +76,8 @@ async function load(inner, id = location.pathname.split("/")[2]) {
     } else if (id === "shipping") {
       const [s, { presets }, rulesData] = await Promise.all([api("/settings"), api("/shipping/presets"), get("/shipping/rules", isAdmin)]);
       cards = [shipping(s, presets, inner), rulesData ? shippingRules(rulesData, presets, inner) : null];
+    } else if (id === "chat") {
+      cards = [chatCard()];
     } else if (id === "customs") {
       cards = [customsCard(await api("/settings"))];
     } else if (id === "printing") {

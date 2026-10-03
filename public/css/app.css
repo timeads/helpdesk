@@ -1259,3 +1259,44 @@ body.order-open { overflow: hidden; }
 .scan-item.done .scan-variant { background: rgba(255,255,255,.55); border-color: #2c7a43; }
 .scan-item .count { font-size: 22px; }
 @media (max-width: 760px) { .scan-variant { font-size: 18px; } .scan-title { font-size: 15.5px; } }
+
+/* ---- Website chat on a ticket */
+.chat-msg { max-width: min(560px, 82%); align-self: flex-start; display: flex; flex-direction: column; gap: 4px; }
+.chat-msg.out { align-self: flex-end; align-items: flex-end; }
+.chat-who { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.chat-who .icon { width: 13px; height: 13px; }
+.chat-when { font-weight: 400; color: var(--text-3); margin-left: 4px; }
+.chat-text { white-space: pre-wrap; overflow-wrap: anywhere; font: 14.5px/1.5 var(--read); padding: 9px 13px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); border-top-left-radius: 4px; }
+.chat-msg.out .chat-text { background: var(--out); border-color: var(--out-border); border-top-left-radius: 14px; border-top-right-radius: 4px; }
+.chat-msg.ai .chat-text { background: var(--surface); border-style: dashed; }
+.chat-photos { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-photos img { width: 140px; height: 140px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border); display: block; }
+.chat-sys { align-self: center; font-size: 12.5px; color: var(--text-3); text-align: center; max-width: 520px; }
+.chat-composer { border-top: 1px solid var(--border); background: var(--surface); padding: 10px 16px 14px; display: flex; flex-direction: column; gap: 8px; }
+.chat-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); flex-wrap: wrap; }
+.chat-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); opacity: .5; flex: none; }
+.chat-dot.on { background: #2c9a52; opacity: 1; box-shadow: 0 0 0 3px rgba(44,154,82,.18); }
+.chat-row { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input { flex: 1; min-width: 0; resize: vertical; min-height: 44px; max-height: 220px; font: 14.5px/1.45 var(--read); padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--text); }
+.chat-input:focus { outline: 2px solid var(--ochre); outline-offset: -1px; }
+.chat-draft { border: 1px dashed var(--ochre); border-radius: 10px; padding: 10px 12px; background: var(--ochre-soft); }
+.chat-draft .chat-text { background: transparent; border: 0; padding: 4px 0; }
+.chat-draft-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.chat-pending { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-pending:empty { display: none; }
+.chat-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; padding: 3px 4px 3px 8px; border-radius: 999px; background: var(--hover); }
+.chat-chip button { border: 0; background: none; cursor: pointer; color: inherit; display: inline-flex; }
+.chat-page { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .chat-row > .btn.sm { display: none; } .chat-msg { max-width: 92%; } }
+.chat-tag { display: inline-flex; color: var(--ochre); margin-right: 2px; vertical-align: -2px; }
+.chat-tag .icon { width: 14px; height: 14px; }
+.nav-item.chat-waiting .count { background: var(--ochre); color: #fff; animation: chat-pulse 1.6s ease-in-out infinite; }
+@keyframes chat-pulse { 50% { box-shadow: 0 0 0 5px rgba(199,140,43,.25); } }
+@media (prefers-reduced-motion: reduce) { .nav-item.chat-waiting .count { animation: none; } }
+.code-block { background: var(--hover); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.radio-card { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.radio-card.on { border-color: var(--ochre); background: var(--ochre-soft); }
+.radio-card input { margin-top: 3px; accent-color: var(--ochre); }
+.hours-grid { display: grid; grid-template-columns: minmax(120px, auto) 130px auto 130px; gap: 8px 10px; align-items: center; max-width: 520px; }
+.hours-grid .input:disabled { opacity: .45; }
+@media (max-width: 560px) { .hours-grid { grid-template-columns: 1fr 1fr; } .hours-grid > .muted { display: none; } }
