@@ -142,6 +142,7 @@ export interface ChatAnswer {
   reply: string;
   handoff: boolean;
   reason: string;
+  verify_email?: string; // send a one-time code here so we can look up the customer's orders
 }
 
 export interface ChatInput {
@@ -151,6 +152,9 @@ export interface ChatInput {
   transcript: { from: "visitor" | "ai" | "agent"; text: string; photos: number }[];
   orders: unknown[]; // only orders whose email matches the chat's email
   mismatched: string[]; // order numbers mentioned that belong to another email
+  chatEmail: string;
+  verifiedEmails: string[]; // emails the customer proved with a code: all their orders are in `orders`
+  codePending: string | null; // a code was emailed here and hasn't been entered yet
   photos: { mime: string; data: string }[];
   page: string | null;
 }
@@ -161,8 +165,12 @@ const CHAT_SCHEMA = {
     reply: { type: "string", description: "The chat message to the customer: plain text, short." },
     handoff: { type: "boolean", description: "True when a teammate needs to take over." },
     reason: { type: "string", description: "One short internal line for the team: what the customer needs and why (not shown to the customer)." },
+    verify_email: {
+      type: "string",
+      description: "To look up the customer's orders without an order number: the email to send a one-time code to (the chat's email, or another one the customer says they ordered with). Empty when not needed.",
+    },
   },
-  required: ["reply", "handoff", "reason"],
+  required: ["reply", "handoff", "reason", "verify_email"],
   additionalProperties: false,
 };
 
@@ -172,7 +180,11 @@ What you can use: <store_knowledge> (knowledge base articles, policies, product 
 
 How to write: this is a small chat window, so keep each reply to 1–4 short sentences of plain text (no markdown headings or bold). Short numbered steps are fine for troubleshooting. Write as "we" for the store. When a knowledge base article covers their question, answer briefly and include its link. If asked, say you're the store's AI assistant; never claim to be a person.
 
-Orders: only discuss an order inside <verified_order>. If the customer asks about an order and none is verified, ask for the order number from their confirmation email (like #68762-TG); it must have been placed with the email they gave this chat. If an order they named is listed under <unverified>, say you can't share details for that order here and offer to have a teammate email the address on the order.
+Orders: only discuss orders inside <verified_order>. When the customer asks about an order (tracking, status, what they bought) and it isn't there:
+- If they know the order number (like #68762-TG), they can give it — it counts when the order was placed with the chat's email.
+- Otherwise (or if they'd rather not look for it), look their orders up by email: set verify_email to the chat's email — or to another email they say they ordered with — and tell them you've emailed a 6-digit code to type into the chat. Never ask them to prove who they are any other way, and don't keep insisting on the order number.
+- While a code is pending, remind them to check their email (and spam folder) for it; set verify_email again only if they ask for a new code or give a different email.
+If an order they named is listed under <unverified>, it was placed with a different email: offer to send a code to that email instead (they type it), or have a teammate help.
 
 Never promise refunds, replacements, discounts, warranty decisions, or delivery dates. For those, gather what the team needs (order number, what happened, a photo or video of the problem) and hand off.
 
@@ -191,6 +203,7 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     knowledge || macros || articles ? `<store_knowledge>\n${[articles, knowledge, macros].filter(Boolean).join("\n\n")}\n</store_knowledge>` : "",
     input.orders.length ? `<verified_order>\n${JSON.stringify(input.orders).slice(0, 12000)}\n</verified_order>` : "<verified_order>none</verified_order>",
     input.mismatched.length ? `<unverified>${input.mismatched.join(", ")}</unverified>` : "",
+    `<identity>Chat email (typed by the customer, not proven): ${input.chatEmail}. Proven with a code: ${input.verifiedEmails.join(", ") || "none"}.${input.codePending ? ` A code was emailed to ${input.codePending} and not entered yet.` : ""}</identity>`,
     `<context>Customer name: ${input.customerName || "unknown"}. Team available right now: ${input.open ? "yes" : `no (hours: ${input.hours})`}.${input.page ? ` Chatting from: ${input.page.slice(0, 200)}` : ""}</context>`,
     `<chat>\n${convo.slice(-30000)}\n</chat>`,
     input.photos.length ? "The customer's most recent photos are attached above." : "",
@@ -218,7 +231,12 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     const out = response.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text").map((b) => b.text).join("");
     const parsed = JSON.parse(out) as ChatAnswer;
     if (!parsed.reply?.trim()) throw new HttpError(502, "The AI returned an empty reply");
-    return { reply: parsed.reply.trim().slice(0, 2000), handoff: !!parsed.handoff, reason: String(parsed.reason ?? "").slice(0, 300) };
+    return {
+      reply: parsed.reply.trim().slice(0, 2000),
+      handoff: !!parsed.handoff,
+      reason: String(parsed.reason ?? "").slice(0, 300),
+      verify_email: String(parsed.verify_email ?? "").trim().toLowerCase().slice(0, 200),
+    };
   } catch (e) {
     if (e instanceof HttpError) throw e;
     if (e instanceof Anthropic.AuthenticationError) throw new HttpError(502, "Anthropic API key was rejected");

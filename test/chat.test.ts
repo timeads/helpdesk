@@ -13,6 +13,12 @@ vi.mock("../src/lib/gmail", () => ({
   importMessage: vi.fn(async () => null),
 }));
 vi.mock("../src/lib/shopify", () => ({
+  customerProfile: vi.fn(async (_env: unknown, email: string) => ({
+    customer: null,
+    orders: email === "jane@example.com" ? [{ name: "#70001-TG", email, createdAt: "2026-10-01", displayFinancialStatus: "PAID", displayFulfillmentStatus: "FULFILLED", cancelledAt: null,
+      lineItems: { nodes: [{ quantity: 2, title: "Yarn", variantTitle: "Red" }] }, shippingLines: { nodes: [{ title: "Ground" }] },
+      fulfillments: [{ displayStatus: "IN_TRANSIT", trackingInfo: [{ company: "UPS", number: "1ZTRACK", url: "https://ups/1ZTRACK" }] }] }] : [],
+  })),
   findOrderByName: vi.fn(async (_env: unknown, ref: string) => ({
     name: `#${ref}`, email: ref === "68762-TG" ? "jane@example.com" : "someone@else.com", createdAt: "2026-09-30", displayFinancialStatus: "PAID",
     displayFulfillmentStatus: "FULFILLED", cancelledAt: null, lineItems: { nodes: [{ quantity: 1, title: "AK-I", variantTitle: null }] },
@@ -20,7 +26,7 @@ vi.mock("../src/lib/shopify", () => ({
   })),
 }));
 
-import { agentChatReply, hoursText, isOpen, loadChat, moveChatToEmail, respond, startChat, sweepChats, DEFAULT_CHAT } from "../src/lib/chat";
+import { agentChatReply, checkVerifyCode, hoursText, isOpen, loadChat, moveChatToEmail, respond, startChat, sweepChats, DEFAULT_CHAT } from "../src/lib/chat";
 
 /** The raw email's headers plus its plain-text body, decoded. */
 const decode = (raw: string) => {
@@ -152,5 +158,49 @@ describe("website chat", () => {
     await moveChatToEmail(env, chat, { reason: "The customer asked to continue by email" });
     expect((await loadChat(env, chat.id))!.state).toBe("email");
     expect(decode(mail.sent[0].raw)).toContain("photos coming");
+  });
+
+  it("looks up orders by email after the customer types the code we emailed", async () => {
+    await settings({ aiMode: "auto", hours: ALWAYS });
+    ai.answer = { reply: "I can look that up — I've emailed you a 6-digit code.", handoff: false, reason: "tracking", verify_email: "jane@example.com" };
+    const chat = await startChat(env, { name: "Jane", email: "jane@example.com", message: "Where's my order? I don't have the number", ipHash: "x" });
+    await respond(env, chat.id);
+    expect(mail.sent).toHaveLength(1);
+    const email = decode(mail.sent[0].raw);
+    const code = email.match(/Your chat code: (\d{6})/)![1];
+    expect(email).toContain("To: jane@example.com");
+    expect((await msgs(chat.ticket_id)).map((m: any) => m.kind)).toEqual(["chat", "chat_ai", "chat_system"]);
+    expect((await msgs(chat.ticket_id)).at(-1).body_text).toMatch(/emailed a 6-digit code to j•+@example\.com/);
+
+    // Not a code → handled normally; a wrong code → refused
+    expect(await checkVerifyCode(env, (await loadChat(env, chat.id))!, "thanks!")).toBeNull();
+    const wrong = code === "000000" ? "111111" : "000000";
+    expect(await checkVerifyCode(env, (await loadChat(env, chat.id))!, wrong)).toBe("bad");
+
+    // The right code proves the email; now the AI sees every recent order for it
+    expect(await checkVerifyCode(env, (await loadChat(env, chat.id))!, `${code.slice(0, 3)} ${code.slice(3)}`)).toBe("ok");
+    expect(JSON.parse((await loadChat(env, chat.id))!.verified_emails!)).toEqual(["jane@example.com"]);
+    ai.answer = { reply: "Your order #70001-TG is on its way.", handoff: false, reason: "", verify_email: "" };
+    await respond(env, chat.id);
+    const last = ai.calls.at(-1);
+    expect(last.verifiedEmails).toEqual(["jane@example.com"]);
+    expect(last.orders[0]).toMatchObject({ name: "#70001-TG", tracking: [{ number: "1ZTRACK" }] });
+    expect(JSON.stringify(last.orders)).not.toMatch(/address|Philadelphia/);
+  });
+
+  it("locks the code after five wrong tries and caps how many codes one chat can send", async () => {
+    await settings({ aiMode: "auto", hours: ALWAYS });
+    ai.answer = { reply: "Code sent.", handoff: false, reason: "", verify_email: "jane@example.com" };
+    const chat = await startChat(env, { name: "Jane", email: "jane@example.com", message: "track my order", ipHash: "x" });
+    await respond(env, chat.id);
+    const code = decode(mail.sent[0].raw).match(/Your chat code: (\d{6})/)![1];
+    const wrong = code === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 4; i++) expect(await checkVerifyCode(env, (await loadChat(env, chat.id))!, wrong)).toBe("bad");
+    expect(await checkVerifyCode(env, (await loadChat(env, chat.id))!, wrong)).toBe("locked");
+    expect(await checkVerifyCode(env, (await loadChat(env, chat.id))!, code)).toBeNull(); // no code pending any more
+    await respond(env, chat.id);
+    await respond(env, chat.id);
+    await respond(env, chat.id);
+    expect(mail.sent).toHaveLength(3); // at most 3 codes per chat
   });
 });

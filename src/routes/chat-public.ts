@@ -3,7 +3,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import {
-  addChatMessage, authedChat, chatMessages, chatSettings, hashIp, hoursText, isOpen, moveChatToEmail, respond, startChat, type ChatFile,
+  addChatMessage, authedChat, checkVerifyCode, chatMessages, chatSettings, hashIp, hoursText, isOpen, moveChatToEmail, respond, startChat, type ChatFile,
 } from "../lib/chat";
 import { aiConfigured } from "../lib/ai";
 import { HttpError, nowIso } from "../lib/util";
@@ -119,8 +119,19 @@ chatApi.post("/:id/messages", async (c) => {
     const f = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM chat_files WHERE chat_id = ?").bind(chat.id).first<{ n: number }>();
     if ((f?.n ?? 0) + files.length > 12) throw new HttpError(429, "That's the most photos one chat can take — send more by email");
   }
-  const id = await addChatMessage(c.env, chat, { kind: "chat", direction: "in", text: text.slice(0, 4000), files });
+  // The one-time code for looking up orders: kept out of the transcript, checked here
+  const code = !files?.length ? await checkVerifyCode(c.env, chat, text) : null;
+  const id = await addChatMessage(c.env, chat, { kind: "chat", direction: "in", text: code ? "••••••" : text.slice(0, 4000), files });
   await c.env.DB.prepare("UPDATE chats SET visitor_seen_at = ?, visitor_typing_at = NULL WHERE id = ?").bind(nowIso(), chat.id).run();
+  if (code === "bad" || code === "locked") {
+    await addChatMessage(c.env, chat, {
+      kind: "chat_system",
+      direction: "out",
+      text: code === "bad" ? "That code didn't match — check the latest email from us and try again." : "That code has expired or had too many tries. Ask for a new one and we'll send it.",
+    });
+    return c.json({ id });
+  }
+  if (code === "ok") await addChatMessage(c.env, chat, { kind: "chat_system", direction: "out", text: "Thanks — you're verified. Looking up your orders…" });
   c.executionCtx.waitUntil(respond(c.env, chat.id).catch((e) => console.error("chat respond", e)));
   return c.json({ id });
 });

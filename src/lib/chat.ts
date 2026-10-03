@@ -7,7 +7,7 @@ import type { Env } from "../env";
 import { aiConfigured, chatAnswer, type ChatAnswer } from "./ai";
 import { buildMime, encodeRaw, textToHtml } from "./mime";
 import { getMailbox, importMessage, sendRaw } from "./gmail";
-import { findOrderByName, type ShopifyOrder } from "./shopify";
+import { customerProfile, findOrderByName, type ShopifyOrder } from "./shopify";
 import { logEvent, setStatus, getTicket } from "./support";
 import { HttpError, getSetting, nowIso } from "./util";
 
@@ -130,6 +130,12 @@ export interface ChatRow {
   agent_typing_at: string | null;
   ai_replies: number;
   ai_draft: string | null;
+  verify_email?: string | null;
+  verify_code?: string | null;
+  verify_expires?: string | null;
+  verify_attempts?: number;
+  verify_sends?: number;
+  verified_emails?: string;
   created_at: string;
   updated_at: string;
 }
@@ -307,11 +313,25 @@ export async function moveChatToEmail(env: Env, chat: ChatRow, opts: { reason: s
 
 const ORDER_REF = /#?\s?(\d{4,7}(?:-[A-Z]{1,4})?)\b/gi;
 
-/** Orders the customer mentioned, but only ones placed with the email they gave (two factors). */
+export const provenEmails = (chat: ChatRow): string[] => {
+  try { return JSON.parse(chat.verified_emails || "[]"); } catch { return []; }
+};
+
+/**
+ * Orders the AI may talk about: every recent order for an email the customer proved with a code,
+ * plus orders they named by number that were placed with the chat's email (two factors).
+ */
 async function verifiedOrders(env: Env, chat: ChatRow, texts: string[]): Promise<{ orders: unknown[]; mismatched: string[] }> {
   const refs = [...new Set(Array.from(texts.join("\n").matchAll(ORDER_REF), (m) => m[1].toUpperCase()))].slice(-2);
+  const proven = provenEmails(chat);
+  const allowed = new Set([chat.email.toLowerCase(), ...proven]);
   const orders: unknown[] = [];
+  const seen = new Set<string>();
   const mismatched: string[] = [];
+  for (const email of proven.slice(0, 2)) {
+    const { orders: theirs } = await customerProfile(env, email).catch(() => ({ orders: [] as ShopifyOrder[] }));
+    for (const o of theirs.slice(0, 6)) if (!seen.has(o.name)) { seen.add(o.name); orders.push(shapeOrder(o)); }
+  }
   for (const ref of refs) {
     let o: ShopifyOrder | null = null;
     try {
@@ -319,11 +339,20 @@ async function verifiedOrders(env: Env, chat: ChatRow, texts: string[]): Promise
     } catch {
       continue;
     }
-    if (!o || (o.email ?? "").toLowerCase() !== chat.email.toLowerCase()) {
-      if (o) mismatched.push(o.name);
+    if (!o || seen.has(o.name)) continue;
+    if (!allowed.has((o.email ?? "").toLowerCase())) {
+      mismatched.push(o.name);
       continue;
     }
-    orders.push({
+    seen.add(o.name);
+    orders.push(shapeOrder(o));
+  }
+  return { orders, mismatched };
+}
+
+/** What the AI sees of an order (no addresses or payment details). */
+function shapeOrder(o: ShopifyOrder) {
+  return {
       name: o.name,
       placed: o.createdAt,
       payment: o.displayFinancialStatus,
@@ -332,9 +361,64 @@ async function verifiedOrders(env: Env, chat: ChatRow, texts: string[]): Promise
       items: o.lineItems.nodes.map((l) => `${l.quantity} × ${l.title}${l.variantTitle ? ` (${l.variantTitle})` : ""}`),
       shipping: o.shippingLines?.nodes?.[0]?.title,
       tracking: (o.fulfillments ?? []).flatMap((f: any) => (f.trackingInfo ?? []).map((t: any) => ({ status: f.displayStatus, company: t.company, number: t.number, url: t.url }))),
-    });
+  };
+}
+
+// ---- Proving an email with a one-time code (so the AI can look up orders without an order number)
+
+const EMAIL_RE = /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]{2,}$/;
+const CODE_MINUTES = 15;
+const mask = (email: string) => email.replace(/^(.)(.*)(@.*)$/, (_m, a: string, b: string, d: string) => `${a}${"•".repeat(Math.min(6, Math.max(2, b.length)))}${d}`);
+async function hashCode(chatId: string, code: string) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${chatId}:${code}`));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Emails a 6-digit code to `email`. Returns false when it can't (limit reached, no mailbox, bad address). */
+export async function sendVerifyCode(env: Env, chat: ChatRow, email: string): Promise<boolean> {
+  email = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(email) || provenEmails(chat).includes(email)) return false;
+  if ((chat.verify_sends ?? 0) >= 3) {
+    await addChatMessage(env, chat, { kind: "chat_system", direction: "out", text: "We've sent the most codes we can for this chat — a teammate can help instead." });
+    return false;
   }
-  return { orders, mismatched };
+  const box = await getMailbox(env);
+  if (!box) return false;
+  const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
+  const text = `Your Tuft the World chat code is ${code}\n\nType it into the chat on our website to see your orders. It works for ${CODE_MINUTES} minutes.\n\nIf you didn't ask for this, you can ignore this email.`;
+  const mime = buildMime({ fromEmail: box.email, fromName: env.APP_NAME, to: [email], subject: `Your chat code: ${code}`, text });
+  await sendRaw(env, encodeRaw(mime), null);
+  await env.DB.prepare("UPDATE chats SET verify_email = ?, verify_code = ?, verify_expires = ?, verify_attempts = 0, verify_sends = verify_sends + 1 WHERE id = ?")
+    .bind(email, await hashCode(chat.id, code), new Date(Date.now() + CODE_MINUTES * 60_000).toISOString(), chat.id).run();
+  chat.verify_email = email;
+  chat.verify_sends = (chat.verify_sends ?? 0) + 1;
+  await addChatMessage(env, chat, { kind: "chat_system", direction: "out", text: `We emailed a 6-digit code to ${mask(email)}. Type it here to look up your orders (check spam if it's not there in a minute).` });
+  await logEvent(env, chat.ticket_id, "chat_verify", `Code sent to ${email}`);
+  return true;
+}
+
+/**
+ * A customer message that might be the code. "ok" proves the email; "bad"/"locked" mean it didn't
+ * match; null means it isn't a code (or none is pending) and the message is handled normally.
+ */
+export async function checkVerifyCode(env: Env, chat: ChatRow, text: string): Promise<"ok" | "bad" | "locked" | null> {
+  const m = /^\D{0,12}(\d{3})\s?-?(\d{3})\D{0,12}$/.exec(text.trim());
+  if (!m || !chat.verify_code || !chat.verify_email) return null;
+  if (!chat.verify_expires || Date.parse(chat.verify_expires) < Date.now()) {
+    await env.DB.prepare("UPDATE chats SET verify_code = NULL WHERE id = ?").bind(chat.id).run();
+    return "locked";
+  }
+  if ((await hashCode(chat.id, m[1] + m[2])) !== chat.verify_code) {
+    const tries = (chat.verify_attempts ?? 0) + 1;
+    await env.DB.prepare(`UPDATE chats SET verify_attempts = ?${tries >= 5 ? ", verify_code = NULL" : ""} WHERE id = ?`).bind(tries, chat.id).run();
+    return tries >= 5 ? "locked" : "bad";
+  }
+  const proven = [...new Set([...provenEmails(chat), chat.verify_email])];
+  await env.DB.prepare("UPDATE chats SET verified_emails = ?, verify_code = NULL, verify_expires = NULL WHERE id = ?").bind(JSON.stringify(proven), chat.id).run();
+  chat.verified_emails = JSON.stringify(proven);
+  chat.verify_code = null;
+  await logEvent(env, chat.ticket_id, "chat_verify", `Customer proved ${chat.verify_email}`);
+  return "ok";
 }
 
 /** The last few photos the customer sent (for the AI to look at). */
@@ -348,8 +432,12 @@ export async function aiAnswerFor(env: Env, chat: ChatRow, s: ChatSettings): Pro
   const msgs = await chatMessages(env, chat);
   const visitorTexts = msgs.filter((m) => m.from === "visitor").map((m) => m.text);
   const { orders, mismatched } = await verifiedOrders(env, chat, visitorTexts).catch(() => ({ orders: [], mismatched: [] as string[] }));
+  const pending = chat.verify_code && chat.verify_expires && Date.parse(chat.verify_expires) > Date.now() ? chat.verify_email ?? null : null;
   return chatAnswer(env, {
     customerName: chat.name,
+    chatEmail: chat.email,
+    verifiedEmails: provenEmails(chat),
+    codePending: pending,
     open: isOpen(s),
     hours: hoursText(s),
     transcript: msgs.filter((m) => m.from !== "system").map((m) => ({ from: m.from as "visitor" | "ai" | "agent", text: m.text, photos: m.files.length })),
@@ -398,9 +486,14 @@ export async function respond(env: Env, chatId: string) {
     return toPerson("The AI couldn't answer");
   }
 
+  // Looking up orders by email: the code goes out right away (whoever answers, the customer needs it)
+  const sendCode = () => (ans.verify_email ? sendVerifyCode(env, chat, ans.verify_email).catch((e) => { console.error("chat code", e); return false; }) : Promise.resolve(false));
+
   if (s.aiMode === "draft") {
+    const codeSent = await sendCode();
     // A teammate reads the draft and sends it (or writes their own)
     await env.DB.prepare("UPDATE chats SET ai_draft = ? WHERE id = ?").bind(JSON.stringify(ans), chat.id).run();
+    if (codeSent) return; // they're busy with the code; the next answer comes once it's entered
     if (!open) {
       await env.DB.prepare("INSERT INTO notes (ticket_id, agent_id, body) VALUES (?, NULL, ?)")
         .bind(chat.ticket_id, `AI suggested reply (chat came in after hours):\n\n${ans.reply}${ans.reason ? `\n\nWhy: ${ans.reason}` : ""}`)
@@ -413,6 +506,7 @@ export async function respond(env: Env, chatId: string) {
 
   // Auto: the AI answers the customer directly
   await addChatMessage(env, chat, { kind: "chat_ai", direction: "out", text: ans.reply });
+  await sendCode();
   await env.DB.prepare("UPDATE chats SET ai_replies = ai_replies + 1, ai_draft = NULL WHERE id = ?").bind(chat.id).run();
   if (ans.handoff) return toPerson(`AI handed off: ${ans.reason}`);
   const t = await getTicket(env, chat.ticket_id);
