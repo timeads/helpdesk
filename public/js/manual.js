@@ -4,6 +4,7 @@
 import { api } from "./api.js";
 import { state } from "./app.js";
 import { h, mount, icon, toast, busy, skeletonRows, shortDate, modal, growInput, spinner } from "./ui.js";
+import { manualTabs, renderKb } from "./kb.js";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const inline = (s) => esc(s)
@@ -39,6 +40,7 @@ const job = { running: false, stop: false, read: 0, recent: [], onUpdate: null }
 const mediaUrl = (m) => `/api/tickets/${m.ticket_id}/messages/${m.message_id}/attachments/${encodeURIComponent(m.attachment_id)}`;
 
 export function renderManual(main) {
+  if (location.pathname.split("/")[2] === "kb") return renderKb(main);
   const isAdmin = state.me.role === "admin";
   const id = Number(location.pathname.split("/")[2]) || null;
   const st = { topics: [], q: "", pending: 0, scanned: 0, repairs: 0, ai: false };
@@ -52,7 +54,7 @@ export function renderManual(main) {
     h("header", { class: "page-head" }, h("div", { class: "inner" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
         h("div", {}, h("h1", {}, "Repair manual"), h("p", { class: "sub" }, "Written by AI from your repair conversations — your replies, the customer's photos and videos — and kept up to date as more come in.")),
-        h("div", { class: "row" }, newBtn)))),
+        h("div", { class: "row" }, manualTabs("repairs"), newBtn)))),
     h("div", { class: "page-inner wide" }, statusEl,
       h("div", { class: "manual-layout" + (id ? " has-topic" : "") },
         h("div", { class: "manual-side" }, h("div", { class: "search" }, icon("search"), search), listEl),

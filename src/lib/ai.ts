@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
 import { HttpError, sniffImageType } from "./util";
 import { manualKnowledge } from "./manual";
+import { kbForAI } from "./kb";
 
 export const aiConfigured = (env: Env) => !!env.ANTHROPIC_API_KEY;
 
@@ -24,7 +25,8 @@ Never promise refunds, replacements or discounts unless the store guidance or th
 
 export async function draftReply(env: Env, input: DraftInput): Promise<string> {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an ANTHROPIC_API_KEY to enable AI drafts");
-  const guidance = await knowledgeText(env);
+  const about = `${input.subject}\n${input.thread.slice(-4).map((m) => m.text.slice(0, 2000)).join("\n")}`;
+  const guidance = [await knowledgeText(env), await kbForAI(env, about).catch(() => "")].filter(Boolean).join("\n\n");
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
   const thread = input.thread
@@ -166,9 +168,9 @@ const CHAT_SCHEMA = {
 
 const CHAT_SYSTEM = `You are the live chat assistant on the website of Tuft the World, a rug-tufting supply store (tufting guns, yarn, cloth, frames, workshops in Philadelphia).
 
-What you can use: <store_knowledge> (policies, product info, repair guides and saved replies) and <verified_order> data. If they don't answer the question, don't guess — hand off to a teammate.
+What you can use: <store_knowledge> (knowledge base articles, policies, product info, repair guides and saved replies) and <verified_order> data. If they don't answer the question, don't guess — hand off to a teammate.
 
-How to write: this is a small chat window, so keep each reply to 1–4 short sentences of plain text (no markdown headings or bold). Short numbered steps are fine for troubleshooting. Write as "we" for the store. If asked, say you're the store's AI assistant; never claim to be a person.
+How to write: this is a small chat window, so keep each reply to 1–4 short sentences of plain text (no markdown headings or bold). Short numbered steps are fine for troubleshooting. Write as "we" for the store. When a knowledge base article covers their question, answer briefly and include its link. If asked, say you're the store's AI assistant; never claim to be a person.
 
 Orders: only discuss an order inside <verified_order>. If the customer asks about an order and none is verified, ask for the order number from their confirmation email (like #68762-TG); it must have been placed with the email they gave this chat. If an order they named is listed under <unverified>, say you can't share details for that order here and offer to have a teammate email the address on the order.
 
@@ -180,12 +182,13 @@ Set handoff to true when: they ask for a person; the request needs a decision or
 export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer> {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key to use AI chat");
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  const [knowledge, macros] = await Promise.all([knowledgeText(env), savedReplies(env)]);
+  const about = input.transcript.slice(-6).map((m) => m.text).join("\n");
+  const [knowledge, macros, articles] = await Promise.all([knowledgeText(env), savedReplies(env), kbForAI(env, about).catch(() => "")]);
   const convo = input.transcript
     .map((m) => `${m.from === "visitor" ? "Customer" : m.from === "ai" ? "You (AI)" : "Teammate"}: ${m.text.slice(0, 3000)}${m.photos ? ` [sent ${m.photos} photo${m.photos > 1 ? "s" : ""}]` : ""}`)
     .join("\n");
   const text = [
-    knowledge || macros ? `<store_knowledge>\n${[knowledge, macros].filter(Boolean).join("\n\n")}\n</store_knowledge>` : "",
+    knowledge || macros || articles ? `<store_knowledge>\n${[articles, knowledge, macros].filter(Boolean).join("\n\n")}\n</store_knowledge>` : "",
     input.orders.length ? `<verified_order>\n${JSON.stringify(input.orders).slice(0, 12000)}\n</verified_order>` : "<verified_order>none</verified_order>",
     input.mismatched.length ? `<unverified>${input.mismatched.join(", ")}</unverified>` : "",
     `<context>Customer name: ${input.customerName || "unknown"}. Team available right now: ${input.open ? "yes" : `no (hours: ${input.hours})`}.${input.page ? ` Chatting from: ${input.page.slice(0, 200)}` : ""}</context>`,

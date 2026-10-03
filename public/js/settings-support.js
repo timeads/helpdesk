@@ -1,7 +1,7 @@
 // Settings → Support: behavior, macros (variables + automations), tags, views, rules, knowledge.
 import { api } from "./api.js";
 import { state, refreshViews } from "./app.js";
-import { h, mount, toast, busy, icon, growInput } from "./ui.js";
+import { h, mount, toast, busy, icon, growInput, relTime, skeletonRows, modal } from "./ui.js";
 import { STATUS, PRIORITY } from "./common.js";
 import { describeAction, settingsCache } from "./composer.js";
 
@@ -336,7 +336,8 @@ export function knowledgeCard(items, reload) {
   const list = h("div", { class: "stack" });
   const editor = (k = { name: "", content: "", type: "policy", status: "active" }, open = false) => {
     const name = h("input", { class: "input", value: k.name, placeholder: "Title, e.g. Return policy" });
-    const content = h("textarea", { class: "input", rows: 6, placeholder: "What the AI should know…" });
+    const fromSite = !!k.source;
+    const content = h("textarea", { class: "input", rows: 6, placeholder: "What the AI should know…", readonly: fromSite });
     content.value = k.content;
     const type = h("select", { class: "input" }, Object.entries(KTYPES).map(([v, l]) => h("option", { value: v, selected: k.type === v }, l)));
     const active = h("input", { type: "checkbox", checked: k.status !== "inactive" });
@@ -353,9 +354,12 @@ export function knowledgeCard(items, reload) {
       reload();
     });
     return h("details", { class: "macro-row" + (k.status === "inactive" ? " off" : ""), open },
-      h("summary", {}, h("b", {}, k.name || "New entry"), h("span", { class: "badge plain" }, KTYPES[k.type] ?? k.type), k.status === "inactive" ? h("span", { class: "small muted" }, "off") : null,
+      h("summary", {}, h("b", {}, k.name || "New entry"), h("span", { class: "badge plain" }, KTYPES[k.type] ?? k.type),
+        fromSite ? h("span", { class: "badge good plain", title: k.synced_at ? `Updated from the website ${relTime(k.synced_at)}` : "" }, "From website") : null, k.status === "inactive" ? h("span", { class: "small muted" }, "off") : null,
         k.uses ? h("span", { class: "small muted", style: { marginLeft: "auto" } }, `used in ${k.uses} draft${k.uses === 1 ? "" : "s"}`) : null),
-      h("div", { class: "stack", style: { paddingTop: "10px" } }, h("div", { class: "grid2", style: { gridTemplateColumns: "2fr 1fr" } }, name, type), content,
+      h("div", { class: "stack", style: { paddingTop: "10px" } }, h("div", { class: "grid2", style: { gridTemplateColumns: "2fr 1fr" } }, name, type),
+        fromSite ? h("div", { class: "small muted" }, "Copied from ", h("a", { href: k.source_url, target: "_blank", rel: "noopener" }, k.source_url), ` and refreshed daily${k.synced_at ? ` (last ${relTime(k.synced_at)})` : ""}. Edit it on the website; delete it here to stop using it.`) : null,
+        content,
         h("label", { class: "check" }, active, "Use in AI drafts"), h("div", { class: "row" }, save, del)));
   };
   items.forEach((k) => list.append(editor(k)));
@@ -376,6 +380,54 @@ export function knowledgeCard(items, reload) {
     toast(`Imported ${r.added} entries`);
     reload();
   });
-  return card("knowledge", "AI knowledge", "Policies, FAQs and product facts the AI uses when drafting replies. Only entries that are switched on are sent.",
-    h("div", { class: "row", style: { marginBottom: "10px" } }, add, state.me.role === "admin" ? importBtn : null), list);
+  const isAdmin = state.me.role === "admin";
+  const site = h("button", { class: "btn" }, icon("link"), "Add from your website");
+  site.onclick = () => siteDialog(reload);
+  const refresh = h("button", { class: "btn ghost" }, icon("refresh"), "Refresh from website");
+  refresh.onclick = busy(refresh, async () => {
+    const r = await api("/knowledge/site/refresh", { method: "POST" });
+    toast(r.errors.length ? `Refreshed ${r.refreshed}; ${r.errors.length} couldn't be read: ${r.errors[0]}` : `Refreshed ${r.refreshed} from the website`, !!r.errors.length);
+    reload();
+  });
+  return card("knowledge", "AI knowledge", "Policies, FAQs and product facts the AI uses for the website chat and reply drafts. Add pages straight from your website (they stay in sync, checked daily), upload a CSV, or write entries here. Only entries that are switched on are used.",
+    h("div", { class: "row", style: { marginBottom: "10px", flexWrap: "wrap" } }, isAdmin ? site : null, add, isAdmin ? importBtn : null, isAdmin && items.some((k) => k.source) ? refresh : null), list);
+}
+
+/** Pick store pages and policies (or paste any link) to use as AI knowledge. */
+async function siteDialog(reload) {
+  const body = h("div", { class: "stack" }, skeletonRows(4));
+  const { close } = modal("Add from your website", body, { width: 620 });
+  let data = { policies: [], pages: [] };
+  let problem = null;
+  try {
+    data = await api("/knowledge/site");
+  } catch (e) {
+    // Links still work without Shopify
+    problem = /access denied|scope/i.test(e.message)
+      ? "To list your store's pages and policies, the Shopify app needs read_content and read_legal_policies (Shopify admin → Apps → your app → Configuration). You can still add pages by link below."
+      : `Couldn't list your store's pages (${e.message}). You can still add pages by link below.`;
+  }
+  const picked = new Set();
+  const row = (x) => {
+    const c = h("input", { type: "checkbox", checked: x.added, disabled: x.added });
+    c.onchange = () => (c.checked ? picked.add(x.source) : picked.delete(x.source));
+    return h("label", { class: "check site-row" }, c, h("span", {}, h("b", {}, x.title), x.added ? h("span", { class: "small muted" }, " · added") : null,
+      h("span", { class: "small muted", style: { display: "block" } }, x.url)));
+  };
+  const url = h("input", { class: "input", type: "url", placeholder: "https://tufttheworld.com/pages/…  (any public page)" });
+  const go = h("button", { class: "btn primary" }, "Add");
+  go.onclick = busy(go, async () => {
+    if (!picked.size && !url.value.trim()) return toast("Tick a page or paste a link", true);
+    const r = await api("/knowledge/site", { method: "POST", body: { sources: [...picked], url: url.value.trim() || undefined } });
+    toast(`Added ${r.added} from your website`);
+    close();
+    reload();
+  });
+  mount(body,
+    h("p", { class: "muted", style: { margin: 0 } }, "The AI reads these and keeps them up to date — change the page on your site and the AI follows within a day."),
+    problem ? h("div", { class: "notice" }, problem) : null,
+    data.policies.length ? [h("h3", { class: "section" }, "Store policies"), data.policies.map(row)] : null,
+    data.pages.length ? [h("h3", { class: "section" }, "Pages"), h("div", { class: "site-list" }, data.pages.map(row))] : null,
+    h("label", { class: "field" }, "Or add any page by link", url),
+    h("div", { class: "row" }, go));
 }

@@ -13,6 +13,7 @@ import { easypostConfigured, testEasypost } from "../lib/easypost";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SUPPORT, RULE_ACTIONS, RULE_FIELDS, STATUSES, TRIGGERS, loadSupportRules, supportSettings, type SupportSettings } from "../lib/support";
 import { MACRO_VARIABLES } from "../lib/macros";
+import { addSources, refreshSources, siteSources } from "../lib/site-knowledge";
 import { DEFAULT_CUSTOMS, customsSettings, type CustomsSettings } from "../lib/customs";
 
 const admin = new Hono<AppEnv>();
@@ -260,8 +261,25 @@ admin.put("/support-rules", async (c) => {
 // ---------------------------------------------------------------- Knowledge (used by AI drafts)
 
 admin.get("/knowledge", async (c) => {
-  const { results } = await c.env.DB.prepare("SELECT id, name, content, type, status, uses, created_at FROM knowledge ORDER BY created_at DESC").all();
+  const { results } = await c.env.DB.prepare("SELECT id, name, content, type, status, uses, created_at, source, source_url, synced_at FROM knowledge ORDER BY source IS NOT NULL, created_at DESC").all();
   return c.json({ knowledge: results });
+});
+
+// ---- AI knowledge from the store website
+admin.get("/knowledge/site", async (c) => c.json(await siteSources(c.env)));
+
+admin.post("/knowledge/site", async (c) => {
+  requireAdmin(c);
+  const b = await c.req.json<{ sources?: string[]; url?: string }>();
+  const sources = (b.sources ?? []).filter((s) => /^(policy|page):/.test(s)).slice(0, 100);
+  if (b.url?.trim()) sources.push(`url:${b.url.trim()}`);
+  if (!sources.length) throw new HttpError(400, "Pick something to add");
+  return c.json(await addSources(c.env, sources));
+});
+
+admin.post("/knowledge/site/refresh", async (c) => {
+  requireAdmin(c);
+  return c.json(await refreshSources(c.env));
 });
 
 const KNOWLEDGE_TYPES = ["policy", "faq", "product", "shipping", "other"];

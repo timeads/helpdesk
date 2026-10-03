@@ -113,13 +113,13 @@ function client(env: Env) {
   return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 }
 
-async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], schema: Record<string, unknown>, effort: "low" | "medium", maxTokens: number): Promise<T> {
+export async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], schema: Record<string, unknown>, effort: "low" | "medium", maxTokens: number, system = SYSTEM): Promise<T> {
   const model = env.AI_MODEL || "claude-opus-5-5";
   try {
     const r = await client(env).messages.create({
       model,
       max_tokens: maxTokens,
-      system: SYSTEM,
+      system,
       messages: [{ role: "user", content }],
       output_config: { format: { type: "json_schema", schema }, ...(model.startsWith("claude-haiku") ? {} : { effort }) },
     });

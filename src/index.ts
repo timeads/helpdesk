@@ -14,7 +14,9 @@ import manualRoutes from "./routes/manual";
 import rateCheckRoutes from "./routes/ratecheck";
 import chatPublicRoutes from "./routes/chat-public";
 import chatRoutes from "./routes/chat";
+import kbRoutes from "./routes/kb";
 import { sweepChats } from "./lib/chat";
+import { dailyRefresh } from "./lib/site-knowledge";
 
 const app = new Hono<AppEnv>();
 
@@ -27,6 +29,16 @@ app.onError((err, c) => {
 app.route("/auth", authRoutes);
 app.route("/chat-api", chatPublicRoutes);
 
+// Knowledge-base photos: public, because the store's articles show them
+app.get("/kb/img/:id{[0-9]+}", async (c) => {
+  const r = await c.env.DB.prepare("SELECT mime, data FROM kb_images WHERE id = ?").bind(Number(c.req.param("id"))).first<{ mime: string; data: string }>();
+  if (!r) return c.text("Not found", 404);
+  const bin = atob(r.data);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Response(bytes, { headers: { "content-type": r.mime, "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" } });
+});
+
 const api = new Hono<AppEnv>();
 api.use("*", requireAgent);
 api.route("/tickets", ticketRoutes);
@@ -35,6 +47,7 @@ api.route("/analytics", analyticsRoutes);
 api.route("/manual", manualRoutes);
 api.route("/rate-check", rateCheckRoutes);
 api.route("/chats", chatRoutes);
+api.route("/kb", kbRoutes);
 api.route("/", adminRoutes);
 app.route("/api", api);
 
@@ -58,6 +71,7 @@ export default {
         syncMailbox(merged).catch((e) => console.error("Mail sync failed", e)),
         wakeSnoozed(merged).catch((e) => console.error("Snooze wake failed", e)),
         sweepChats(merged).catch((e) => console.error("Chat sweep failed", e)),
+        dailyRefresh(merged).catch((e) => console.error("Website knowledge refresh failed", e)),
       ]).then(() => runBackfill(merged).catch((e) => console.error("Backfill failed", e))),
     );
   },
