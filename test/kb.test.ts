@@ -103,7 +103,10 @@ describe("accepting suggestions in bulk", () => {
     ins.run(null, "Brand new guide", "<p>All about frames.</p>");
     const first = (await env.DB.prepare("SELECT id FROM kb_suggestions ORDER BY id LIMIT 1").first()).id;
 
-    const post = (body: unknown) => app.request("/kb/suggestions/accept-all", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, env).then((r) => r.json() as any);
+    const post = async (body: unknown): Promise<any> => {
+      const r = await app.request("/kb/suggestions/accept-all", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, env);
+      return r.json();
+    };
     const edits = { [first]: { title: "Edited tip", content_html: "<p>Edited by Tim.</p>", article_id: "ts-jam" } };
     const a = await post({ edits });
     expect(a).toMatchObject({ accepted: 30, remaining: 6, failed: [] });
