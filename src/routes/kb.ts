@@ -9,6 +9,8 @@ import {
   textOf, uniqueId, articleUrl, type ImportInput,
 } from "../lib/kb";
 import { shopify } from "../lib/shopify";
+import { autoMergeOn, findDuplicates, integrateSuggestions, mergeArticles, restoreVersion, saveVersion, versionsOf, type DuplicateGroup } from "../lib/kb-merge";
+import { getSetting, setSetting } from "../lib/util";
 import { HttpError } from "../lib/util";
 
 const kb = new Hono<AppEnv>();
@@ -29,6 +31,7 @@ kb.get("/", async (c) => {
     toScan: scan,
     unsynced,
     ai: aiConfigured(c.env),
+    autoMerge: await autoMergeOn(c.env),
   });
 });
 
@@ -56,6 +59,7 @@ kb.put("/article/:id", async (c) => {
   const a = await c.env.DB.prepare("SELECT * FROM kb_articles WHERE id = ?").bind(id).first<any>();
   if (!a) throw new HttpError(404, "Article not found");
   const html = b.body_html !== undefined ? cleanHtml(b.body_html) : a.body_html;
+  if (html !== a.body_html || (b.title !== undefined && b.title.trim() !== a.title)) await saveVersion(c.env, a, "Before an edit", c.get("agent").id);
   await c.env.DB.prepare(
     `UPDATE kb_articles SET title = ?, topic_id = ?, body_html = ?, body_text = ?, status = ?, use_in_ai = ?, description = ?, edited_by = ?, updated_at = ${now} WHERE id = ?`,
   ).bind(
@@ -105,6 +109,56 @@ kb.put("/topic/:id", async (c) => {
   // Articles in it carry the topic as a tag on the store
   await c.env.DB.prepare(`UPDATE kb_articles SET updated_at = ${now} WHERE topic_id = ? AND shopify_id IS NOT NULL`).bind(c.req.param("id")).run();
   return c.json({ ok: true });
+});
+
+// ---- Tidying with AI: duplicates, folding suggestions in, auto-merge, versions
+
+/** The last duplicate check, without groups that have since been merged or deleted. */
+async function savedDuplicates(env: AppEnv["Bindings"]) {
+  const saved = await getSetting<{ at: string; groups: DuplicateGroup[] } | null>(env, "kb_duplicates", null);
+  if (!saved) return { at: null, groups: [] };
+  const { results } = await env.DB.prepare("SELECT id, title, status, shopify_id, body_text FROM kb_articles").all<any>();
+  const byId = new Map(results.map((a) => [a.id, { id: a.id, title: a.title, status: a.status, onStore: !!a.shopify_id, words: a.body_text.split(/\s+/).filter(Boolean).length }]));
+  const groups = saved.groups
+    .map((g) => ({ ...g, merge: g.merge.filter((id) => byId.has(id)) }))
+    .filter((g) => byId.has(g.keep) && g.merge.length)
+    .map((g) => ({ ...g, articles: [g.keep, ...g.merge].map((id) => byId.get(id)) }));
+  return { at: saved.at, groups };
+}
+
+kb.get("/duplicates", async (c) => c.json(await savedDuplicates(c.env)));
+
+kb.post("/duplicates/find", async (c) => {
+  requireAdmin(c);
+  await findDuplicates(c.env);
+  return c.json(await savedDuplicates(c.env));
+});
+
+kb.post("/duplicates/merge", async (c) => {
+  requireAdmin(c);
+  const b = await c.req.json<{ keep?: string; merge?: string[]; title?: string }>();
+  if (!b.keep || !b.merge?.length) throw new HttpError(400, "Pick the articles to merge");
+  return c.json(await mergeArticles(c.env, b.keep, b.merge.slice(0, 12), c.get("agent").id, b.title));
+});
+
+/** Folds waiting suggestions into their articles with AI (a couple of articles per call). */
+kb.post("/integrate", async (c) => {
+  requireAdmin(c);
+  return c.json(await integrateSuggestions(c.env, c.get("agent").id, 2));
+});
+
+kb.put("/auto-merge", async (c) => {
+  requireAdmin(c);
+  const { on } = await c.req.json<{ on?: boolean }>();
+  await setSetting(c.env, "kb_auto_merge", !!on);
+  return c.json({ autoMerge: !!on });
+});
+
+kb.get("/article/:id/versions", async (c) => c.json({ versions: await versionsOf(c.env, c.req.param("id")) }));
+
+kb.post("/versions/:vid{[0-9]+}/restore", async (c) => {
+  requireAdmin(c);
+  return c.json(await restoreVersion(c.env, Number(c.req.param("vid")), c.get("agent").id));
 });
 
 /** A photo for an article (resized in the browser). */

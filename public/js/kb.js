@@ -56,15 +56,19 @@ export function renderKb(main) {
 
   async function load() {
     try {
-      Object.assign(st, await api("/kb"));
+      const [k, d] = await Promise.all([api("/kb"), api("/kb/duplicates").catch(() => ({ groups: [] }))]);
+      Object.assign(st, k, { dupeGroups: d.groups, dupes: d.groups.length });
     } catch (e) {
       return mount(listEl, h("div", { class: "notice bad" }, e.message));
     }
     drawStatus();
     drawList();
     if (sel === "suggestions") openSuggestions();
+    else if (sel === "duplicates") openDuplicates();
     else if (sel) openArticle(sel);
     else drawEmpty();
+    // A job asked for from another view (e.g. “Merge with AI” on the suggestions page)
+    if (job.next && !job.running) { const k = job.next; job.next = null; runJob(k); }
   }
 
   // ---- Status: import, updates from tickets, publish to the store
@@ -102,16 +106,37 @@ export function renderKb(main) {
     publish.disabled = !st.unsynced;
     publish.onclick = () => runJob("publish");
     const stop = h("button", { class: "btn sm", onclick: () => { job.stop = true; stop.disabled = true; } }, "Stop");
+    const dupes = h("button", { class: "btn sm" }, icon("merge"), "Find duplicates");
+    dupes.onclick = busy(dupes, async () => {
+      dupes.replaceChildren(spinner(), "Comparing articles…");
+      const r = await api("/kb/duplicates/find", { method: "POST" });
+      toast(r.groups.length ? `Found ${r.groups.length} set${r.groups.length === 1 ? "" : "s"} of duplicates — review them before merging` : "No duplicates found");
+      if (r.groups.length) { history.pushState(null, "", "/manual/kb/duplicates"); renderKb(main); }
+      else dupes.replaceChildren(icon("merge"), "Find duplicates");
+    });
+    const auto = h("input", { type: "checkbox", checked: !!st.autoMerge });
+    auto.onchange = async () => {
+      try {
+        await api("/kb/auto-merge", { method: "PUT", body: { on: auto.checked } });
+        st.autoMerge = auto.checked;
+        toast(auto.checked ? "Auto-merge is on: new conversations are read and merged into articles every few minutes. Publish to store when you're ready." : "Auto-merge is off");
+      } catch (e) {
+        auto.checked = !auto.checked;
+        toast(e.message, true);
+      }
+    };
+    const autoLabel = st.ai ? h("label", { class: "check small", title: "Reads newly closed conversations and merges what they teach into the right articles with AI, by itself" }, auto, "Auto-merge new conversations") : null;
     mount(statusEl, h("div", { class: "card manual-status" },
       h("div", { style: { flex: 1, minWidth: 0 } },
         running
-          ? h("div", { class: "row", style: { gap: "8px" } }, spinner(), h("b", {}, job.kind === "scan" ? `Reading support conversations… ${job.done} read` : `Publishing to the store… ${job.done} done`))
+          ? h("div", { class: "row", style: { gap: "8px" } }, spinner(), h("b", {}, job.kind === "scan" ? `Reading support conversations… ${job.done} read` : job.kind === "merge" ? `Merging suggestions into articles… ${job.done} done` : job.kind === "dupes" ? `Merging duplicates… ${job.done} done` : `Publishing to the store… ${job.done} done`))
           : h("b", {}, st.suggestions ? `${st.suggestions} suggested update${st.suggestions === 1 ? "" : "s"} from support conversations` : "Knowledge base"),
         h("div", { class: "small muted" },
           `${st.articles.length} articles · ${st.articles.filter((a) => a.status === "published").length} published`,
           st.ai ? ` · ${st.toScan} finished conversation${st.toScan === 1 ? "" : "s"} not read yet` : "",
           " · Each published article is a page on your store under /blogs/knowledge-base.")),
-      running ? stop : [st.ai && st.toScan ? scan : null, publish]));
+      running ? stop : h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } },
+        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, publish)));
   }
 
   async function runJob(kind) {
@@ -120,14 +145,18 @@ export function renderKb(main) {
     drawStatus();
     try {
       while (!job.stop) {
-        const r = kind === "scan" ? await api("/kb/scan", { method: "POST", body: { size: 6 } }) : await api("/kb/publish", { method: "POST" });
-        job.done += kind === "scan" ? r.read : r.published;
+        const r = kind === "scan" ? await api("/kb/scan", { method: "POST", body: { size: 6 } })
+          : kind === "merge" ? await api("/kb/integrate", { method: "POST" })
+            : await api("/kb/publish", { method: "POST" });
+        const step = kind === "scan" ? r.read : kind === "merge" ? r.folded + r.created : r.published;
+        job.done += step;
         if (kind === "scan") st.toScan = r.remaining;
+        else if (kind === "merge") st.suggestions = r.remaining;
         else st.unsynced = r.remaining;
         if (listEl.isConnected) drawStatus();
-        if (!r.remaining || !(kind === "scan" ? r.read : r.published)) break;
+        if (!r.remaining || !step) break;
       }
-      toast(kind === "scan" ? "Finished reading — check the suggestions" : "The store's knowledge base is up to date");
+      toast(kind === "scan" ? "Finished reading — check the suggestions" : kind === "merge" ? "Suggestions merged into the articles — review, then publish to the store" : "The store's knowledge base is up to date");
     } catch (e) {
       const scope = /access denied|write_content|scope/i.test(e.message);
       toast(scope ? "Shopify said no: the app needs the write_content scope (Shopify admin → Apps → your app → Configuration). Then try again." : e.message, true);
@@ -146,6 +175,11 @@ export function renderKb(main) {
       items.push(h("a", { class: "manual-item kb-sugg" + (sel === "suggestions" ? " active" : ""), href: "/manual/kb/suggestions", "data-link": "" },
         h("span", { class: "manual-item-title" }, icon("spark"), ` ${st.suggestions} suggested update${st.suggestions === 1 ? "" : "s"}`),
         h("span", { class: "small muted" }, "From support conversations")));
+    }
+    if (st.dupes) {
+      items.push(h("a", { class: "manual-item kb-sugg" + (sel === "duplicates" ? " active" : ""), href: "/manual/kb/duplicates", "data-link": "" },
+        h("span", { class: "manual-item-title" }, icon("merge"), ` ${st.dupes} set${st.dupes === 1 ? "" : "s"} of duplicates`),
+        h("span", { class: "small muted" }, "Review and merge")));
     }
     if (!st.articles.length) return mount(listEl, ...items, h("p", { class: "muted small", style: { padding: "8px" } }, "No articles yet."));
     for (const t of st.topics) {
@@ -213,6 +247,27 @@ export function renderKb(main) {
       renderKb(main);
     });
     addEventListener("beforeunload", (e) => { if (dirty.v && detailEl.isConnected) e.preventDefault(); }, { once: true });
+    // Earlier versions (saved before every edit and AI merge) can be put back
+    const versionsEl = h("span");
+    api(`/kb/article/${encodeURIComponent(a.id)}/versions`).then(({ versions }) => {
+      if (!versions.length || !isAdmin) return;
+      const pick = h("select", { class: "input", "aria-label": "Earlier versions", style: { width: "auto" } },
+        h("option", { value: "" }, `Earlier versions (${versions.length})`),
+        versions.map((v) => h("option", { value: v.id }, `${new Date(v.saved_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · ${v.reason}`)));
+      pick.onchange = async () => {
+        if (!pick.value) return;
+        const v = versions.find((x) => String(x.id) === pick.value);
+        if (!confirm(`Put back the version from ${new Date(v.saved_at).toLocaleString()}? (${v.reason}) The current text is saved as a version too.`)) { pick.value = ""; return; }
+        try {
+          await api(`/kb/versions/${v.id}/restore`, { method: "POST" });
+          toast("Earlier version restored");
+          openArticle(a.id);
+        } catch (e) {
+          toast(e.message, true);
+        }
+      };
+      mount(versionsEl, pick);
+    }).catch(() => {});
     mount(detailEl, h("div", { class: "card kb-edit" },
       h("a", { class: "btn ghost sm back-btn kb-back", href: "/manual/kb", "data-link": "" }, icon("back"), "All articles"),
       title,
@@ -220,7 +275,8 @@ export function renderKb(main) {
         topic, status, h("label", { class: "check" }, useAi, "Use in chat & AI replies"),
         h("span", { style: { flex: 1 } }),
         a.url ? h("a", { class: "btn sm ghost", href: a.url, target: "_blank", rel: "noopener" }, icon("ext"), "View on store") : h("span", { class: "small muted" }, "Not on the store yet"),
-        a.updated_at ? h("span", { class: "small muted" }, `edited ${relTime(a.updated_at)}`) : null),
+        a.updated_at ? h("span", { class: "small muted" }, `edited ${relTime(a.updated_at)}`) : null,
+        versionsEl),
       editor,
       h("label", { class: "field", style: { marginTop: "14px" } }, "Search description (what Google and AI assistants show)", desc, counter),
       h("div", { class: "row", style: { marginTop: "14px" } }, save, h("span", { style: { flex: 1 } }), del)));
@@ -236,6 +292,75 @@ export function renderKb(main) {
     renderKb(main);
   }
 
+  // ---- Duplicates: review the sets the AI found, then merge (one rewritten article per set)
+  function openDuplicates() {
+    const groups = st.dupeGroups ?? [];
+    if (!groups.length) return mount(detailEl, h("div", { class: "card empty" }, h("p", {}, "No duplicates waiting. Use “Find duplicates” above to check again.")));
+    const cards = groups.map((g) => dupeCard(g));
+    const progress = h("span", { class: "small muted" });
+    const all = h("button", { class: "btn primary sm" }, icon("merge"), `Merge all ${groups.length} sets`);
+    all.onclick = busy(all, async () => {
+      const chosen = cards.filter((c) => c.included());
+      if (!chosen.length) return toast("Nothing ticked to merge", true);
+      if (!confirm(`Merge ${chosen.length} set${chosen.length === 1 ? "" : "s"} of articles? Each set becomes one article; the others are removed (their old text is kept as an earlier version you can restore).`)) return;
+      let done = 0;
+      for (const c of chosen) {
+        progress.textContent = `Merging ${done + 1} of ${chosen.length}… (about half a minute each)`;
+        try {
+          await c.merge();
+          done++;
+        } catch (e) {
+          toast(`${c.title()}: ${e.message}`, true);
+        }
+      }
+      toast(`Merged ${done} set${done === 1 ? "" : "s"} — review the articles, then publish to the store`);
+      history.pushState(null, "", "/manual/kb");
+      renderKb(main);
+    });
+    mount(detailEl, h("div", { class: "stack", style: { gap: "14px" } },
+      h("div", { class: "card kb-bulk" },
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h("b", {}, `${groups.length} set${groups.length === 1 ? "" : "s"} of articles that cover the same thing`),
+          h("div", { class: "small muted" }, "Untick any set you'd rather keep apart, and pick which article to keep in each (its address stays the same). The AI writes one article from each set without repeating anything; photos and links are kept."),
+          progress),
+        isAdmin ? all : null),
+      cards.map((c) => c.el)));
+  }
+
+  function dupeCard(g) {
+    let keep = g.keep;
+    const include = h("input", { type: "checkbox", checked: true, "aria-label": "Merge this set" });
+    const title = h("input", { class: "input", value: g.title || g.articles[0].title, "aria-label": "Title of the merged article" });
+    const name = `keep-${g.keep}`;
+    const rows = g.articles.map((a) => {
+      const r = h("input", { type: "radio", name, checked: a.id === keep, "aria-label": `Keep ${a.title}` });
+      r.onchange = () => (keep = a.id);
+      return h("div", { class: "dupe-row" }, h("label", { class: "check" }, r, h("span", {}, h("a", { href: `/manual/kb/${encodeURIComponent(a.id)}`, target: "_blank" }, a.title))),
+        h("span", { class: "small muted" }, `${a.words} words`, a.status === "draft" ? " · draft" : "", a.onStore ? " · on the store" : ""));
+    });
+    const go = h("button", { class: "btn sm" }, icon("merge"), "Merge this set");
+    const el = h("div", { class: "card kb-sugg-card" },
+      h("div", { class: "row", style: { gap: "8px" } }, h("label", { class: "check" }, include, h("b", {}, g.reason || "Same subject"))),
+      h("div", { class: "small muted", style: { margin: "4px 0 2px" } }, "Keep (the others fold into it):"),
+      rows,
+      h("label", { class: "field", style: { marginTop: "8px" } }, "Title of the merged article", title),
+      isAdmin ? h("div", { class: "row", style: { marginTop: "8px" } }, go) : null);
+    const merge = async () => {
+      await api("/kb/duplicates/merge", { method: "POST", body: { keep, merge: g.articles.map((a) => a.id).filter((id) => id !== keep), title: title.value } });
+      el.remove();
+    };
+    go.onclick = busy(go, async () => {
+      go.replaceChildren(spinner(), "Merging…");
+      await merge();
+      toast("Merged into one article");
+      Object.assign(st, await api("/kb"));
+      st.dupeGroups = st.dupeGroups.filter((x) => x !== g);
+      st.dupes = st.dupeGroups.length;
+      drawList();
+    });
+    return { el, merge, included: () => include.checked && el.isConnected, title: () => title.value };
+  }
+
   // ---- Suggestions from support conversations
   async function openSuggestions() {
     mount(detailEl, h("div", { class: "card" }, skeletonRows(5)));
@@ -244,7 +369,7 @@ export function renderKb(main) {
     edited.clear();
     const total = Math.max(st.suggestions, suggestions.length);
     const progress = h("span", { class: "small muted" });
-    const all = h("button", { class: "btn primary sm" }, icon("check"), `Accept all ${total}`);
+    const all = h("button", { class: "btn sm" }, icon("check"), `Add all ${total} as written`);
     all.onclick = busy(all, async () => {
       if (!confirm(`Accept all ${total} suggestions? Additions go into their articles; new articles are created as drafts for you to review before publishing.`)) return;
       let done = 0;
@@ -260,6 +385,14 @@ export function renderKb(main) {
       history.pushState(null, "", "/manual/kb");
       renderKb(main);
     });
+    const mergeAi = h("button", { class: "btn primary sm" }, icon("spark"), "Merge with AI");
+    mergeAi.title = "Works each suggestion into the article it belongs in, rewriting so nothing is repeated; new subjects become draft articles";
+    mergeAi.onclick = () => {
+      if (!confirm(`Merge all ${total} suggestions into the knowledge base with AI? Each article that gets new material is rewritten to include it once (the old text is kept as an earlier version). New subjects become draft articles.`)) return;
+      job.next = "merge";
+      history.pushState(null, "", "/manual/kb");
+      renderKb(main);
+    };
     const none = isAdmin ? h("button", { class: "btn sm ghost" }, "Dismiss all") : null;
     if (none) none.onclick = busy(none, async () => {
       if (!confirm(`Dismiss all ${total} suggestions?`)) return;
@@ -274,7 +407,7 @@ export function renderKb(main) {
           h("b", {}, `${total} suggested update${total === 1 ? "" : "s"}`),
           h("div", { class: "small muted" }, "What the AI noticed in finished support conversations that the knowledge base doesn't cover yet. Edit any card first if you like — your edits are kept when you accept all. Accepted additions go into the article; new articles start as drafts."),
           progress),
-        isAdmin ? [all, none] : null),
+        isAdmin && st.ai ? mergeAi : null, isAdmin ? [all, none] : null),
       suggestions.map((s) => suggestionCard(s)),
       total > suggestions.length ? h("p", { class: "small muted" }, `Showing the newest ${suggestions.length}; “Accept all” takes all ${total}.`) : null));
   }

@@ -17,6 +17,7 @@ import chatRoutes from "./routes/chat";
 import kbRoutes from "./routes/kb";
 import { sweepChats } from "./lib/chat";
 import { dailyRefresh } from "./lib/site-knowledge";
+import { autoMergeTick } from "./lib/kb-merge";
 
 const app = new Hono<AppEnv>();
 
@@ -72,6 +73,7 @@ export default {
         wakeSnoozed(merged).catch((e) => console.error("Snooze wake failed", e)),
         sweepChats(merged).catch((e) => console.error("Chat sweep failed", e)),
         dailyRefresh(merged).catch((e) => console.error("Website knowledge refresh failed", e)),
+        autoMergeTick(merged).catch((e) => console.error("Knowledge base auto-merge failed", e)),
       ]).then(() => runBackfill(merged).catch((e) => console.error("Backfill failed", e))),
     );
   },
