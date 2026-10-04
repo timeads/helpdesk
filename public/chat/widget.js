@@ -12,7 +12,10 @@
   const prefill = { name: (script?.dataset.name || "").trim(), email: (script?.dataset.email || "").trim() };
   // Logged in on the store: the theme vouches for the email (checked by the helpdesk)
   const identity = prefill.email && script?.dataset.sig ? { email: prefill.email, ts: Number(script.dataset.ts), sig: script.dataset.sig } : null;
-  const loginUrl = script?.dataset.login || "/account/login";
+  // Shopify's new customer accounts log in at /customer_authentication/login and come back to return_to;
+  // classic accounts (/account/login) use return_url. Both are sent; data-login overrides the address.
+  const loginUrl = script?.dataset.login || "/customer_authentication/login";
+  const RETURN_KEY = "ttw-chat-return"; // { at, draft } — reopen the chat after logging in
   const preview = script?.dataset.preview === "1";
   const ACCENT = /^#[0-9a-f]{3,8}$/i.test(script?.dataset.accent || "") ? script.dataset.accent : "#c78c2b"; // step numbers, same as the Ask box
 
@@ -200,6 +203,14 @@ textarea { resize: none; }
       } else launcher.focus();
     };
     launcher.addEventListener("click", () => setOpen(!open));
+    // Back from logging in (within 20 minutes): open the chat again, with what they'd typed
+    let returning = null;
+    try {
+      const r = JSON.parse(localStorage.getItem(RETURN_KEY) || "null");
+      localStorage.removeItem(RETURN_KEY);
+      if (r && Date.now() - r.at < 20 * 60_000) returning = r;
+    } catch { /* private mode */ }
+    if (returning) setTimeout(() => { setOpen(true); returning = null; }, 0);
     // Other parts of the site (the learn hub's Ask box) can open the chat with a message ready to send
     window.TTWChat = {
       open(text = "") {
@@ -272,13 +283,16 @@ textarea { resize: none; }
       const name = el("input", { name: "name", autocomplete: "name", value: prefill.name || "" });
       const email = el("input", { name: "email", type: "email", required: true, autocomplete: "email", value: prefill.email || "" });
       const signedIn = !!prefill.email;
-      const back = `${loginUrl}${loginUrl.includes("?") ? "&" : "?"}return_url=${encodeURIComponent(location.pathname + location.search)}`;
+      const here = encodeURIComponent(location.pathname + location.search);
+      const back = `${loginUrl}${loginUrl.includes("?") ? "&" : "?"}return_to=${here}&return_url=${here}`;
+      const remember = () => { try { localStorage.setItem(RETURN_KEY, JSON.stringify({ at: Date.now(), draft: message.value })); } catch { /* private mode */ } };
       const who = signedIn
         ? el("div", { class: "acct on" }, el("b", {}, `Signed in as ${prefill.name || prefill.email}`), el("span", {}, identity ? "We can look up your orders right here." : prefill.email))
         : el("div", { class: "acct" },
           el("b", {}, "Have an account?"),
-          el("span", {}, el("a", { href: back }, "Log in"), " and we can look up your orders instantly. No account? Just add your name and email below."));
+          el("span", {}, el("a", { href: back, onclick: remember }, "Log in"), " and we can look up your orders instantly. No account? Just add your name and email below."));
       const message = el("textarea", { name: "message", rows: 3, required: true, placeholder: "How can we help?" });
+      if (returning?.draft) message.value = returning.draft; // what they'd typed before logging in
       const hp = el("input", { class: "hp", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
       const err = el("div", { class: "err", role: "alert" });
       const go = el("button", { class: "primary", type: "submit" }, "Start chat");
