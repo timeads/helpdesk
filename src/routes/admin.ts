@@ -4,6 +4,7 @@ import { requireAdmin } from "../lib/auth";
 import { DEFAULT_RULES, getMailbox, runBackfill, type BackfillJob, type MailRules } from "../lib/gmail";
 import { shopifyConfigured } from "../lib/shopify";
 import { upsConfigured } from "../lib/ups";
+import { fetchIncoming, stockConfigured } from "../lib/stock";
 import { aiConfigured } from "../lib/ai";
 import { HttpError, deleteSetting, getSetting, setSetting } from "../lib/util";
 import { CREDENTIAL_FIELDS, describeCredentials, saveCredentials, withCredentials } from "../lib/credentials";
@@ -457,6 +458,13 @@ admin.post("/credentials/test/:group", async (c) => {
       ]);
       await deleteSetting(c.env, "ask_classes");
       return c.json({ ok: true, message: `Connected · ${workshops.length} active class${workshops.length === 1 ? "" : "es"}, ${sessions.length} upcoming date${sessions.length === 1 ? "" : "s"}` });
+    }
+    if (group === "stock") {
+      if (!stockConfigured(env)) throw new Error("Add the TuftStock address and the helpdesk token.");
+      const rows = await fetchIncoming(env);
+      await deleteSetting(c.env, "incoming_stock");
+      const late = rows.filter((r) => r.late).length;
+      return c.json({ ok: true, message: `Connected · ${rows.length} item${rows.length === 1 ? "" : "s"} on order${late ? ` (${late} running late)` : ""}` });
     }
     throw new HttpError(404, "Unknown service");
   } catch (e) {

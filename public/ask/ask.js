@@ -159,7 +159,7 @@ ol.steps b { color: #1a1a1a; }
           },
         }, t)));
       const foot = el("div", { class: "foot" }, thumbs, r.handoff ? null : el("span", {}, "Still stuck? ", chatButton(question)));
-      const KIND = { fix: "Troubleshooting", buy: "Buying advice", classes: "Classes", general: "Answer", order: "Your order" };
+      const KIND = { fix: "Troubleshooting", buy: "Buying advice", stock: "Availability", classes: "Classes", general: "Answer", order: "Your order" };
       // The first sentence of a step is the action — bold it so the list can be skimmed
       const stepText = (t) => {
         const m = t.match(/^(.{8,120}?[.!?:])(\s+)([\s\S]+)$/);

@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { askProducts } from "./ask";
+import { asksAboutStock, incomingStock, stockText } from "./stock";
 import type { Env } from "../env";
 import { HttpError, sniffImageType } from "./util";
 import { manualKnowledge } from "./manual";
@@ -195,12 +197,13 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key to use AI chat");
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const about = input.transcript.slice(-6).map((m) => m.text).join("\n");
-  const [knowledge, macros, articles] = await Promise.all([knowledgeText(env), savedReplies(env), kbForAI(env, about).catch(() => "")]);
+  const [knowledge, macros, articles, stock] = await Promise.all([knowledgeText(env), savedReplies(env), kbForAI(env, about).catch(() => ""), stockForChat(env, about)]);
   const convo = input.transcript
     .map((m) => `${m.from === "visitor" ? "Customer" : m.from === "ai" ? "You (AI)" : "Teammate"}: ${m.text.slice(0, 3000)}${m.photos ? ` [sent ${m.photos} photo${m.photos > 1 ? "s" : ""}]` : ""}`)
     .join("\n");
   const text = [
     knowledge || macros || articles ? `<store_knowledge>\n${[articles, knowledge, macros].filter(Boolean).join("\n\n")}\n</store_knowledge>` : "",
+    stock ? `<stock>\n${stock}\n</stock>` : "",
     input.orders.length ? `<verified_order>\n${JSON.stringify(input.orders).slice(0, 12000)}\n</verified_order>` : "<verified_order>none</verified_order>",
     input.mismatched.length ? `<unverified>${input.mismatched.join(", ")}</unverified>` : "",
     `<identity>Chat email (typed by the customer, not proven): ${input.chatEmail}. Proven with a code: ${input.verifiedEmails.join(", ") || "none"}.${input.codePending ? ` A code was emailed to ${input.codePending} and not entered yet.` : ""}</identity>`,
@@ -243,6 +246,17 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "AI is rate limited");
     if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
     throw e;
+  }
+}
+
+/** Sold-out items and restock dates, only when the chat is about availability (it's a live lookup). */
+async function stockForChat(env: Env, about: string): Promise<string> {
+  if (!asksAboutStock(about)) return "";
+  try {
+    const [products, incoming] = await Promise.all([askProducts(env).catch(() => []), incomingStock(env)]);
+    return stockText(incoming, products.filter((p) => !p.available || p.soldOut.length).map((p) => ({ title: p.title, options: p.available ? p.soldOut : [] })));
+  } catch {
+    return "";
   }
 }
 

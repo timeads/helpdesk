@@ -365,7 +365,7 @@ export function renderKb(main) {
     mount(detailEl, h("div", { class: "card" }, skeletonRows(4)));
     let d;
     try { d = await api("/kb/asks"); } catch (e) { return mount(detailEl, h("div", { class: "notice bad" }, e.message)); }
-    const KIND = { fix: "Fix a problem", buy: "Buying advice", classes: "Classes", general: "General", order: "Their order" };
+    const KIND = { fix: "Fix a problem", buy: "Buying advice", stock: "Restocks", classes: "Classes", general: "General", order: "Their order" };
     const row = (r) => h("div", { class: "ask-row" },
       h("div", { class: "row", style: { justifyContent: "space-between", gap: "8px", flexWrap: "wrap" } },
         h("b", {}, r.question),

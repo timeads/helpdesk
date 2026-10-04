@@ -14,11 +14,11 @@ vi.mock("../src/lib/shopify", () => ({
     products: {
       nodes: [
         { id: "gid://shopify/Product/11", title: "Tufting Starter Kit", handle: "kit", productType: "Kits", onlineStoreUrl: "https://tufttheworld.com/products/kit", description: "Frame, machine and cloth.",
-          featuredMedia: { preview: { image: { url: "https://cdn/kit.jpg" } } }, priceRangeV2: { minVariantPrice: { amount: "299.0", currencyCode: "USD" }, maxVariantPrice: { amount: "299.0" } }, variants: { nodes: [{ availableForSale: true }] } },
+          featuredMedia: { preview: { image: { url: "https://cdn/kit.jpg" } } }, priceRangeV2: { minVariantPrice: { amount: "299.0", currencyCode: "USD" }, maxVariantPrice: { amount: "299.0" } }, variants: { nodes: [{ title: "Default Title", availableForSale: true }] } },
         { id: "gid://shopify/Product/12", title: "Sold out thing", handle: "gone", productType: "", onlineStoreUrl: "https://tufttheworld.com/products/gone", description: "",
-          featuredMedia: null, priceRangeV2: { minVariantPrice: { amount: "10", currencyCode: "USD" }, maxVariantPrice: { amount: "10" } }, variants: { nodes: [{ availableForSale: false }] } },
+          featuredMedia: null, priceRangeV2: { minVariantPrice: { amount: "10", currencyCode: "USD" }, maxVariantPrice: { amount: "10" } }, variants: { nodes: [{ title: "Default Title", availableForSale: false }] } },
         { id: "gid://shopify/Product/13", title: "One Day Tufting workshop", handle: "one-day", productType: "Workshop", onlineStoreUrl: "https://tufttheworld.com/products/one-day", description: "Make a rug in a day.",
-          featuredMedia: null, priceRangeV2: { minVariantPrice: { amount: "150", currencyCode: "USD" }, maxVariantPrice: { amount: "150" } }, variants: { nodes: [{ availableForSale: true }] } },
+          featuredMedia: null, priceRangeV2: { minVariantPrice: { amount: "150", currencyCode: "USD" }, maxVariantPrice: { amount: "150" } }, variants: { nodes: [{ title: "Default Title", availableForSale: true }] } },
       ],
       pageInfo: { hasNextPage: false, endCursor: "" },
     },
@@ -26,6 +26,7 @@ vi.mock("../src/lib/shopify", () => ({
 }));
 
 import { askClasses, askProducts, handleAsk, shapeAnswer, type Source } from "../src/lib/ask";
+import { asksAboutStock, stockText } from "../src/lib/stock";
 import { importKb } from "../src/lib/kb";
 
 let env: any;
@@ -70,10 +71,42 @@ describe("the learn hub Ask box", () => {
   it("recommends only real, in-stock products and sends order questions to a person", async () => {
     const chosen: Source[] = [];
     const products = await askProducts(env);
-    expect(products.map((p) => p.handle)).toEqual(["kit", "one-day"]); // sold out left out
-    const buy = shapeAnswer("buy", { ...blank, answer: "Start with the kit.", products: [{ handle: "kit", why: "Everything to start." }, { handle: "invented", why: "x" }] }, chosen, products, []);
+    expect(products.map((p) => [p.handle, p.available])).toEqual([["kit", true], ["gone", false], ["one-day", true]]); // sold out kept, marked
+    const buy = shapeAnswer("buy", { ...blank, answer: "Start with the kit.", products: [{ handle: "kit", why: "Everything to start." }, { handle: "invented", why: "x" }, { handle: "gone", why: "sold out" }] }, chosen, products, []);
     expect(buy.products).toEqual([{ title: "Tufting Starter Kit", url: "https://tufttheworld.com/products/kit", price: "$299", image: "https://cdn/kit.jpg", why: "Everything to start." }]);
     expect(shapeAnswer("order", { ...blank, answer: "We can look that up." }, chosen, [], []).handoff).toBe(true);
+  });
+
+  it("answers restock questions from TuftStock's incoming orders, with sold-out items from the store", async () => {
+    env.TUFTSTOCK_URL = "https://stock.example/";
+    env.TUFTSTOCK_TOKEN = "t".repeat(30);
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: any) => {
+      expect(url).toBe("https://stock.example/api/incoming");
+      expect(init.headers.authorization).toBe(`Bearer ${"t".repeat(30)}`);
+      return new Response(JSON.stringify({ items: [
+        { shopifyVariantId: "v1", shopifyProductId: "12", title: "Sold out thing", option: null, sku: "S1", onHand: 0, incoming: 40, stage: "shipped", expected: "2026-10-09", late: false },
+      ] }), { status: 200 });
+    }));
+    ai.pick = { kind: "stock", source_ids: [] };
+    ai.answer = { ...blank, answer: "It's on its way — expected around October 9." };
+    const r = await handleAsk(env, "o", { question: "When is the sold out thing back in stock?", machine: "", ipHash: "ip9" });
+    vi.unstubAllGlobals();
+    expect(r).toMatchObject({ kind: "stock", answer: "It's on its way — expected around October 9." });
+    expect(ai.calls[1]).toContain("gone | Sold out thing |  | $10 | SOLD OUT");
+    expect(ai.calls[1]).toContain("Sold out on the store right now:\n- Sold out thing (sold out)");
+    expect(ai.calls[1]).toContain("- Sold out thing: out of stock; 40 more shipped, on its way, expected at our studio around October 9");
+    expect(ai.calls[1]).not.toMatch(/supplier name|unit cost/i);
+  });
+
+  it("words restock stages for customers and spots availability questions", () => {
+    const row = { shopifyVariantId: "v", shopifyProductId: "p", title: "Reflect Wool Yarn", option: "Orange", sku: null, onHand: 0, incoming: 36 };
+    expect(stockText([{ ...row, stage: "ordered", expected: "2026-09-30", late: true }], [])).toContain("Reflect Wool Yarn — Orange: out of stock; 36 more ordered, running behind (was due September 30; no firm new date)");
+    expect(stockText([{ ...row, stage: "arrived", expected: null, late: false }], [])).toContain("arrived at our studio, being checked in");
+    expect(stockText([], [{ title: "Reflect Wool Yarn", options: ["Orange", "Teal"] }])).toContain("- Reflect Wool Yarn (sold out: Orange, Teal)");
+    expect(stockText([], [])).toBe("");
+    expect(asksAboutStock("When will the orange wool be back in stock?")).toBe(true);
+    expect(asksAboutStock("is the duo available")).toBe(true);
+    expect(asksAboutStock("my machine keeps skipping")).toBe(false);
   });
 
   it("reads upcoming class dates and open seats from the booking app", async () => {

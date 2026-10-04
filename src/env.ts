@@ -23,6 +23,8 @@ export interface Env {
   EASYPOST_API_KEY?: string;
   BOOKING_SUPABASE_URL?: string;
   BOOKING_SUPABASE_ANON_KEY?: string;
+  TUFTSTOCK_URL?: string;
+  TUFTSTOCK_TOKEN?: string;
   DEV_LOGIN_EMAIL?: string;
   DEMO_DATA?: string;
   RAW_ENV?: Env; // env before app-entered credentials were applied

@@ -5,6 +5,7 @@
 import type { Env } from "../env";
 import { STORE_URL, articleUrl, descriptionFor, kbArticles } from "./kb";
 import { ask } from "./manual";
+import { incomingStock, stockText } from "./stock";
 import { shopify } from "./shopify";
 import { HttpError, getSetting, setSetting } from "./util";
 
@@ -20,11 +21,11 @@ export interface Source {
   image: string | null;
 }
 
-export interface Product { id: string; title: string; handle: string; type: string; url: string; price: string; image: string | null; about: string }
+export interface Product { id: string; title: string; handle: string; type: string; url: string; price: string; image: string | null; about: string; available: boolean; soldOut: string[] }
 export interface ClassInfo { title: string; url: string | null; price: string; duration: string; location: string; about: string; dates: { when: string; seatsLeft: number }[] }
 
 export interface AskAnswer {
-  kind: "fix" | "buy" | "classes" | "general" | "order";
+  kind: "fix" | "buy" | "classes" | "stock" | "general" | "order";
   answer: string;
   steps: { text: string; refs: number[] }[];
   articles: { n: number; title: string; url: string; image: string | null }[];
@@ -79,22 +80,25 @@ async function cached<T>(env: Env, key: string, minutes: number, load: () => Pro
 
 const money = (n: string, cur = "USD") => (cur === "USD" ? `$${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}` : `${n} ${cur}`);
 
-/** Products on sale on the online store (refreshed every 15 minutes). */
+/** Products on the online store, with what's sold out (refreshed every 15 minutes). */
 export function askProducts(env: Env): Promise<Product[]> {
-  return cached(env, "ask_products", 15, async () => {
+  return cached(env, "ask_products_v2", 15, async () => {
     const out: Product[] = [];
     let after: string | null = null;
     for (let page = 0; page < 3; page++) {
       const d: any = await shopify(env,
-        `query AskProducts($after: String) { products(first: 100, after: $after, query: "status:active") { nodes { id title handle productType onlineStoreUrl description(truncateAt: 400) featuredMedia { preview { image { url } } } priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount } } variants(first: 20) { nodes { availableForSale } } } pageInfo { hasNextPage endCursor } } }`,
+        `query AskProducts($after: String) { products(first: 100, after: $after, query: "status:active") { nodes { id title handle productType onlineStoreUrl description(truncateAt: 400) featuredMedia { preview { image { url } } } priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount } } variants(first: 50) { nodes { title availableForSale } } } pageInfo { hasNextPage endCursor } } }`,
         { after });
       for (const p of d.products.nodes) {
-        if (!p.onlineStoreUrl || !p.variants.nodes.some((v: any) => v.availableForSale)) continue;
+        if (!p.onlineStoreUrl) continue;
+        const variants: { title: string; availableForSale: boolean }[] = p.variants.nodes;
         const min = p.priceRangeV2.minVariantPrice, max = p.priceRangeV2.maxVariantPrice.amount;
         out.push({
           id: p.id.split("/").pop(), title: p.title, handle: p.handle, type: p.productType ?? "", url: `${STORE_URL}/products/${p.handle}`,
           price: Number(max) > Number(min.amount) ? `${money(min.amount, min.currencyCode)}–${money(max, min.currencyCode)}` : money(min.amount, min.currencyCode),
           image: p.featuredMedia?.preview?.image?.url ?? null, about: String(p.description ?? "").replace(/\s+/g, " ").trim(),
+          available: variants.some((v) => v.availableForSale),
+          soldOut: variants.length > 1 ? variants.filter((v) => !v.availableForSale).map((v) => v.title) : [],
         });
       }
       if (!d.products.pageInfo.hasNextPage) break;
@@ -148,7 +152,7 @@ const SYSTEM = `You are the help assistant on the learn hub of Tuft the World, a
 const PICK_SCHEMA = {
   type: "object",
   properties: {
-    kind: { type: "string", enum: ["fix", "buy", "classes", "general", "order"], description: "fix = a machine or technique problem; buy = what to buy / which machine suits them; classes = workshops and classes; order = about their own order (tracking, returns of a specific order); general = anything else." },
+    kind: { type: "string", enum: ["fix", "buy", "classes", "stock", "general", "order"], description: "fix = a machine or technique problem; buy = what to buy / which machine suits them; stock = whether something is in stock or when it will be back; classes = workshops and classes; order = about their own order (tracking, returns of a specific order); general = anything else." },
     source_ids: { type: "array", items: { type: "string" }, description: "Up to 6 ids of the sources most likely to answer it, best first. Empty if none fit." },
   },
   required: ["kind", "source_ids"],
@@ -190,7 +194,8 @@ const ANSWER_SCHEMA = {
 const ANSWER_RULES = `How to answer:
 - Base everything on the sources given. Cite the sources you used by id. Internal repair notes (ids starting r:) are your own team's notes: use what they teach, but never mention that internal notes exist, and never pass on anything private (names, order details, costs, suppliers).
 - Fixes: give the likely cause first, then clear steps. If their machine is known, make the steps fit that machine. Suggest contacting us if the steps don't fix it.
-- Buying advice: recommend only products from the product list (by handle), matched to what they want to make (cut vs loop pile, high pile, size, beginner or experienced, budget). If they're vague, still give a sensible recommendation (the starter kit suits most beginners) and ask one question back. Say why each product fits; don't just list.
+- Buying advice: recommend only in-stock products from the product list (by handle), matched to what they want to make (cut vs loop pile, high pile, size, beginner or experienced, budget). If they're vague, still give a sensible recommendation (the starter kit suits most beginners) and ask one question back. Say why each product fits; don't just list.
+- Restocks: answer from <stock>. Name the item, say whether it's in stock, and if it's on order give the approximate date as described there. If it's sold out and not on order, say we don't have a date yet. You may suggest an in-stock alternative from <products> (in the products list).
 - Classes: recommend only classes from the class list, with who each is for. Mention real upcoming dates if listed; otherwise tell them to pick a date on the class page.
 - Their own order (tracking, a return for an order, a missing item): don't guess — set handoff so they can chat with us, and say we can look it up there.
 - If nothing given answers it, say so briefly and set handoff. Never make things up.
@@ -211,11 +216,16 @@ export async function answerQuestion(env: Env, origin: string, question: string,
   const chosen = [...new Set(pick.source_ids)].map((id) => byId.get(id)).filter((s): s is Source => !!s).slice(0, 6);
 
   const kind = pick.kind;
-  const products = kind === "buy" || kind === "general" ? await askProducts(env).catch(() => [] as Product[]) : [];
-  const classes = kind === "classes" ? await askClasses(env, await askProducts(env).catch(() => [])).catch(() => [] as ClassInfo[]) : [];
+  const allProducts = kind === "buy" || kind === "general" || kind === "stock" || kind === "classes" ? await askProducts(env).catch(() => [] as Product[]) : [];
+  const products = allProducts;
+  const stock = kind === "buy" || kind === "stock" || kind === "general"
+    ? stockText(await incomingStock(env), allProducts.filter((p) => !p.available || p.soldOut.length).map((p) => ({ title: p.title, options: p.available ? p.soldOut : [] })))
+    : "";
+  const classes = kind === "classes" ? await askClasses(env, allProducts).catch(() => [] as ClassInfo[]) : [];
   const parts = [
     chosen.length ? `<sources>\n${chosen.map((s) => `<source id="${s.id}" kind="${s.kind}" title="${s.title.replace(/"/g, "'")}">\n${s.body.slice(0, 8000)}\n</source>`).join("\n")}\n</sources>` : "<sources>none matched</sources>",
-    products.length ? `<products>\n${products.map((p) => `${p.handle} | ${p.title} | ${p.type} | ${p.price} | ${p.about.slice(0, 300)}`).join("\n")}\n</products>` : "",
+    products.length && kind !== "classes" ? `<products>\n${products.map((p) => `${p.handle} | ${p.title} | ${p.type} | ${p.price} | ${p.available ? "in stock" : "SOLD OUT"} | ${p.about.slice(0, 300)}`).join("\n")}\n</products>` : "",
+    stock ? `<stock>\n${stock}\n</stock>` : "",
     kind === "classes" ? `<classes>\n${classes.length ? classes.map((c) => `${c.title} | ${c.price} | ${c.duration} | ${c.location} | ${c.about} | next dates: ${c.dates.map((d) => `${d.when} (${d.seatsLeft} seats)`).join("; ") || "see the class page"}`).join("\n") : "Class details aren't available right now; point them to the workshops on our site."}\n</classes>` : "",
     `<question>${question}</question>\n${who}\nQuestion type: ${kind}.`,
     ANSWER_RULES,
@@ -252,7 +262,7 @@ export function shapeAnswer(
     answer: String(out.answer ?? "").trim().slice(0, 1500),
     steps,
     articles: articles.slice(0, 5),
-    products: (out.products ?? []).map((p) => ({ p: byHandle.get(p.handle), why: p.why })).filter((x) => x.p).slice(0, 3)
+    products: (out.products ?? []).map((p) => ({ p: byHandle.get(p.handle), why: p.why })).filter((x) => x.p?.available).slice(0, 3)
       .map(({ p, why }) => ({ title: p!.title, url: p!.url, price: p!.price, image: p!.image, why: String(why).slice(0, 300) })),
     classes: (out.classes ?? []).map((c) => ({ c: byTitle.get(String(c.title).toLowerCase()), why: c.why })).filter((x) => x.c).slice(0, 4)
       .map(({ c, why }) => ({ title: c!.title, url: c!.url, price: c!.price, why: String(why).slice(0, 300), dates: c!.dates.slice(0, 4).map((d) => `${d.when}${d.seatsLeft <= 3 ? ` · ${d.seatsLeft} left` : ""}`) })),

@@ -154,6 +154,7 @@ const GROUPS = [
   { id: "ups", title: "UPS", desc: "From your app at developer.ups.com. Keep Mode on “test” until a test label prints correctly." },
   { id: "usps", title: "EasyPost (USPS, FedEx & more)", desc: "From easypost.com → Account → API Keys. Use the Production key; postage is paid from your EasyPost wallet (fund it by ACH to avoid the card fee). USPS works right away; turn on FedEx, UPS, OnTrac, Amazon Shipping or DHL eCommerce under Carriers in EasyPost and their rates show up here automatically." },
   { id: "booking", title: "Booking app (class dates)", desc: "Lets the learn hub assistant tell visitors about upcoming class dates and open seats. Read-only: it uses the same public key as the date picker on your workshop pages." },
+  { id: "stock", title: "TuftStock (restocks)", desc: "Lets the chat and the learn hub assistant answer “when is this back in stock?” from your purchase orders and shipment tracking. Read-only — no suppliers or costs are shared." },
   { id: "ai", title: "AI drafts", desc: "Optional. A key from console.anthropic.com turns on “Draft with AI” (about 1–2¢ per draft)." },
 ];
 
