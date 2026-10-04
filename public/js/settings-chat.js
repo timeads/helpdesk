@@ -109,7 +109,7 @@ function draw(el, r) {
           text("offlineMessage", "After-hours message", { rows: 2, maxlength: 300 }))),
       h("div", {},
         h("h3", { class: "section" }, "Install on your store"),
-        h("p", { class: "small muted", style: { marginTop: 0 } }, "In Shopify: Online Store → Themes → ⋯ → Edit code → layout/theme.liquid. Paste this just above </body> (replacing the old chat line) and save. Logged-in customers skip the name and email, and once the secret below is in the theme, the chat can look up their orders without a code."),
+        h("p", { class: "small muted", style: { marginTop: 0 } }, "In Shopify: Online Store → Themes → ⋯ → Edit code. Add a snippet named ttw-chat with the code below, then in layout/theme.liquid put {% render 'ttw-chat' %} just above </body> (in place of the old chat line). Logged-in customers skip the name and email, and once the secret below is pasted into the snippet, the chat can look up their orders without a code."),
         h("pre", { class: "code-block" }, snippet),
         h("div", { class: "row", style: { gap: "8px", marginTop: "8px" } }, copy,
           h("a", { class: "btn sm ghost", href: "/chat/test.html", target: "_blank", rel: "noopener" }, icon("ext"), "Try it here first"), alerts),
@@ -118,10 +118,13 @@ function draw(el, r) {
       h("div", { class: "row" }, save)));
 }
 
-/** The theme line: a logged-in customer's email is signed with the secret (Liquid's hmac_sha256), so the chat can trust it. */
+/** The theme snippet (snippets/ttw-chat.liquid): a logged-in customer's email is signed with the secret (Liquid's hmac_sha256), so the chat can trust it. */
 function chatSnippet(origin) {
-  return `{%- if customer -%}{%- assign ttw_ts = 'now' | date: '%s' -%}{%- capture ttw_msg -%}{{ customer.email | downcase }}|{{ ttw_ts }}{%- endcapture -%}{%- endif -%}
-<script src="${origin}/chat/widget.js" data-name="{{ customer.name }}" data-email="{{ customer.email }}"{% if customer and settings.ttw_chat_secret != blank %} data-ts="{{ ttw_ts }}" data-sig="{{ ttw_msg | hmac_sha256: settings.ttw_chat_secret }}"{% endif %} defer></script>`;
+  return `{%- comment -%} Tuft the World chat (rendered from layout/theme.liquid with {% render 'ttw-chat' %}).
+  Paste the chat secret from the helpdesk (Settings → Chat → Logged-in customers) between the quotes below. {%- endcomment -%}
+{%- assign ttw_chat_secret = '' -%}
+{%- if customer and ttw_chat_secret != blank -%}{%- assign ttw_ts = 'now' | date: '%s' -%}{%- capture ttw_msg -%}{{ customer.email | downcase }}|{{ ttw_ts }}{%- endcapture -%}{%- endif -%}
+<script src="${origin}/chat/widget.js" data-name="{{ customer.name | escape }}" data-email="{{ customer.email | escape }}"{% if customer and ttw_chat_secret != blank %} data-ts="{{ ttw_ts }}" data-sig="{{ ttw_msg | hmac_sha256: ttw_chat_secret }}"{% endif %} defer></script>`;
 }
 
 /** Logged-in customers: the secret the theme signs emails with. */
@@ -144,7 +147,7 @@ function identityCard() {
       h("h3", { class: "section" }, "Logged-in customers"),
       h("p", { class: "small muted", style: { marginTop: 0 } },
         "When a customer is logged in on your store, the theme signs their email with this secret, so the chat can look up their orders right away instead of emailing a code. ",
-        "Paste it in Shopify: Online Store → Themes → Customize → Theme settings (gear) → Support chat → Chat secret, then Save. Keep it private — it's like a password."),
+        "Paste it in Shopify: Online Store → Themes → ⋯ → Edit code → snippets/ttw-chat.liquid, between the quotes on the line ttw_chat_secret = '', then Save. Keep it private — it's like a password."),
       d.secret
         ? h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", alignItems: "center" } },
           h("code", { class: "code-block", style: { margin: 0, padding: "6px 10px" } }, reveal ? d.secret : `${"•".repeat(24)}${d.secret.slice(-4)}`),
