@@ -3,7 +3,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import {
-  addChatMessage, authedChat, checkVerifyCode, chatMessages, chatSettings, hashIp, hoursText, isOpen, moveChatToEmail, respond, startChat, type ChatFile,
+  addChatMessage, authedChat, checkVerifyCode, chatMessages, chatSettings, hashIp, hoursText, isOpen, moveChatToEmail, proveEmail, respond, signedEmail, startChat, type ChatFile,
 } from "../lib/chat";
 import { aiConfigured } from "../lib/ai";
 import { MACHINES, handleAsk } from "../lib/ask";
@@ -88,7 +88,7 @@ chatApi.post("/start", async (c) => {
   // While it's off, only the preview page on this app can start chats
   const self = new URL(c.req.url).origin;
   if (!s.enabled && c.req.header("origin") !== self) throw new HttpError(403, "Chat is turned off");
-  const body = await c.req.json<{ name?: string; email?: string; message?: string; page?: string; website?: string; files?: unknown }>();
+  const body = await c.req.json<{ name?: string; email?: string; message?: string; page?: string; website?: string; files?: unknown; identity?: { email?: string; ts?: number; sig?: string } }>();
   if (body.website) throw new HttpError(400, "Couldn't start the chat"); // honeypot field bots fill in
   const email = String(body.email ?? "").trim().toLowerCase();
   const message = String(body.message ?? "").trim();
@@ -106,8 +106,11 @@ chatApi.post("/start", async (c) => {
     ipHash: ip,
     files: s.allowPhotos ? cleanFiles(body.files) : undefined,
   });
+  // Logged in on the store: the theme's signature proves the email, so orders need no code
+  const signed = await signedEmail(c.env, body.identity);
+  if (signed && signed === email) await proveEmail(c.env, chat, signed);
   c.executionCtx.waitUntil(respond(c.env, chat.id).catch((e) => console.error("chat respond", e)));
-  return c.json({ id: chat.id, token: chat.token });
+  return c.json({ id: chat.id, token: chat.token, signedIn: !!signed && signed === email });
 });
 
 /** New messages since `after`, plus who's here. Also marks the visitor as present. */
@@ -131,8 +134,11 @@ chatApi.post("/:id/messages", async (c) => {
   const chat = await authedChat(c.env, c.req.param("id"), c.req.header("x-chat-token"));
   if (chat.state === "email" || chat.state === "ended") throw new HttpError(409, "This chat has ended — start a new one");
   const s = await chatSettings(c.env);
-  const body = await c.req.json<{ text?: string; files?: unknown }>();
+  const body = await c.req.json<{ text?: string; files?: unknown; identity?: { email?: string; ts?: number; sig?: string } }>();
   const text = String(body.text ?? "").trim();
+  // Logged in partway through the chat (or on another page): their account email is proven too
+  const signed = await signedEmail(c.env, body.identity);
+  if (signed) await proveEmail(c.env, chat, signed);
   const files = s.allowPhotos ? cleanFiles(body.files) : undefined;
   if (!text && !files?.length) throw new HttpError(400, "Message is empty");
   const n = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE ticket_id = ? AND kind = 'chat' AND direction = 'in'").bind(chat.ticket_id).first<{ n: number }>();

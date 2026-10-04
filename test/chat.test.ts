@@ -26,7 +26,7 @@ vi.mock("../src/lib/shopify", () => ({
   })),
 }));
 
-import { agentChatReply, chatMessages, checkVerifyCode, hoursText, isOpen, loadChat, moveChatToEmail, respond, startChat, sweepChats, DEFAULT_CHAT } from "../src/lib/chat";
+import { agentChatReply, chatMessages, checkVerifyCode, hoursText, proveEmail, rotateIdentitySecret, signedEmail, isOpen, loadChat, moveChatToEmail, respond, startChat, sweepChats, DEFAULT_CHAT } from "../src/lib/chat";
 
 /** The raw email's headers plus its plain-text body, decoded. */
 const decode = (raw: string) => {
@@ -118,6 +118,30 @@ describe("website chat", () => {
     const draft = JSON.parse((await loadChat(env, chat.id))!.ai_draft!);
     expect(draft.reply).toBe("Try cleaning the blade.\n\nRead more:\n• Jams: https://x/jams");
     expect(draft.cards).toBeUndefined();
+  });
+
+  it("trusts a logged-in customer's email when the theme signed it, so orders need no code", async () => {
+    const id = async (email: string, ts: number, secret: string) => {
+      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+      const sig = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${email}|${ts}`)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      return { email, ts, sig };
+    };
+    const now = Math.floor(Date.now() / 1000);
+    expect(await signedEmail(env, await id("jane@example.com", now, "anything"))).toBeNull(); // no secret set up yet
+    const { secret } = await rotateIdentitySecret(env);
+    const good = await id("jane@example.com", now, secret);
+    expect(await signedEmail(env, { ...good, email: "Jane@Example.com" })).toBe("jane@example.com"); // Liquid downcases; so do we
+    expect(await signedEmail(env, await id("jane@example.com", now - 13 * 3600, secret))).toBeNull(); // too old
+    expect(await signedEmail(env, { ...good, email: "someone@else.com" })).toBeNull(); // signature is for Jane
+    expect(await signedEmail(env, await id("jane@example.com", now, "wrong-secret"))).toBeNull();
+    expect(await signedEmail(env, { email: "jane@example.com", ts: now, sig: "zz" })).toBeNull();
+
+    await settings({ aiMode: "auto", hours: ALWAYS });
+    const chat = await startChat(env, { name: "Jane", email: "jane@example.com", message: "Where's my order?", ipHash: "x" });
+    await proveEmail(env, chat, (await signedEmail(env, good))!);
+    await respond(env, chat.id);
+    expect(ai.calls[0].verifiedEmails).toEqual(["jane@example.com"]);
+    expect(ai.calls[0].orders.map((o: any) => o.name)).toEqual(["#70001-TG"]); // their orders, no code asked
   });
 
   it("only shares an order when its email matches the chat's", async () => {

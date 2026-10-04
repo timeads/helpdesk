@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import {
-  agentChatReply, aiAnswerFor, chatForTicket, chatMessages, chatSettings, cleanChatSettings, hoursText, isOpen, moveChatToEmail, type ChatFile, type ChatRow,
+  agentChatReply, aiAnswerFor, chatForTicket, chatMessages, chatSettings, cleanChatSettings, hoursText, identitySecret, isOpen, moveChatToEmail, rotateIdentitySecret, type ChatFile, type ChatRow,
 } from "../lib/chat";
 import { HttpError, nowIso, setSetting } from "../lib/util";
 
@@ -33,6 +33,18 @@ const describe = (chat: ChatRow) => ({
 chats.get("/settings", async (c) => {
   const s = await chatSettings(c.env);
   return c.json({ settings: s, open: isOpen(s), hours: hoursText(s), origin: new URL(c.req.url).origin });
+});
+
+/** Logged-in customers: whether the theme secret exists, and (admins) the secret itself to paste into the theme. */
+chats.get("/identity", async (c) => {
+  requireAdmin(c);
+  const s = await identitySecret(c.env);
+  return c.json({ secret: s?.secret ?? null, createdAt: s?.createdAt ?? null });
+});
+
+chats.post("/identity/rotate", async (c) => {
+  requireAdmin(c);
+  return c.json(await rotateIdentitySecret(c.env));
 });
 
 chats.put("/settings", async (c) => {

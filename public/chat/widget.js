@@ -1,5 +1,6 @@
-// Tuft the World website chat. Add to the Shopify theme (layout/theme.liquid, before </body>):
-//   <script src="https://<helpdesk>/chat/widget.js" data-name="{{ customer.name }}" data-email="{{ customer.email }}" defer></script>
+// Tuft the World website chat. Add to the Shopify theme (layout/theme.liquid, before </body>) — the
+// snippet in Settings → Chat, which also signs a logged-in customer's email (data-ts + data-sig) so the
+// chat can look up their orders without emailing a code.
 // Everything lives in a shadow root so the theme's CSS can't touch it (and it can't touch the theme).
 (() => {
   if (window.__ttwChat) return;
@@ -9,6 +10,9 @@
   const API = `${BASE}/chat-api`;
   const KEY = "ttw-chat";
   const prefill = { name: (script?.dataset.name || "").trim(), email: (script?.dataset.email || "").trim() };
+  // Logged in on the store: the theme vouches for the email (checked by the helpdesk)
+  const identity = prefill.email && script?.dataset.sig ? { email: prefill.email, ts: Number(script.dataset.ts), sig: script.dataset.sig } : null;
+  const loginUrl = script?.dataset.login || "/account/login";
   const preview = script?.dataset.preview === "1";
   const ACCENT = /^#[0-9a-f]{3,8}$/i.test(script?.dataset.accent || "") ? script.dataset.accent : "#c78c2b"; // step numbers, same as the Ask box
 
@@ -126,6 +130,10 @@ textarea { resize: none; }
 .pending { display: flex; gap: 6px; flex-wrap: wrap; }
 .pending img { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; }
 .note { font-size: 13px; color: #555; background: #f3efe9; border-radius: 10px; padding: 10px 12px; }
+.acct { font-size: 13px; line-height: 1.45; color: #444; background: #f3efe9; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.acct b { color: #222; font-size: 13.5px; }
+.acct a { color: inherit; font-weight: 700; text-decoration: underline; }
+.acct.on { background: color-mix(in srgb, ${color} 8%, #fff); border: 1px solid color-mix(in srgb, ${color} 20%, #fff); }
 /* Rich answers: numbered steps, article and product cards (same look as the learn hub's Ask box) */
 .msg.rich { max-width: 94%; }
 .msg .b p { margin: 0; }
@@ -263,12 +271,21 @@ textarea { resize: none; }
       ].filter(Boolean));
       const name = el("input", { name: "name", autocomplete: "name", value: prefill.name || "" });
       const email = el("input", { name: "email", type: "email", required: true, autocomplete: "email", value: prefill.email || "" });
+      const signedIn = !!prefill.email;
+      const back = `${loginUrl}${loginUrl.includes("?") ? "&" : "?"}return_url=${encodeURIComponent(location.pathname + location.search)}`;
+      const who = signedIn
+        ? el("div", { class: "acct on" }, el("b", {}, `Signed in as ${prefill.name || prefill.email}`), el("span", {}, identity ? "We can look up your orders right here." : prefill.email))
+        : el("div", { class: "acct" },
+          el("b", {}, "Have an account?"),
+          el("span", {}, el("a", { href: back }, "Log in"), " and we can look up your orders instantly. No account? Just add your name and email below."));
       const message = el("textarea", { name: "message", rows: 3, required: true, placeholder: "How can we help?" });
       const hp = el("input", { class: "hp", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
       const err = el("div", { class: "err", role: "alert" });
       const go = el("button", { class: "primary", type: "submit" }, "Start chat");
       const form = el("form", { class: "start" },
-        el("label", {}, "Name", name), el("label", {}, "Email (so we can follow up)", email), el("label", {}, "Message", message),
+        who,
+        signedIn ? null : [el("label", {}, "Name", name), el("label", {}, "Email (so we can follow up)", email)],
+        el("label", {}, "Message", message),
         cfg.photos ? photoPicker() : null, hp, err, go);
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -276,7 +293,7 @@ textarea { resize: none; }
         go.disabled = true;
         go.textContent = "Starting…";
         try {
-          const r = await call("/start", { method: "POST", body: { name: name.value, email: email.value, message: message.value, page: location.href, website: hp.value, files: pending.splice(0).map(({ preview: _p, ...f }) => f) } });
+          const r = await call("/start", { method: "POST", body: { name: name.value, email: email.value, message: message.value, page: location.href, website: hp.value, files: pending.splice(0).map(({ preview: _p, ...f }) => f), identity } });
           saved = { id: r.id, token: r.token, after: 0 };
           store.set(saved);
           chatView();
@@ -325,7 +342,7 @@ textarea { resize: none; }
         err.textContent = "";
         send.disabled = true;
         try {
-          await call(`/${saved.id}/messages`, { method: "POST", token: saved.token, body: { text, files: pending.map(({ preview: _p, ...f }) => f) } });
+          await call(`/${saved.id}/messages`, { method: "POST", token: saved.token, body: { text, files: pending.map(({ preview: _p, ...f }) => f), identity } });
           box.value = "";
           pending.length = 0;
           if (pick) pick.querySelector(".pending").replaceChildren();

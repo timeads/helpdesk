@@ -72,7 +72,7 @@ function draw(el, r) {
   origins.oninput = () => { s.origins = origins.value.split(/\s+/).filter(Boolean); dirty(); };
 
   // Install
-  const snippet = `<script src="${r.origin}/chat/widget.js" data-name="{{ customer.name }}" data-email="{{ customer.email }}" defer></script>`;
+  const snippet = chatSnippet(r.origin);
   const copy = h("button", { class: "btn sm" }, icon("copy"), "Copy");
   copy.onclick = async () => {
     try { await navigator.clipboard.writeText(snippet); toast("Copied — paste it into theme.liquid"); } catch { toast("Select the code and copy it", true); }
@@ -109,12 +109,51 @@ function draw(el, r) {
           text("offlineMessage", "After-hours message", { rows: 2, maxlength: 300 }))),
       h("div", {},
         h("h3", { class: "section" }, "Install on your store"),
-        h("p", { class: "small muted", style: { marginTop: 0 } }, "In Shopify: Online Store → Themes → ⋯ → Edit code → layout/theme.liquid. Paste this just above </body> and save. Logged-in customers get their name and email filled in."),
+        h("p", { class: "small muted", style: { marginTop: 0 } }, "In Shopify: Online Store → Themes → ⋯ → Edit code → layout/theme.liquid. Paste this just above </body> (replacing the old chat line) and save. Logged-in customers skip the name and email, and once the secret below is in the theme, the chat can look up their orders without a code."),
         h("pre", { class: "code-block" }, snippet),
         h("div", { class: "row", style: { gap: "8px", marginTop: "8px" } }, copy,
           h("a", { class: "btn sm ghost", href: "/chat/test.html", target: "_blank", rel: "noopener" }, icon("ext"), "Try it here first"), alerts),
         h("label", { class: "field", style: { marginTop: "12px" } }, "Sites allowed to show the chat (one per line)", origins)),
+      identityCard(),
       h("div", { class: "row" }, save)));
+}
+
+/** The theme line: a logged-in customer's email is signed with the secret (Liquid's hmac_sha256), so the chat can trust it. */
+function chatSnippet(origin) {
+  return `{%- if customer -%}{%- assign ttw_ts = 'now' | date: '%s' -%}{%- capture ttw_msg -%}{{ customer.email | downcase }}|{{ ttw_ts }}{%- endcapture -%}{%- endif -%}
+<script src="${origin}/chat/widget.js" data-name="{{ customer.name }}" data-email="{{ customer.email }}"{% if customer and settings.ttw_chat_secret != blank %} data-ts="{{ ttw_ts }}" data-sig="{{ ttw_msg | hmac_sha256: settings.ttw_chat_secret }}"{% endif %} defer></script>`;
+}
+
+/** Logged-in customers: the secret the theme signs emails with. */
+function identityCard() {
+  const el = h("div", {}, h("h3", { class: "section" }, "Logged-in customers"), h("p", { class: "small muted" }, "Loading…"));
+  const draw = (d, reveal = false) => {
+    const make = h("button", { class: "btn sm" + (d.secret ? "" : " primary") }, d.secret ? "Make a new secret" : "Create the secret");
+    make.onclick = busy(make, async () => {
+      if (d.secret && !confirm("Make a new secret? The old one stops working right away, so logged-in customers get codes again until you paste the new one into the theme.")) return;
+      draw(await api("/chats/identity/rotate", { method: "POST" }), true);
+      toast("Secret created — paste it into the theme now");
+    });
+    const copy = h("button", { class: "btn sm" }, icon("copy"), "Copy");
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(d.secret); toast("Copied"); } catch { toast("Select the secret and copy it", true); }
+    };
+    const show = h("button", { class: "btn sm ghost" }, reveal ? "Hide" : "Show");
+    show.onclick = () => draw(d, !reveal);
+    mount(el,
+      h("h3", { class: "section" }, "Logged-in customers"),
+      h("p", { class: "small muted", style: { marginTop: 0 } },
+        "When a customer is logged in on your store, the theme signs their email with this secret, so the chat can look up their orders right away instead of emailing a code. ",
+        "Paste it in Shopify: Online Store → Themes → Customize → Theme settings (gear) → Support chat → Chat secret, then Save. Keep it private — it's like a password."),
+      d.secret
+        ? h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", alignItems: "center" } },
+          h("code", { class: "code-block", style: { margin: 0, padding: "6px 10px" } }, reveal ? d.secret : `${"•".repeat(24)}${d.secret.slice(-4)}`),
+          show, copy, make,
+          h("span", { class: "small muted" }, `Created ${new Date(d.createdAt).toLocaleDateString()}`))
+        : h("div", { class: "row" }, make));
+  };
+  api("/chats/identity").then((d) => draw(d)).catch((e) => mount(el, h("div", { class: "notice bad" }, e.message)));
+  return el;
 }
 
 function statusLine(open, hours) {

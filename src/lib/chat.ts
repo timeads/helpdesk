@@ -9,7 +9,7 @@ import { buildMime, encodeRaw, textToHtml } from "./mime";
 import { getMailbox, importMessage, sendRaw } from "./gmail";
 import { customerProfile, findOrderByName, type ShopifyOrder } from "./shopify";
 import { logEvent, setStatus, getTicket } from "./support";
-import { HttpError, getSetting, nowIso } from "./util";
+import { HttpError, getSetting, nowIso, setSetting } from "./util";
 
 export type ChatState = "ai" | "waiting" | "agent" | "email" | "ended";
 export type AiMode = "off" | "draft" | "auto";
@@ -265,6 +265,56 @@ export function cardsText(c: ChatCards | null | undefined): string {
     c.articles.length ? `Read more:\n${c.articles.map((a) => `• ${a.title}: ${a.url}`).join("\n")}` : "",
     c.products.length ? `Products:\n${c.products.map((p) => `• ${p.title} (${p.price}): ${p.url}`).join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
+}
+
+// ---- Logged-in customers: the theme signs the customer's email (Liquid's hmac_sha256 with a secret
+// only the theme and this app know), so a logged-in customer's email counts as proven, like a code.
+
+const IDENTITY_KEY = "chat_identity_secret";
+const IDENTITY_MAX_AGE = 12 * 3600; // seconds a signed page stays good for
+
+export async function identitySecret(env: Env): Promise<{ secret: string; createdAt: string } | null> {
+  return getSetting<{ secret: string; createdAt: string } | null>(env, IDENTITY_KEY, null);
+}
+
+/** A new secret (the old one stops working, so paste the new one into the theme straight away). */
+export async function rotateIdentitySecret(env: Env) {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const value = { secret: [...bytes].map((b) => b.toString(16).padStart(2, "0")).join(""), createdAt: nowIso() };
+  await setSetting(env, IDENTITY_KEY, value);
+  return value;
+}
+
+async function hmacHex(secret: string, message: string) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message)));
+  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The email the theme vouched for, or null (no secret set, bad or old signature). */
+export async function signedEmail(env: Env, id: { email?: unknown; ts?: unknown; sig?: unknown } | null | undefined, now = Date.now()): Promise<string | null> {
+  if (!id || typeof id !== "object") return null;
+  const email = String(id.email ?? "").trim().toLowerCase();
+  const ts = Number(id.ts);
+  const sig = String(id.sig ?? "").trim().toLowerCase();
+  if (!email || !Number.isFinite(ts) || !/^[0-9a-f]{64}$/.test(sig)) return null;
+  const age = now / 1000 - ts;
+  if (age > IDENTITY_MAX_AGE || age < -300) return null;
+  const stored = await identitySecret(env);
+  if (!stored) return null;
+  const expected = await hmacHex(stored.secret, `${email}|${Math.trunc(ts)}`);
+  let diff = 0;
+  for (let i = 0; i < 64; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0 ? email : null;
+}
+
+/** Marks an email as the customer's own for this chat (orders under it can be discussed). */
+export async function proveEmail(env: Env, chat: ChatRow, email: string) {
+  const proven = provenEmails(chat);
+  if (proven.includes(email)) return;
+  proven.push(email);
+  await env.DB.prepare("UPDATE chats SET verified_emails = ? WHERE id = ?").bind(JSON.stringify(proven), chat.id).run();
+  chat.verified_emails = JSON.stringify(proven);
 }
 
 /** The plain-text transcript for the email hand-off. */
