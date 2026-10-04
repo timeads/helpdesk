@@ -1,6 +1,6 @@
 // Tuft the World "Ask" box for the learn hub. Add to the theme where the search box was:
 //   <div id="ttw-ask"></div>
-//   <script src="https://<helpdesk>/ask/ask.js" data-color="#1a1a1a" data-contact="/pages/contact" data-placeholder="…" defer></script>
+//   <script src="https://<helpdesk>/ask/ask.js" data-color="#1a1a1a" data-accent="#c78c2b" data-contact="/pages/contact" data-placeholder="…" defer></script>
 // Visitors describe a problem or ask a question; the answer comes from our articles, products and classes,
 // with links to the articles it used. Lives in a shadow root, inheriting the theme's font and text color.
 (() => {
@@ -9,6 +9,7 @@
   const script = document.currentScript || document.querySelector('script[src*="/ask/ask.js"]');
   const API = `${new URL(script?.src || location.href).origin}/chat-api`;
   const color = /^#[0-9a-f]{3,8}$/i.test(script?.dataset.color || "") ? script.dataset.color : "#1a1a1a";
+  const accent = /^#[0-9a-f]{3,8}$/i.test(script?.dataset.accent || "") ? script.dataset.accent : "#c78c2b"; // highlight (step numbers, tints)
   const contact = script?.dataset.contact || "/pages/contact";
   const placeholder = script?.dataset.placeholder || "Describe what's going on, or ask anything — e.g. “My machine keeps skipping stitches” or “Which machine is best for a beginner?”";
 
@@ -31,7 +32,7 @@
   };
 
   const CSS = `
-:host { display: block; font: inherit; color: inherit; }
+:host { display: block; font: inherit; color: inherit; text-align: left; }
 [hidden] { display: none !important; }
 * { box-sizing: border-box; }
 .box { border: 1px solid rgba(0,0,0,.14); border-radius: 14px; padding: 16px; background: rgba(255,255,255,.6); }
@@ -53,18 +54,33 @@ select { width: auto; flex: 1 1 200px; padding: 10px 12px; font-size: 15px; }
 .dot:nth-child(2) { animation-delay: .2s; } .dot:nth-child(3) { animation-delay: .4s; }
 @keyframes p { to { opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
-.card { border: 1px solid rgba(0,0,0,.12); border-radius: 14px; padding: 18px 20px; background: #fff; color: #222; }
-.lead { font-size: 1.05em; line-height: 1.55; margin: 0 0 12px; }
-.askback { background: rgba(0,0,0,.04); border-left: 4px solid ${color}; padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; }
-ol.steps { margin: 0 0 14px; padding-left: 1.4em; line-height: 1.5; }
-ol.steps li { margin: 6px 0; }
-sup a { color: ${color}; font-weight: 700; text-decoration: none; margin-left: 2px; }
-h4 { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; opacity: .7; margin: 18px 0 8px; }
+.card { border: 1px solid rgba(0,0,0,.12); border-radius: 16px; padding: 22px 24px; background: #fff; color: #222; line-height: 1.55; }
+@media (max-width: 560px) { .card { padding: 18px 16px; } }
+.kind { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #222;
+  background: color-mix(in srgb, ${accent} 22%, #fff); border-radius: 999px; padding: 4px 10px; margin-bottom: 12px; }
+.kind span { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: .8; }
+.lead { font-size: 1.12em; line-height: 1.55; margin: 0; padding: 14px 16px; border-left: 4px solid ${accent}; background: color-mix(in srgb, ${accent} 9%, #fff); border-radius: 0 10px 10px 0; color: #1a1a1a; }
+h3 { font-size: 1.05em; font-weight: 700; margin: 24px 0 10px; color: #1a1a1a; }
+ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+ol.steps li { counter-increment: step; display: grid; grid-template-columns: 30px 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid rgba(0,0,0,.08); align-items: start; }
+ol.steps li:first-child { border-top: 0; padding-top: 4px; }
+ol.steps li::before { content: counter(step); width: 30px; height: 30px; border-radius: 50%; background: ${accent}; color: #1a1a1a; font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+ol.steps b { color: #1a1a1a; }
+.refs { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: 1px; }
+.refs a { font-size: 11px; font-weight: 700; color: #1a1a1a; text-decoration: none; background: color-mix(in srgb, ${accent} 22%, #fff); border-radius: 999px; padding: 1px 7px; }
+.refs a:hover { background: ${accent}; }
+.askback { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; background: #f6f6f4; border: 1px solid rgba(0,0,0,.1); border-radius: 12px; padding: 14px 16px; margin: 22px 0 4px; }
+.askback .q { flex: 1 1 260px; }
+.askback .q small { display: block; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .65; margin-bottom: 2px; }
+.askback .q p { margin: 0; font-weight: 600; color: #1a1a1a; }
+.reply { font: inherit; font-size: 14px; font-weight: 700; background: #fff; color: #1a1a1a; border: 1px solid rgba(0,0,0,.25); border-radius: 999px; padding: 7px 14px; cursor: pointer; }
+.reply:hover { border-color: ${color}; }
+.handoff { margin: 18px 0 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .item { display: flex; gap: 12px; text-decoration: none; color: inherit; border: 1px solid rgba(0,0,0,.1); border-radius: 12px; padding: 10px; align-items: flex-start; }
 .item:hover { border-color: ${color}; }
 .item img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex: none; background: rgba(0,0,0,.05); }
-.item .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: ${color}; color: #fff; font-weight: 700; font-size: 13px; display: grid; place-items: center; }
+.item .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: color-mix(in srgb, ${accent} 22%, #fff); color: #1a1a1a; font-weight: 700; font-size: 13px; display: grid; place-items: center; }
 .item b { display: block; line-height: 1.3; }
 .item small { display: block; opacity: .75; margin-top: 4px; line-height: 1.4; }
 .price { font-weight: 700; margin-top: 4px; display: block; }
@@ -133,10 +149,6 @@ h4 { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; opacity:
     }
 
     function render(r, question) {
-      const refLink = (n) => {
-        const a = r.articles.find((x) => x.n === n);
-        return a ? el("sup", {}, el("a", { href: a.url, title: a.title }, `[${n}]`)) : null;
-      };
       const thumbs = el("span", { class: "thumbs" }, "Did this help?",
         [[1, "👍 Yes"], [-1, "👎 No"]].map(([v, t]) => el("button", {
           type: "button", "aria-pressed": "false",
@@ -147,19 +159,32 @@ h4 { font-size: .8em; text-transform: uppercase; letter-spacing: .06em; opacity:
           },
         }, t)));
       const foot = el("div", { class: "foot" }, thumbs, r.handoff ? null : el("span", {}, "Still stuck? ", chatButton(question)));
+      const KIND = { fix: "Troubleshooting", buy: "Buying advice", classes: "Classes", general: "Answer", order: "Your order" };
+      // The first sentence of a step is the action — bold it so the list can be skimmed
+      const stepText = (t) => {
+        const m = t.match(/^(.{8,120}?[.!?:])(\s+)([\s\S]+)$/);
+        return m ? [el("b", {}, m[1]), m[2] + m[3]] : [el("b", {}, t)];
+      };
+      const refs = (ns) => ns.length ? el("span", { class: "refs" }, ns.map((n) => {
+        const a = r.articles.find((x) => x.n === n);
+        return a ? el("a", { href: a.url, title: `From: ${a.title}`, "aria-label": `Source ${n}: ${a.title}` }, String(n)) : null;
+      })) : null;
       return el("div", { class: "card" },
+        el("div", { class: "kind" }, KIND[r.kind] || "Answer", machine.value ? el("span", {}, `· ${machine.value}`) : null),
         el("p", { class: "lead" }, r.answer),
-        r.steps.length ? el("ol", { class: "steps" }, r.steps.map((s) => el("li", {}, s.text, s.refs.map(refLink)))) : null,
-        r.products.length ? [el("h4", {}, "Our picks for you"), el("div", { class: "grid" }, r.products.map((p) =>
+        r.steps.length ? [el("h3", {}, r.kind === "fix" ? "What to try" : "Steps"), el("ol", { class: "steps" }, r.steps.map((st) => el("li", {}, el("div", {}, stepText(st.text), refs(st.refs)))))] : null,
+        r.products.length ? [el("h3", {}, "Our picks for you"), el("div", { class: "grid" }, r.products.map((p) =>
           el("a", { class: "item", href: p.url }, p.image ? el("img", { src: p.image, alt: "", loading: "lazy" }) : null,
             el("span", {}, el("b", {}, p.title), el("span", { class: "price" }, p.price), el("small", {}, p.why)))))] : null,
-        r.classes.length ? [el("h4", {}, "Classes"), el("div", { class: "grid" }, r.classes.map((c) =>
+        r.classes.length ? [el("h3", {}, "Classes"), el("div", { class: "grid" }, r.classes.map((c) =>
           el(c.url ? "a" : "div", { class: "item", href: c.url || undefined },
             el("span", {}, el("b", {}, c.title), c.price ? el("span", { class: "price" }, c.price) : null, el("small", {}, c.why),
               c.dates.length ? el("ul", { class: "dates" }, c.dates.map((d) => el("li", {}, d))) : el("small", {}, "Choose a date on the class page")))))] : null,
-        r.askBack ? el("div", { class: "askback" }, r.askBack) : null,
-        r.handoff ? el("p", {}, "This one's best handled by our team. ", chatButton(question)) : null,
-        r.articles.length ? [el("h4", {}, "From these articles"), el("div", { class: "grid" }, r.articles.map((a) =>
+        r.askBack ? el("div", { class: "askback" },
+          el("div", { class: "q" }, el("small", {}, "Quick question"), el("p", {}, r.askBack)),
+          el("button", { type: "button", class: "reply", onclick: () => { q.focus(); q.scrollIntoView({ block: "center", behavior: "smooth" }); } }, "Answer")) : null,
+        r.handoff ? el("p", { class: "handoff" }, "This one's best handled by our team. ", chatButton(question)) : null,
+        r.articles.length ? [el("h3", {}, "From these articles"), el("div", { class: "grid" }, r.articles.map((a) =>
           el("a", { class: "item", href: a.url }, el("span", { class: "n" }, String(a.n)), a.image ? el("img", { src: a.image, alt: "", loading: "lazy" }) : null,
             el("span", {}, el("b", {}, a.title)))))] : null,
         foot,

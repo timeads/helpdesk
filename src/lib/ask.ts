@@ -158,7 +158,7 @@ const PICK_SCHEMA = {
 const ANSWER_SCHEMA = {
   type: "object",
   properties: {
-    answer: { type: "string", description: "2–4 plain sentences: the likely cause or the direct answer. No markdown." },
+    answer: { type: "string", description: "1–3 plain sentences (under about 60 words): the likely cause or the direct answer. Details belong in the steps. No markdown." },
     steps: {
       type: "array",
       description: "For fixes and how-tos: short numbered steps in order (max 8). Empty when steps don't fit the question.",
