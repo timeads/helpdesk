@@ -362,7 +362,27 @@ export function knowledgeCard(items, reload) {
         content,
         h("label", { class: "check" }, active, "Use in AI drafts"), h("div", { class: "row" }, save, del)));
   };
-  items.forEach((k) => list.append(editor(k)));
+  // Blog articles from the website are grouped: one row per blog
+  const blogRows = new Map();
+  for (const k of items.filter((x) => x.type === "article" && x.source?.startsWith("blog:"))) {
+    const handle = k.source.split(":")[1];
+    blogRows.set(handle, [...(blogRows.get(handle) ?? []), k]);
+  }
+  for (const [handle, posts] of blogRows) {
+    const name = handle.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase());
+    const remove = h("button", { class: "btn ghost danger sm" }, "Stop using");
+    remove.onclick = busy(remove, async () => {
+      if (!confirm(`Stop giving the AI the “${name}” blog?`)) return;
+      await api(`/knowledge/site/blog/${encodeURIComponent(handle)}`, { method: "DELETE" });
+      reload();
+    });
+    list.append(h("details", { class: "macro-row" },
+      h("summary", {}, h("b", {}, `Blog: ${name}`), h("span", { class: "badge good plain" }, "From website"), h("span", { class: "small muted" }, `${posts.length} article${posts.length === 1 ? "" : "s"} · looked up when relevant`)),
+      h("div", { class: "stack", style: { paddingTop: "10px" } },
+        h("div", { class: "small muted" }, posts.map((p, i) => [i ? " · " : "", h("a", { href: p.source_url, target: "_blank", rel: "noopener" }, p.name)])),
+        state.me.role === "admin" ? h("div", { class: "row" }, remove) : null)));
+  }
+  items.filter((k) => k.type !== "article").forEach((k) => list.append(editor(k)));
   const add = h("button", { class: "btn" }, icon("plus"), "New entry");
   add.onclick = () => list.prepend(editor(undefined, true));
   const importBtn = h("button", { class: "btn ghost" }, "Import CSV");
@@ -428,6 +448,8 @@ async function siteDialog(reload) {
     problem ? h("div", { class: "notice" }, problem) : null,
     data.policies.length ? [h("h3", { class: "section" }, "Store policies"), data.policies.map(row)] : null,
     data.pages.length ? [h("h3", { class: "section" }, "Pages"), h("div", { class: "site-list" }, data.pages.map(row))] : null,
+    data.blogs?.length ? [h("h3", { class: "section" }, "Blogs"), h("p", { class: "small muted", style: { margin: 0 } }, "Every article in the blog; the AI looks up the relevant ones for each question."),
+      h("div", { class: "site-list" }, data.blogs.map((b) => row({ ...b, title: `${b.title} (${b.count} article${b.count === 1 ? "" : "s"})` })))] : null,
     h("label", { class: "field" }, "Or add any page by link", url),
     h("div", { class: "row" }, go));
 }

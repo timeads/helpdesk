@@ -148,12 +148,17 @@ export function rankArticles<A extends Pick<KbArticle, "id" | "title" | "body_te
 
 /** Knowledge-base context for the AI: the full text of the best matches plus every article's title and link. */
 export async function kbForAI(env: Env, conversation: string): Promise<string> {
-  const all = (await kbArticles(env, true)).filter((a) => a.use_in_ai);
+  const kb = (await kbArticles(env, true)).filter((a) => a.use_in_ai)
+    .map((a) => ({ id: a.id, title: a.title, body_text: a.body_text, url: a.shopify_handle && a.synced_at ? articleUrl(a.shopify_handle) : null }));
+  // Articles from the store's other blogs (added under AI knowledge → From your website)
+  const { results: blogPosts } = await env.DB.prepare("SELECT id, name, content, source_url FROM knowledge WHERE type = 'article' AND status = 'active'")
+    .all<{ id: number; name: string; content: string; source_url: string | null }>()
+    .catch(() => ({ results: [] as { id: number; name: string; content: string; source_url: string | null }[] }));
+  const all = [...kb, ...blogPosts.map((p) => ({ id: `k${p.id}`, title: p.name, body_text: p.content, url: p.source_url }))];
   if (!all.length) return "";
-  const link = (a: KbArticle) => (a.shopify_handle && a.synced_at ? ` — ${articleUrl(a.shopify_handle)}` : "");
   const best = rankArticles(all, conversation, 4);
-  const index = all.map((a) => `- ${a.title}${link(a)}`).join("\n");
-  const full = best.map((a) => `## ${a.title}${a.shopify_handle && a.synced_at ? `\nLink: ${articleUrl(a.shopify_handle)}` : ""}\n${a.body_text.slice(0, 7000)}`).join("\n\n");
+  const index = all.map((a) => `- ${a.title}${a.url ? ` — ${a.url}` : ""}`).join("\n");
+  const full = best.map((a) => `## ${a.title}${a.url ? `\nLink: ${a.url}` : ""}\n${a.body_text.slice(0, 7000)}`).join("\n\n");
   return [`Knowledge base articles (link customers to these when they'd help):\n${index}`, full ? `Most relevant articles in full:\n\n${full}` : ""].filter(Boolean).join("\n\n");
 }
 
@@ -296,7 +301,7 @@ export function storeBody(html: string, appOrigin: string, handles: Map<string, 
     .replace(/href="#([\w-]+)"/g, (m, id: string) => (handles.has(id) ? `href="/blogs/${BLOG_HANDLE}/${handles.get(id)}"` : m));
 }
 
-async function kbBlogId(env: Env): Promise<string> {
+export async function kbBlogId(env: Env): Promise<string> {
   const saved = await getSetting<string | null>(env, "kb_blog_id", null);
   if (saved) return saved;
   const found = await shopify<{ blogs: { nodes: { id: string }[] } }>(env, `query KbBlog($q: String!) { blogs(first: 1, query: $q) { nodes { id handle } } }`, { q: `handle:${BLOG_HANDLE}` });

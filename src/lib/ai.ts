@@ -80,7 +80,7 @@ export async function draftReply(env: Env, input: DraftInput): Promise<string> {
 
 /** Active knowledge entries, newest first, capped to keep each request small. Counts a use for each. */
 async function knowledgeText(env: Env): Promise<string> {
-  const { results } = await env.DB.prepare("SELECT id, name, content FROM knowledge WHERE status = 'active' ORDER BY created_at DESC LIMIT 80").all<{
+  const { results } = await env.DB.prepare("SELECT id, name, content FROM knowledge WHERE status = 'active' AND type != 'article' ORDER BY created_at DESC LIMIT 80").all<{
     id: number;
     name: string;
     content: string;

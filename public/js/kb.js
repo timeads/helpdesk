@@ -4,7 +4,7 @@
 // drafts use them too.
 import { api } from "./api.js";
 import { state } from "./app.js";
-import { h, mount, icon, toast, busy, skeletonRows, relTime, spinner } from "./ui.js";
+import { h, mount, icon, toast, busy, skeletonRows, relTime, spinner, modal } from "./ui.js";
 import { photoData } from "./chat-agent.js";
 
 const job = { running: false, stop: false, kind: null, done: 0, onUpdate: null };
@@ -114,6 +114,8 @@ export function renderKb(main) {
       if (r.groups.length) { history.pushState(null, "", "/manual/kb/duplicates"); renderKb(main); }
       else dupes.replaceChildren(icon("merge"), "Find duplicates");
     });
+    const pull = h("button", { class: "btn sm" }, icon("download"), "Update from store");
+    pull.onclick = () => pullDialog();
     const auto = h("input", { type: "checkbox", checked: !!st.autoMerge });
     auto.onchange = async () => {
       try {
@@ -136,7 +138,7 @@ export function renderKb(main) {
           st.ai ? ` · ${st.toScan} finished conversation${st.toScan === 1 ? "" : "s"} not read yet` : "",
           " · Each published article is a page on your store under /blogs/knowledge-base.")),
       running ? stop : h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } },
-        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, publish)));
+        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, pull, publish)));
   }
 
   async function runJob(kind) {
@@ -290,6 +292,51 @@ export function renderKb(main) {
     const r = await api("/kb/article", { method: "POST", body: { title: t, topic_id: topicId } });
     history.pushState(null, "", `/manual/kb/${encodeURIComponent(r.id)}`);
     renderKb(main);
+  }
+
+  // ---- Update from the store: the Knowledge Base blog wins; other blogs can feed the AI
+  async function pullDialog() {
+    const body = h("div", { class: "stack" }, skeletonRows(3));
+    const { close } = modal("Update from your store", body, { width: 620 });
+    let blogs = [];
+    try {
+      ({ blogs } = await api("/kb/store-blogs"));
+    } catch (e) {
+      mount(body, h("div", { class: "notice bad" }, e.message));
+      return;
+    }
+    const picked = new Set(blogs.filter((b) => b.added || !/^(news|giving)$/.test(b.source.slice(5))).map((b) => b.source.slice(5)));
+    const go = h("button", { class: "btn primary" }, icon("download"), "Update now");
+    go.onclick = busy(go, async () => {
+      go.replaceChildren(spinner(), "Reading your store…");
+      const r = await api("/kb/pull", { method: "POST", body: { blogs: [...picked] } });
+      close();
+      toast([
+        `${r.onStore} articles on the store`,
+        r.updated ? `${r.updated} updated` : null,
+        r.added ? `${r.added} added` : null,
+        r.removed ? `${r.removed} removed (no longer on the store)` : null,
+        r.unchanged ? `${r.unchanged} already the same` : null,
+        r.topicsAdded ? `${r.topicsAdded} new topic${r.topicsAdded === 1 ? "" : "s"}` : null,
+        r.blogArticles ? `${r.blogArticles} articles from your other blogs given to the AI` : null,
+      ].filter(Boolean).join(" · "));
+      history.pushState(null, "", "/manual/kb");
+      renderKb(main);
+    });
+    mount(body,
+      h("p", { style: { margin: 0 } }, "Makes the knowledge base here match your store's Knowledge Base blog: your edits on the store replace the text here, articles you added there come in, and ones you deleted or merged there are removed here."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "Everything that changes is saved as an earlier version first, so any article can be put back. Drafts you never published are left alone."),
+      blogs.length ? [
+        h("h3", { class: "section" }, "Also give the AI your other blogs"),
+        h("p", { class: "small muted", style: { marginTop: 0 } }, "These stay on your store as they are; the chat and AI replies look things up in them (refreshed daily). Untick any that aren't helpful for customers' questions."),
+        h("div", { class: "site-list" }, blogs.map((b) => {
+          const handle = b.source.slice(5);
+          const c = h("input", { type: "checkbox", checked: picked.has(handle) });
+          c.onchange = () => (c.checked ? picked.add(handle) : picked.delete(handle));
+          return h("label", { class: "check site-row" }, c, h("span", {}, h("b", {}, b.title), h("span", { class: "small muted" }, ` · ${b.count} article${b.count === 1 ? "" : "s"}${b.added ? " · already added" : ""}`)));
+        })),
+      ] : null,
+      h("div", { class: "row" }, go));
   }
 
   // ---- Duplicates: review the sets the AI found, then merge (one rewritten article per set)

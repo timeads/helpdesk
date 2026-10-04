@@ -11,6 +11,8 @@ import {
 import { shopify } from "../lib/shopify";
 import { autoMergeOn, findDuplicates, integrateSuggestions, mergeArticles, restoreVersion, saveVersion, versionsOf, type DuplicateGroup } from "../lib/kb-merge";
 import { getSetting, setSetting } from "../lib/util";
+import { pullFromStore } from "../lib/kb-pull";
+import { addSources, siteSources } from "../lib/site-knowledge";
 import { HttpError } from "../lib/util";
 
 const kb = new Hono<AppEnv>();
@@ -139,6 +141,25 @@ kb.post("/duplicates/merge", async (c) => {
   const b = await c.req.json<{ keep?: string; merge?: string[]; title?: string }>();
   if (!b.keep || !b.merge?.length) throw new HttpError(400, "Pick the articles to merge");
   return c.json(await mergeArticles(c.env, b.keep, b.merge.slice(0, 12), c.get("agent").id, b.title));
+});
+
+/** The store's other blogs (for “Update from store”: which to also give the AI). */
+kb.get("/store-blogs", async (c) => {
+  const s = await siteSources(c.env);
+  return c.json({ blogs: s.blogs });
+});
+
+/**
+ * One-off (or any time) update from the store: the Knowledge Base blog replaces the desk's articles,
+ * and the chosen other blogs are added to AI knowledge.
+ */
+kb.post("/pull", async (c) => {
+  requireAdmin(c);
+  const { blogs } = await c.req.json<{ blogs?: string[] }>().catch(() => ({ blogs: [] as string[] }));
+  const r = await pullFromStore(c.env, c.get("agent").id);
+  const chosen = (blogs ?? []).filter((h) => /^[\w-]+$/.test(h)).slice(0, 20);
+  const ai = chosen.length ? await addSources(c.env, chosen.map((h) => `blog:${h}`)) : { added: 0 };
+  return c.json({ ...r, blogArticles: ai.added });
 });
 
 /** Folds waiting suggestions into their articles with AI (a couple of articles per call). */

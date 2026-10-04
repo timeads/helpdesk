@@ -13,7 +13,7 @@ import { easypostConfigured, testEasypost } from "../lib/easypost";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SUPPORT, RULE_ACTIONS, RULE_FIELDS, STATUSES, TRIGGERS, loadSupportRules, supportSettings, type SupportSettings } from "../lib/support";
 import { MACRO_VARIABLES } from "../lib/macros";
-import { addSources, refreshSources, siteSources } from "../lib/site-knowledge";
+import { addSources, refreshSources, removeBlog, siteSources } from "../lib/site-knowledge";
 import { DEFAULT_CUSTOMS, customsSettings, type CustomsSettings } from "../lib/customs";
 
 const admin = new Hono<AppEnv>();
@@ -271,10 +271,15 @@ admin.get("/knowledge/site", async (c) => c.json(await siteSources(c.env)));
 admin.post("/knowledge/site", async (c) => {
   requireAdmin(c);
   const b = await c.req.json<{ sources?: string[]; url?: string }>();
-  const sources = (b.sources ?? []).filter((s) => /^(policy|page):/.test(s)).slice(0, 100);
+  const sources = (b.sources ?? []).filter((s) => /^(policy|page|blog):/.test(s)).slice(0, 100);
   if (b.url?.trim()) sources.push(`url:${b.url.trim()}`);
   if (!sources.length) throw new HttpError(400, "Pick something to add");
   return c.json(await addSources(c.env, sources));
+});
+
+admin.delete("/knowledge/site/blog/:handle", async (c) => {
+  requireAdmin(c);
+  return c.json(await removeBlog(c.env, c.req.param("handle")));
 });
 
 admin.post("/knowledge/site/refresh", async (c) => {
