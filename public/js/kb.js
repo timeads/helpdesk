@@ -391,7 +391,7 @@ export function renderKb(main) {
       const remove = h("input", { type: "checkbox" });
       to.oninput = () => { pick.checked = !!to.value.trim() || remove.checked; count(); };
       remove.onchange = () => { to.disabled = remove.checked; pick.checked = remove.checked || !!to.value.trim(); count(); };
-      pick.onchange = count;
+      pick.onchange = () => count();
       const el = h("div", { class: "link-row" },
         h("label", { class: "link-pick" }, pick),
         h("div", { class: "link-main" },
