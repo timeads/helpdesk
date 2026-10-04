@@ -65,6 +65,7 @@ export function renderKb(main) {
     drawList();
     if (sel === "suggestions") openSuggestions();
     else if (sel === "duplicates") openDuplicates();
+    else if (sel === "questions") openQuestions();
     else if (sel) openArticle(sel);
     else drawEmpty();
     // A job asked for from another view (e.g. “Merge with AI” on the suggestions page)
@@ -188,6 +189,11 @@ export function renderKb(main) {
       items.push(h("a", { class: "manual-item kb-sugg" + (sel === "duplicates" ? " active" : ""), href: "/manual/kb/duplicates", "data-link": "" },
         h("span", { class: "manual-item-title" }, icon("merge"), ` ${st.dupes} set${st.dupes === 1 ? "" : "s"} of duplicates`),
         h("span", { class: "small muted" }, "Review and merge")));
+    }
+    if (st.asks) {
+      items.push(h("a", { class: "manual-item kb-sugg" + (sel === "questions" ? " active" : ""), href: "/manual/kb/questions", "data-link": "" },
+        h("span", { class: "manual-item-title" }, icon("search"), ` ${st.asks} learn hub question${st.asks === 1 ? "" : "s"}`),
+        h("span", { class: "small muted" }, "What visitors asked the Ask box · last 30 days")));
     }
     if (!st.articles.length) return mount(listEl, ...items, h("p", { class: "muted small", style: { padding: "8px" } }, "No articles yet."));
     for (const t of st.topics) {
@@ -352,6 +358,28 @@ export function renderKb(main) {
       h("div", { class: "site-list blog-modes" }, data.blogs.map((b) => h("div", { class: "blog-mode" },
         h("span", {}, h("b", {}, b.title), h("span", { class: "small muted" }, ` · ${b.count} article${b.count === 1 ? "" : "s"}`)), choice(b)))),
       h("div", { class: "row" }, go));
+  }
+
+  // ---- Learn hub questions: what visitors asked the Ask box, and where an article is missing
+  async function openQuestions() {
+    mount(detailEl, h("div", { class: "card" }, skeletonRows(4)));
+    let d;
+    try { d = await api("/kb/asks"); } catch (e) { return mount(detailEl, h("div", { class: "notice bad" }, e.message)); }
+    const KIND = { fix: "Fix a problem", buy: "Buying advice", classes: "Classes", general: "General", order: "Their order" };
+    const row = (r) => h("div", { class: "ask-row" },
+      h("div", { class: "row", style: { justifyContent: "space-between", gap: "8px", flexWrap: "wrap" } },
+        h("b", {}, r.question),
+        h("span", { class: "small muted" }, [KIND[r.kind] || r.kind, r.machine, relTime(r.created_at), r.helpful === 1 ? "👍" : r.helpful === -1 ? "👎" : null].filter(Boolean).join(" · "))),
+      r.answer ? h("details", {}, h("summary", { class: "small muted" }, "Answer given"), h("p", { class: "small" }, r.answer)) : null,
+      h("div", { class: "small muted" }, r.articles.length ? ["Cited: ", r.articles.map((a, i) => [i ? ", " : "", h("a", { href: a.url, target: "_blank", rel: "noopener" }, a.title)])] : r.handoff ? "Sent to chat" : "No article matched"));
+    const stat = (n, label) => h("div", { class: "ask-stat" }, h("b", {}, String(n)), h("span", { class: "small muted" }, label));
+    mount(detailEl, h("div", { class: "kb-edit" },
+      h("div", { class: "card" },
+        h("h2", { style: { margin: "0 0 6px" } }, "Learn hub questions"),
+        h("p", { class: "small muted", style: { margin: "0 0 12px" } }, "Everything visitors asked the Ask box in the last 30 days. Questions no article answered (or that got a thumbs down) are listed first — they're good candidates for a new article."),
+        h("div", { class: "ask-stats" }, stat(d.total, "questions"), Object.entries(d.byKind).map(([k, n]) => stat(n, KIND[k] || k)), stat(`${d.helpful} / ${d.unhelpful}`, "👍 / 👎"))),
+      d.gaps.length ? h("div", { class: "card" }, h("h3", { style: { margin: "0 0 8px" } }, `Missing or unhelpful answers (${d.gaps.length})`), d.gaps.map(row)) : null,
+      h("div", { class: "card" }, h("h3", { style: { margin: "0 0 8px" } }, "Latest questions"), d.recent.length ? d.recent.map(row) : h("p", { class: "muted" }, "No questions yet."))));
   }
 
   // ---- Duplicates: review the sets the AI found, then merge (one rewritten article per set)

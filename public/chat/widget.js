@@ -172,6 +172,18 @@ textarea { resize: none; }
       } else launcher.focus();
     };
     launcher.addEventListener("click", () => setOpen(!open));
+    // Other parts of the site (the learn hub's Ask box) can open the chat with a message ready to send
+    window.TTWChat = {
+      open(text = "") {
+        if (!open) setOpen(true);
+        if (!text) return;
+        setTimeout(() => {
+          const box = root.querySelector("textarea");
+          if (box && !box.value) { box.value = String(text).slice(0, 2000); box.dispatchEvent(new Event("input")); box.focus(); }
+        }, 80);
+      },
+    };
+    window.dispatchEvent(new Event("ttw-chat-ready"));
     closeBtn.addEventListener("click", () => setOpen(false));
     panel.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
     const drawBadge = () => { badge.hidden = !unread; badge.textContent = unread > 9 ? "9+" : String(unread); };

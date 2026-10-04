@@ -1337,4 +1337,10 @@ a.view-chip { text-decoration: none; }
 .dupe-row:last-of-type { border-bottom: 0; }
 .blog-mode { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .blog-mode:last-child { border-bottom: 0; }
+.ask-stats { display: flex; flex-wrap: wrap; gap: 10px; }
+.ask-stat { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px; min-width: 110px; }
+.ask-stat b { font: 700 20px/1.2 var(--ui); }
+.ask-row { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.ask-row:last-child { border-bottom: 0; }
+.ask-row details p { margin: 4px 0 0; }
 .blog-modes { max-height: 420px; }

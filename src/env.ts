@@ -21,6 +21,8 @@ export interface Env {
   UPS_ACCOUNT_NUMBER?: string;
   ANTHROPIC_API_KEY?: string;
   EASYPOST_API_KEY?: string;
+  BOOKING_SUPABASE_URL?: string;
+  BOOKING_SUPABASE_ANON_KEY?: string;
   DEV_LOGIN_EMAIL?: string;
   DEMO_DATA?: string;
   RAW_ENV?: Env; // env before app-entered credentials were applied

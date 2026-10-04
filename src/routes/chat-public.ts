@@ -6,6 +6,7 @@ import {
   addChatMessage, authedChat, checkVerifyCode, chatMessages, chatSettings, hashIp, hoursText, isOpen, moveChatToEmail, respond, startChat, type ChatFile,
 } from "../lib/chat";
 import { aiConfigured } from "../lib/ai";
+import { MACHINES, handleAsk } from "../lib/ask";
 import { HttpError, nowIso } from "../lib/util";
 
 const chatApi = new Hono<AppEnv>();
@@ -43,6 +44,27 @@ function cleanFiles(raw: unknown): ChatFile[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   return raw.slice(0, 4).map((f: any) => ({ filename: String(f?.name ?? "photo.jpg"), mime: String(f?.mime ?? ""), data: String(f?.data ?? "") }));
 }
+
+// ---- The learn hub's Ask box (same allowed sites as the chat)
+
+chatApi.get("/ask/config", (c) => c.json({ ai: aiConfigured(c.env), machines: MACHINES }));
+
+chatApi.post("/ask", async (c) => {
+  if (!aiConfigured(c.env)) throw new HttpError(503, "The assistant isn't set up yet");
+  const body = await c.req.json<{ question?: string; machine?: string; page?: string; website?: string }>().catch(() => ({} as Record<string, string>));
+  if (body.website) throw new HttpError(400, "Couldn't ask that"); // honeypot
+  return c.json(await handleAsk(c.env, new URL(c.req.url).origin, {
+    question: String(body.question ?? ""), machine: String(body.machine ?? ""), ipHash: await ipHash(c), page: body.page ? String(body.page) : undefined,
+  }));
+});
+
+/** Thumbs up/down on an answer (only from the visitor who asked). */
+chatApi.post("/ask/:id{[0-9]+}/feedback", async (c) => {
+  const { helpful } = await c.req.json<{ helpful?: number }>().catch(() => ({ helpful: 0 }));
+  if (helpful !== 1 && helpful !== -1) throw new HttpError(400, "helpful must be 1 or -1");
+  await c.env.DB.prepare("UPDATE ask_log SET helpful = ? WHERE id = ? AND ip_hash = ?").bind(helpful, Number(c.req.param("id")), await ipHash(c)).run();
+  return c.json({ ok: true });
+});
 
 /** What the widget needs to draw itself. */
 chatApi.get("/config", async (c) => {

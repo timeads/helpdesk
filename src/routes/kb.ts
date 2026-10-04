@@ -19,13 +19,14 @@ const kb = new Hono<AppEnv>();
 const now = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 kb.get("/", async (c) => {
-  const [topics, articles, pending, scan, unsynced, restyle] = await Promise.all([
+  const [topics, articles, pending, scan, unsynced, restyle, asks] = await Promise.all([
     kbTopics(c.env),
     kbArticles(c.env),
     c.env.DB.prepare("SELECT COUNT(*) AS n FROM kb_suggestions WHERE status = 'pending'").first<{ n: number }>(),
     kbPending(c.env),
     kbUnsynced(c.env),
     kbRestyleCount(c.env),
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM ask_log WHERE created_at > ?").bind(new Date(Date.now() - 30 * 86400_000).toISOString()).first<{ n: number }>(),
   ]);
   return c.json({
     topics,
@@ -34,6 +35,7 @@ kb.get("/", async (c) => {
     toScan: scan,
     unsynced,
     restyle,
+    asks: asks?.n ?? 0,
     ai: aiConfigured(c.env),
     autoMerge: await autoMergeOn(c.env),
   });
@@ -265,6 +267,29 @@ kb.post("/scan", async (c) => {
   requireAdmin(c);
   const { size } = await c.req.json<{ size?: number }>().catch(() => ({ size: undefined }));
   return c.json(await kbScanBatch(c.env, size ?? 6));
+});
+
+/** What visitors asked the learn hub's Ask box (last 30 days): totals, gaps worth an article, and the latest questions. */
+kb.get("/asks", async (c) => {
+  const since = new Date(Date.now() - 30 * 86400_000).toISOString();
+  const { results } = await c.env.DB.prepare("SELECT id, question, machine, kind, answer, helpful, created_at FROM ask_log WHERE created_at > ? ORDER BY id DESC LIMIT 400")
+    .bind(since).all<{ id: number; question: string; machine: string; kind: string; answer: string; helpful: number | null; created_at: string }>();
+  const rows = results.map((r) => {
+    const a = JSON.parse(r.answer || "{}");
+    return { id: r.id, question: r.question, machine: r.machine, kind: r.kind, helpful: r.helpful, created_at: r.created_at,
+      answer: String(a.answer ?? ""), articles: (a.articles ?? []).map((x: { title: string; url: string }) => ({ title: x.title, url: x.url })), handoff: !!a.handoff };
+  });
+  const byKind: Record<string, number> = {};
+  for (const r of rows) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
+  const rated = rows.filter((r) => r.helpful !== null);
+  return c.json({
+    total: rows.length,
+    byKind,
+    helpful: rated.filter((r) => r.helpful === 1).length,
+    unhelpful: rated.filter((r) => r.helpful === -1).length,
+    gaps: rows.filter((r) => r.helpful === -1 || (!r.articles.length && r.kind !== "order" && r.kind !== "classes" && r.kind !== "buy")).slice(0, 60),
+    recent: rows.slice(0, 100),
+  });
 });
 
 /** Queues articles already on the store whose tables and photos would look better with the current styling. */
