@@ -467,7 +467,65 @@ export function buildComposer(inbox, t, data) {
     }
   });
 
+  // Suggested replies: 2-3 options the AI wrote for the latest customer email — pick one, edit, send
+  const suggestEl = h("div", { class: "suggest", hidden: true });
+  const lastInbound = [...data.messages].reverse().find((m) => !m.kind || m.kind === "email");
+  const wantsSuggestions = cfg.integrations?.ai?.connected && t.channel !== "chat" && lastInbound?.direction === "in";
+  let suggestTimer = null;
+  const useOption = (o, i) => {
+    const has = editorText(ed).trim();
+    if (has && !confirm("Replace what's in the reply box with this suggestion?")) return;
+    if (mode !== "reply" && mode !== "reply_all") setMode("reply", false);
+    ed.innerHTML = textToHtml(o.body);
+    save();
+    ed.focus();
+    api(`/tickets/${t.id}/suggestions/used`, { method: "POST", body: { index: i } }).catch(() => {});
+    suggestEl.querySelectorAll(".suggest-card").forEach((c, j) => c.classList.toggle("on", j === i));
+    suggestEl.classList.add("picked"); // shrink to labels, so there's room to edit
+  };
+  const drawSuggest = (state) => {
+    if (!state) return (suggestEl.hidden = true);
+    suggestEl.hidden = false;
+    suggestEl.classList.toggle("picked", state.kind === "ready" && state.used != null);
+    const again = h("button", { class: "btn ghost sm", title: "Write new suggestions" }, icon("refresh"), "New suggestions");
+    again.onclick = () => loadSuggest(true);
+    const head = (label, extra) => h("div", { class: "suggest-head" }, icon("spark"), h("b", {}, label), extra, h("div", { class: "grow" }), state.kind === "ready" || state.kind === "error" ? again : null);
+    if (state.kind === "working") return mount(suggestEl, head("Writing suggested replies…", spinner()));
+    if (state.kind === "error") return mount(suggestEl, head("Couldn't write suggestions", h("span", { class: "small muted" }, state.message || "")));
+    if (state.kind === "offer") {
+      const go = h("button", { class: "btn sm" }, icon("spark"), "Suggest replies");
+      go.onclick = () => loadSuggest(true);
+      return mount(suggestEl, h("div", { class: "suggest-head" }, go));
+    }
+    mount(suggestEl, head("Suggested replies", h("span", { class: "small muted" }, "pick one, edit, then send")),
+      h("div", { class: "suggest-cards" }, state.options.map((o, i) =>
+        h("button", { type: "button", class: "suggest-card" + (state.used === i ? " on" : ""), onclick: () => useOption(o, i), title: "Put this reply in the editor" },
+          h("span", { class: "suggest-label" }, o.label),
+          h("span", { class: "suggest-preview" }, o.body.replace(/^(hi|hello|hey)[^\n]*\n+/i, "").slice(0, 220))))));
+  };
+  const loadSuggest = async (force = false) => {
+    clearTimeout(suggestTimer);
+    try {
+      if (force) {
+        drawSuggest({ kind: "working" });
+        const r = await api(`/tickets/${t.id}/suggestions`, { method: "POST" });
+        return drawSuggest({ kind: "ready", options: r.suggestion.options, used: r.suggestion.used });
+      }
+      const r = await api(`/tickets/${t.id}/suggestions`);
+      const s_ = r.suggestion;
+      if (r.current && s_?.status === "ready") return drawSuggest(s_.options.length ? { kind: "ready", options: s_.options, used: s_.used } : null);
+      if (r.current && s_?.status === "working") { drawSuggest({ kind: "working" }); suggestTimer = setTimeout(() => el.isConnected && loadSuggest(), 4000); return; }
+      if (r.current && s_?.status === "error") return drawSuggest({ kind: "error", message: s_.error });
+      // Nothing for this email yet: open tickets get them written now; others get a button
+      if (r.on && ["open", "in_progress"].includes(t.status)) return loadSuggest(true);
+      drawSuggest({ kind: "offer" });
+    } catch (e) {
+      drawSuggest({ kind: "error", message: e.message });
+    }
+  };
+
   const el = h("div", { class: "composer" },
+    suggestEl,
     h("div", { class: "composer-box" },
       h("div", { class: "composer-tabs" }, Object.values(tabs), toSummary),
       rcptRows, toolbar, ed, autoEl, filesEl, aiRow,
@@ -475,6 +533,7 @@ export function buildComposer(inbox, t, data) {
   toolbar.append(h("span", { class: "sep" }));
   setMode(mode, false);
   renderAutos();
+  if (wantsSuggestions) loadSuggest();
   return {
     el,
     focus: (m) => { if (m && m !== mode) setMode(m); else ed.focus(); },

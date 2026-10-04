@@ -1354,3 +1354,16 @@ a.view-chip { text-decoration: none; }
 .link-main code { overflow-wrap: anywhere; }
 .link-fix { gap: 8px; flex-wrap: wrap; align-items: center; }
 .link-fix .input { flex: 1 1 260px; width: auto; }
+/* Suggested replies above the reply box */
+.suggest { margin-bottom: 10px; }
+.suggest-head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
+.suggest-head svg { color: var(--ochre-text, #8a5a10); }
+.suggest-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.suggest-card { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--text); cursor: pointer; font: inherit; }
+.suggest-card:hover { border-color: var(--ochre-text, #8a5a10); }
+.suggest-card.on { border-color: var(--ochre-text, #8a5a10); box-shadow: 0 0 0 1px var(--ochre-text, #8a5a10) inset; }
+.suggest-label { font: 700 13px/1.3 var(--ui); }
+.suggest.picked .suggest-cards { display: flex; flex-wrap: wrap; gap: 6px; }
+.suggest.picked .suggest-card { padding: 5px 12px; border-radius: 999px; }
+.suggest.picked .suggest-preview { display: none; }
+.suggest-preview { font-size: 12.5px; line-height: 1.4; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }

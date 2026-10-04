@@ -4,6 +4,7 @@ import { DEFAULT_RULES, getAttachment, getMailbox, importMessage, modifyThread, 
 import { buildMime, encodeRaw, escapeHtml, htmlToText, replySubject, textToHtml, type OutgoingAttachment } from "../lib/mime";
 import { createDiscountCode, customerProfile, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
 import { aiConfigured, draftReply, ticketInsights } from "../lib/ai";
+import { suggestOn, suggestReplies, ticketSuggestion } from "../lib/suggest";
 import { demoProfile } from "../lib/demo";
 import { chatForTicket, moveChatToEmail } from "../lib/chat";
 import { renderMacro, type MacroContext } from "../lib/macros";
@@ -747,6 +748,34 @@ tickets.post("/:id{[0-9]+}/ai-draft", async (c) => {
     instruction,
   });
   return c.json({ draft });
+});
+
+/** Suggested replies to the latest customer email (written in the background; null until there are some). */
+tickets.get("/:id{[0-9]+}/suggestions", async (c) => {
+  const id = Number(c.req.param("id"));
+  await loadTicket(c.env, id);
+  const s = await ticketSuggestion(c.env, id);
+  const last = await c.env.DB.prepare("SELECT id FROM messages WHERE ticket_id = ? AND (kind IS NULL OR kind = 'email') AND direction = 'in' ORDER BY sent_at DESC, id DESC LIMIT 1").bind(id).first<{ id: number }>();
+  return c.json({ suggestion: s, current: !!s && !!last && s.messageId === last.id, on: await suggestOn(c.env) });
+});
+
+/** Write (or rewrite) them now. */
+tickets.post("/:id{[0-9]+}/suggestions", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!aiConfigured(c.env)) throw new HttpError(409, "AI is off — add an Anthropic API key in Settings → Connections.");
+  await loadTicket(c.env, id);
+  const s = await suggestReplies(c.env, id, c.get("agent").name);
+  if (!s) throw new HttpError(409, "There's no customer email to answer yet");
+  if (s.status === "error") throw new HttpError(502, `Couldn't write suggestions: ${s.error}`);
+  return c.json({ suggestion: s, current: true });
+});
+
+/** Which option was picked (for learning what works). */
+tickets.post("/:id{[0-9]+}/suggestions/used", async (c) => {
+  const id = Number(c.req.param("id"));
+  const { index } = await c.req.json<{ index?: number }>();
+  await c.env.DB.prepare("UPDATE ticket_suggestions SET used = ? WHERE ticket_id = ?").bind(Number(index) || 0, id).run();
+  return c.json({ ok: true });
 });
 
 /** On-demand summary, sentiment and type (one small AI call; saved on the ticket). */

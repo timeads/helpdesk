@@ -115,6 +115,19 @@ function markDirty(e) {
   });
 }
 
+/** Suggested replies on new customer emails (on by default). */
+function suggestToggle(s) {
+  const c = h("input", { type: "checkbox", checked: s.aiSuggest !== false });
+  c.onchange = async () => {
+    try {
+      await api("/settings", { method: "PUT", body: { aiSuggest: c.checked } });
+      s.aiSuggest = c.checked;
+      toast(c.checked ? "New customer emails get 2–3 suggested replies" : "Suggested replies are off — “AI” in the reply box still drafts on request");
+    } catch (e) { c.checked = !c.checked; toast(e.message, true); }
+  };
+  return h("label", { class: "check small", style: { marginTop: "4px" } }, c, "Suggest replies to new customer emails (a few cents each)");
+}
+
 function connections(s, isAdmin, inner) {
   const i = s.integrations;
   const gmailInfo = i.gmail.connected
@@ -145,7 +158,8 @@ function connections(s, isAdmin, inner) {
         : isAdmin && i.gmail.configured ? h("a", { class: "btn sm primary", href: "/auth/mailbox" }, "Connect Gmail") : null, "mail"),
     row("Shopify", i.shopify.connected, false, h("div", { class: "muted" }, i.shopify.connected ? i.shopify.shop : "Add your Shopify app keys under Credentials below."), null, "bag"),
     row("UPS", i.ups.connected, false, h("div", { class: "muted" }, i.ups.connected ? (i.ups.env === "production" ? "Live — labels are billed to your UPS account" : "Test mode — labels are not billed") : "Add your UPS keys under Credentials below."), null, "truck"),
-    row("AI drafts", i.ai.connected, false, h("div", { class: "muted" }, i.ai.connected ? `On · ${i.ai.model}` : "Optional. Add an Anthropic key under Credentials to turn on “Draft with AI”."), null, "spark"),
+    row("AI drafts", i.ai.connected, false, [h("div", { class: "muted" }, i.ai.connected ? `On · ${i.ai.model}` : "Optional. Add an Anthropic key under Credentials to turn on “Draft with AI”."),
+      i.ai.connected && isAdmin ? suggestToggle(s) : null], null, "spark"),
   );
 }
 
