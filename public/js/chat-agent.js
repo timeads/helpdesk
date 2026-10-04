@@ -38,8 +38,19 @@ export function chatBubble(t, m) {
   return h("div", { class: "chat-msg" + (out ? " out" : "") + (ai ? " ai" : ""), "data-mid": m.id },
     h("div", { class: "chat-who" }, out ? null : h("span", { class: "avatar xs" }, initials(who)), ai ? [icon("spark"), " "] : null, who, h("span", { class: "chat-when", title: fullTime(m.sent_at) }, new Date(m.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))),
     m.body_text ? h("div", { class: "chat-text" }, m.body_text) : null,
+    chatCards(m),
     m.attachments?.length ? h("div", { class: "chat-photos" }, m.attachments.map((a) =>
       h("a", { href: fileUrl(a), target: "_blank", rel: "noopener" }, h("img", { src: fileUrl(a), alt: a.filename, loading: "lazy" })))) : null);
+}
+
+/** Articles and products the AI attached under its answer (what the customer saw as cards). */
+function chatCards(m) {
+  let c = m.cards;
+  if (!c && m.extra) try { c = JSON.parse(m.extra); } catch { c = null; }
+  if (!c || !(c.articles?.length || c.products?.length)) return null;
+  return h("div", { class: "chat-cards" },
+    (c.products ?? []).map((p) => h("a", { class: "chat-card", href: p.url, target: "_blank", rel: "noopener" }, h("b", {}, p.title), ` · ${p.price}`, p.why ? h("span", { class: "small muted" }, ` — ${p.why}`) : null)),
+    (c.articles ?? []).map((a) => h("a", { class: "chat-card", href: a.url, target: "_blank", rel: "noopener" }, icon("note"), " ", a.title)));
 }
 
 /** The chat API's message shape → the ticket's message shape. */
@@ -52,6 +63,7 @@ const asMessage = (m) => ({
   sent_at: m.at,
   from_name: m.from === "visitor" ? m.name : null,
   agent_name: m.from === "agent" ? m.name : null,
+  cards: m.cards ?? null,
 });
 
 /**

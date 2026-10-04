@@ -21,7 +21,7 @@
       else if (k === "class") n.className = v;
       else n.setAttribute(k, v === true ? "" : v);
     }
-    for (const c of kids.flat()) if (c != null && c !== false) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
     return n;
   };
   const call = async (path, body) => {

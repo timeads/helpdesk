@@ -204,7 +204,8 @@ const ANSWER_RULES = `How to answer:
 const norm = (q: string, machine: string) => `${machine}|${q.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`.slice(0, 500);
 
 /** Answers one question. Returns what the visitor sees plus the source ids used (for the log). */
-export async function answerQuestion(env: Env, origin: string, question: string, machine: string): Promise<{ answer: AskAnswer; used: string[] }> {
+/** Step 1 (shared with the website chat): what kind of question it is, and the sources most likely to answer it. */
+export async function pickSources(env: Env, origin: string, question: string, machine: string): Promise<{ kind: AskAnswer["kind"]; chosen: Source[] }> {
   const sources = await askSources(env, origin);
   const catalog = sources.map((s) => `${s.id} [${s.kind}] ${s.title} — ${s.blurb}`).join("\n").slice(0, 120_000);
   const who = machine ? `Their machine: ${machine}.` : "Their machine: not given.";
@@ -213,8 +214,21 @@ export async function answerQuestion(env: Env, origin: string, question: string,
     text: `<sources>\n${catalog}\n</sources>\n\n<question>${question}</question>\n${who}\n\nClassify the question and pick the sources that would answer it.`,
   }], PICK_SCHEMA, "low", 1500, SYSTEM);
   const byId = new Map(sources.map((s) => [s.id, s]));
-  const chosen = [...new Set(pick.source_ids)].map((id) => byId.get(id)).filter((s): s is Source => !!s).slice(0, 6);
+  return { kind: pick.kind, chosen: [...new Set(pick.source_ids)].map((id) => byId.get(id)).filter((s): s is Source => !!s).slice(0, 6) };
+}
 
+/** The picked sources in full, for the AI to answer from. */
+export const sourcesBlock = (chosen: Source[]) =>
+  `<sources>\n${chosen.map((s) => `<source id="${s.id}" kind="${s.kind}" title="${s.title.replace(/"/g, "'")}"${s.url ? ` link="${s.url}"` : " internal=\"true\""}>\n${s.body.slice(0, 8000)}\n</source>`).join("\n")}\n</sources>`;
+
+/** Products as one line each, for the AI. */
+export const productsBlock = (products: Product[]) =>
+  `<products>\n${products.map((p) => `${p.handle} | ${p.title} | ${p.type} | ${p.price} | ${p.available ? "in stock" : "SOLD OUT"} | ${p.about.slice(0, 300)}`).join("\n")}\n</products>`;
+
+export async function answerQuestion(env: Env, origin: string, question: string, machine: string): Promise<{ answer: AskAnswer; used: string[] }> {
+  const pick = await pickSources(env, origin, question, machine);
+  const chosen = pick.chosen;
+  const who = machine ? `Their machine: ${machine}.` : "Their machine: not given.";
   const kind = pick.kind;
   const allProducts = kind === "buy" || kind === "general" || kind === "stock" || kind === "classes" ? await askProducts(env).catch(() => [] as Product[]) : [];
   const products = allProducts;
@@ -223,8 +237,8 @@ export async function answerQuestion(env: Env, origin: string, question: string,
     : "";
   const classes = kind === "classes" ? await askClasses(env, allProducts).catch(() => [] as ClassInfo[]) : [];
   const parts = [
-    chosen.length ? `<sources>\n${chosen.map((s) => `<source id="${s.id}" kind="${s.kind}" title="${s.title.replace(/"/g, "'")}">\n${s.body.slice(0, 8000)}\n</source>`).join("\n")}\n</sources>` : "<sources>none matched</sources>",
-    products.length && kind !== "classes" ? `<products>\n${products.map((p) => `${p.handle} | ${p.title} | ${p.type} | ${p.price} | ${p.available ? "in stock" : "SOLD OUT"} | ${p.about.slice(0, 300)}`).join("\n")}\n</products>` : "",
+    chosen.length ? sourcesBlock(chosen) : "<sources>none matched</sources>",
+    products.length && kind !== "classes" ? productsBlock(products) : "",
     stock ? `<stock>\n${stock}\n</stock>` : "",
     kind === "classes" ? `<classes>\n${classes.length ? classes.map((c) => `${c.title} | ${c.price} | ${c.duration} | ${c.location} | ${c.about} | next dates: ${c.dates.map((d) => `${d.when} (${d.seatsLeft} seats)`).join("; ") || "see the class page"}`).join("\n") : "Class details aren't available right now; point them to the workshops on our site."}\n</classes>` : "",
     `<question>${question}</question>\n${who}\nQuestion type: ${kind}.`,

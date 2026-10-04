@@ -228,7 +228,7 @@ tickets.get("/:id{[0-9]+}", async (c) => {
   const [messages, notes, events, threads] = await c.env.DB.batch([
     c.env.DB.prepare(
       `SELECT m.id, m.direction, m.from_email, m.from_name, m.to_emails, m.cc_emails, m.bcc_emails, m.subject, m.sent_at,
-              m.body_text, m.body_html, m.attachments, m.gmail_message_id, m.thread_id, m.kind, a.name AS agent_name
+              m.body_text, m.body_html, m.attachments, m.gmail_message_id, m.thread_id, m.kind, m.extra, a.name AS agent_name
        FROM messages m LEFT JOIN agents a ON a.id = m.agent_id WHERE m.ticket_id = ? ORDER BY m.sent_at`,
     ).bind(id),
     c.env.DB.prepare(

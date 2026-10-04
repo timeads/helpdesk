@@ -26,7 +26,7 @@ vi.mock("../src/lib/shopify", () => ({
   })),
 }));
 
-import { agentChatReply, checkVerifyCode, hoursText, isOpen, loadChat, moveChatToEmail, respond, startChat, sweepChats, DEFAULT_CHAT } from "../src/lib/chat";
+import { agentChatReply, chatMessages, checkVerifyCode, hoursText, isOpen, loadChat, moveChatToEmail, respond, startChat, sweepChats, DEFAULT_CHAT } from "../src/lib/chat";
 
 /** The raw email's headers plus its plain-text body, decoded. */
 const decode = (raw: string) => {
@@ -89,6 +89,35 @@ describe("website chat", () => {
     expect((await msgs(chat.ticket_id)).at(-1)).toEqual({ kind: "chat_ai", direction: "out", body_text: "Clean the blade and oil the spring." });
     expect((await ticket(chat.ticket_id)).status).toBe("in_progress");
     expect((await loadChat(env, chat.id))!.ai_replies).toBe(1);
+  });
+
+  it("auto mode: article and product cards are kept with the answer, shown to the widget, and listed in emailed transcripts", async () => {
+    await settings({ aiMode: "auto", hours: NEVER });
+    const cards = {
+      articles: [{ title: "Fixing a jammed gun", url: "https://tufttheworld.com/blogs/knowledge-base/jams", image: null }],
+      products: [{ title: "Tufting Starter Kit", url: "https://tufttheworld.com/products/kit", price: "$299", image: null, why: "Everything to start." }],
+    };
+    ai.answer = { reply: "It's usually the blade.\n1. Unplug the gun. Then open the front.\n2. Clean the blade.", handoff: true, reason: "wants a person", cards };
+    const chat = await startChat(env, { name: "Jane", email: "jane@example.com", message: "My gun jams", ipHash: "x" });
+    await respond(env, chat.id);
+    const shown = await chatMessages(env, chat);
+    const answer = shown.find((m) => m.from === "ai")!;
+    expect(answer.cards).toEqual(cards);
+    expect(shown.find((m) => m.from === "visitor")!.cards).toBeNull();
+    const email = decode(mail.sent[0].raw);
+    expect(email).toContain("Read more:");
+    expect(email).toContain("Fixing a jammed gun: https://tufttheworld.com/blogs/knowledge-base/jams");
+    expect(email).toContain("Tufting Starter Kit ($299): https://tufttheworld.com/products/kit");
+  });
+
+  it("draft mode: a teammate's draft carries the links as text", async () => {
+    await settings({ aiMode: "draft", hours: ALWAYS });
+    ai.answer = { reply: "Try cleaning the blade.", handoff: false, reason: "repair", cards: { articles: [{ title: "Jams", url: "https://x/jams", image: null }], products: [] } };
+    const chat = await startChat(env, { name: "Jane", email: "jane@example.com", message: "My gun jams", ipHash: "x" });
+    await respond(env, chat.id);
+    const draft = JSON.parse((await loadChat(env, chat.id))!.ai_draft!);
+    expect(draft.reply).toBe("Try cleaning the blade.\n\nRead more:\n• Jams: https://x/jams");
+    expect(draft.cards).toBeUndefined();
   });
 
   it("only shares an order when its email matches the chat's", async () => {

@@ -27,6 +27,7 @@ vi.mock("../src/lib/shopify", () => ({
 
 import { askClasses, askProducts, handleAsk, shapeAnswer, type Source } from "../src/lib/ask";
 import { asksAboutStock, stockText } from "../src/lib/stock";
+import { chatCards } from "../src/lib/ai";
 import { importKb } from "../src/lib/kb";
 
 let env: any;
@@ -96,6 +97,18 @@ describe("the learn hub Ask box", () => {
     expect(ai.calls[1]).toContain("Sold out on the store right now:\n- Sold out thing (sold out)");
     expect(ai.calls[1]).toContain("- Sold out thing: out of stock; 40 more shipped, on its way, expected at our studio around October 9");
     expect(ai.calls[1]).not.toMatch(/supplier name|unit cost/i);
+  });
+
+  it("chat cards: only public articles it was given and real in-stock products", async () => {
+    const products = await askProducts(env);
+    const chosen: Source[] = [
+      { id: "a:jam", kind: "article", title: "Fixing jams", blurb: "", body: "", url: "https://t/blogs/kb/jam", image: "/kb/img/2" },
+      { id: "r:7", kind: "repair", title: "Dull blade", blurb: "", body: "", url: null, image: null },
+    ];
+    expect(chatCards(["a:jam", "r:7", "a:invented", "a:jam"], [{ handle: "kit", why: "Has it all." }, { handle: "gone", why: "x" }, { handle: "nope", why: "x" }], chosen, products)).toEqual({
+      articles: [{ title: "Fixing jams", url: "https://t/blogs/kb/jam", image: "/kb/img/2" }],
+      products: [{ title: "Tufting Starter Kit", url: "https://tufttheworld.com/products/kit", price: "$299", image: "https://cdn/kit.jpg", why: "Has it all." }],
+    });
   });
 
   it("words restock stages for customers and spots availability questions", () => {

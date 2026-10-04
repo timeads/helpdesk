@@ -10,6 +10,7 @@
   const KEY = "ttw-chat";
   const prefill = { name: (script?.dataset.name || "").trim(), email: (script?.dataset.email || "").trim() };
   const preview = script?.dataset.preview === "1";
+  const ACCENT = /^#[0-9a-f]{3,8}$/i.test(script?.dataset.accent || "") ? script.dataset.accent : "#c78c2b"; // step numbers, same as the Ask box
 
   const store = {
     get() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch { return null; } },
@@ -25,7 +26,7 @@
       else if (k === "class") n.className = v;
       else n.setAttribute(k, v === true ? "" : v);
     }
-    for (const c of kids.flat()) if (c != null && c !== false) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
     return n;
   };
   const svg = (d) => {
@@ -125,6 +126,25 @@ textarea { resize: none; }
 .pending { display: flex; gap: 6px; flex-wrap: wrap; }
 .pending img { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; }
 .note { font-size: 13px; color: #555; background: #f3efe9; border-radius: 10px; padding: 10px 12px; }
+/* Rich answers: numbered steps, article and product cards (same look as the learn hub's Ask box) */
+.msg.rich { max-width: 94%; }
+.msg .b p { margin: 0; }
+.msg .b p + p { margin-top: 8px; }
+.msg .b ol { list-style: none; margin: 8px 0 0; padding: 0; counter-reset: s; white-space: normal; }
+.msg .b ol li { counter-increment: s; display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 7px 0; border-top: 1px solid #efe9e1; align-items: start; }
+.msg .b ol li:first-child { border-top: 0; padding-top: 2px; }
+.msg .b ol li::before { content: counter(s); width: 22px; height: 22px; border-radius: 50%; background: ${ACCENT}; color: #1a1a1a; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.msg .b ol b { color: #1a1a1a; }
+.msg .b a { color: inherit; text-decoration: underline; }
+.cards { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.cards .lbl { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #777; padding: 4px 4px 0; }
+.card { display: flex; gap: 10px; align-items: center; text-decoration: none; color: #222; background: #fff; border: 1px solid #e8e3dc; border-radius: 12px; padding: 8px 10px; }
+.card:hover { border-color: ${color}; }
+.card img { width: 46px; height: 46px; object-fit: cover; border-radius: 8px; flex: none; border: 0; max-width: none; }
+.card .n { flex: none; width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, ${ACCENT} 25%, #fff); color: #1a1a1a; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.card .t { font-size: 13.5px; font-weight: 600; line-height: 1.3; display: block; }
+.card .p { font-size: 13px; font-weight: 700; display: block; margin-top: 2px; }
+.card .w { font-size: 12.5px; color: #666; display: block; margin-top: 2px; line-height: 1.35; }
 `;
 
   async function boot() {
@@ -192,12 +212,48 @@ textarea { resize: none; }
       if (m.from === "system") return el("div", { class: "sys" }, m.text);
       const me = m.from === "visitor";
       const who = me ? null : m.from === "ai" ? "AI assistant" : m.name || "Tuft the World";
-      return el("div", { class: "msg" + (me ? " me" : "") },
+      const cards = m.cards && (m.cards.articles?.length || m.cards.products?.length) ? m.cards : null;
+      const rich = !me && (cards || /(^|\n)\s*1[.)]\s/.test(m.text || ""));
+      return el("div", { class: "msg" + (me ? " me" : "") + (rich ? " rich" : "") },
         who ? el("div", { class: "who" }, who) : null,
-        m.text ? el("div", { class: "b" }, m.text) : null,
+        m.text ? el("div", { class: "b", style: rich ? "white-space: normal" : null }, rich ? richText(m.text) : linkify(m.text)) : null,
+        cards ? cardList(cards) : null,
         (m.files || []).map((f) => el("a", { href: `${API}/${saved.id}/files/${f.id}?t=${saved.token}`, target: "_blank", rel: "noopener" },
           el("img", { src: `${API}/${saved.id}/files/${f.id}?t=${saved.token}`, alt: f.name || "Photo" }))));
     };
+
+    // ---- Rich answers
+    const URL_RE = /(https?:\/\/[^\s<>()]+[^\s<>().,!?:;'"])/g;
+    function linkify(text) {
+      return String(text).split(URL_RE).map((part, i) => (i % 2 ? el("a", { href: part, target: "_blank", rel: "noopener" }, part) : part));
+    }
+    /** Paragraphs plus numbered steps ("1. Do this. Then…"): the first sentence of each step is the action, in bold. */
+    function richText(text) {
+      const out = [];
+      let list = null;
+      for (const line of String(text).split(/\n+/)) {
+        const step = line.match(/^\s*\d+[.)]\s+(.*)$/);
+        if (step) {
+          if (!list) out.push((list = el("ol")));
+          const m = step[1].match(/^(.{6,140}?[.!?:])(\s+)([\s\S]+)$/);
+          list.append(el("li", {}, el("span", {}, ...(m ? [el("b", {}, m[1]), m[2], ...linkify(m[3])] : [el("b", {}, ...linkify(step[1]))]))));
+        } else if (line.trim()) {
+          list = null;
+          out.push(el("p", {}, ...linkify(line.trim())));
+        }
+      }
+      return out;
+    }
+    const abs = (src) => (src && src.startsWith("/") ? BASE + src : src);
+    function cardList(c) {
+      return el("div", { class: "cards" },
+        c.products?.length ? [el("div", { class: "lbl" }, "Our picks"), c.products.map((p) =>
+          el("a", { class: "card", href: p.url, target: "_blank", rel: "noopener" }, p.image ? el("img", { src: abs(p.image), alt: "", loading: "lazy" }) : null,
+            el("span", {}, el("span", { class: "t" }, p.title), el("span", { class: "p" }, p.price), p.why ? el("span", { class: "w" }, p.why) : null)))] : null,
+        c.articles?.length ? [el("div", { class: "lbl" }, "Read more"), c.articles.map((a, i) =>
+          el("a", { class: "card", href: a.url, target: "_blank", rel: "noopener" }, el("span", { class: "n" }, String(i + 1)), a.image ? el("img", { src: abs(a.image), alt: "", loading: "lazy" }) : null,
+            el("span", { class: "t" }, a.title)))] : null);
+    }
 
     // ---- First screen: who you are + your question
     function startForm() {

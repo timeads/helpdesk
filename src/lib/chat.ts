@@ -4,7 +4,7 @@
 // it up, or the customer asks, the chat moves to email: the transcript goes out from the support
 // mailbox and replies thread back into the same ticket.
 import type { Env } from "../env";
-import { aiConfigured, chatAnswer, type ChatAnswer } from "./ai";
+import { aiConfigured, chatAnswer, type ChatAnswer, type ChatCards } from "./ai";
 import { buildMime, encodeRaw, textToHtml } from "./mime";
 import { getMailbox, importMessage, sendRaw } from "./gmail";
 import { customerProfile, findOrderByName, type ShopifyOrder } from "./shopify";
@@ -183,17 +183,18 @@ export type ChatKind = "chat" | "chat_ai" | "chat_system";
 export async function addChatMessage(
   env: Env,
   chat: ChatRow,
-  m: { kind: ChatKind; direction: "in" | "out"; text: string; files?: ChatFile[]; agentId?: number | null; fromName?: string | null },
+  m: { kind: ChatKind; direction: "in" | "out"; text: string; files?: ChatFile[]; agentId?: number | null; fromName?: string | null; extra?: ChatCards | null },
 ): Promise<number> {
   const at = nowIso();
   const attachments = await saveFiles(env, chat.id, m.files);
   const text = m.text.trim().slice(0, 4000);
   const fromEmail = m.direction === "in" ? chat.email : m.kind === "chat_ai" ? "ai@chat" : m.kind === "chat_system" ? "system@chat" : "agent@chat";
   const r = await env.DB.prepare(
-    `INSERT INTO messages (ticket_id, direction, from_email, from_name, to_emails, subject, sent_at, body_text, body_html, attachments, agent_id, kind)
-     VALUES (?, ?, ?, ?, '', NULL, ?, ?, NULL, ?, ?, ?) RETURNING id`,
+    `INSERT INTO messages (ticket_id, direction, from_email, from_name, to_emails, subject, sent_at, body_text, body_html, attachments, agent_id, kind, extra)
+     VALUES (?, ?, ?, ?, '', NULL, ?, ?, NULL, ?, ?, ?, ?) RETURNING id`,
   )
-    .bind(chat.ticket_id, m.direction, fromEmail, m.fromName ?? (m.direction === "in" ? chat.name : null), at, text, JSON.stringify(attachments), m.agentId ?? null, m.kind)
+    .bind(chat.ticket_id, m.direction, fromEmail, m.fromName ?? (m.direction === "in" ? chat.name : null), at, text, JSON.stringify(attachments), m.agentId ?? null, m.kind,
+      m.extra && (m.extra.articles.length || m.extra.products.length) ? JSON.stringify(m.extra) : null)
     .first<{ id: number }>();
   const snippet = (text || (attachments.length ? "📷 Photo" : "")).slice(0, 200);
   if (m.kind !== "chat_system") {
@@ -242,7 +243,7 @@ export async function startChat(
 /** Messages after `after` (by id), shaped for the widget or the ticket page. */
 export async function chatMessages(env: Env, chat: ChatRow, after = 0) {
   const { results } = await env.DB.prepare(
-    `SELECT m.id, m.direction, m.kind, m.from_name, m.body_text, m.attachments, m.sent_at, a.name AS agent_name
+    `SELECT m.id, m.direction, m.kind, m.from_name, m.body_text, m.attachments, m.sent_at, m.extra, a.name AS agent_name
      FROM messages m LEFT JOIN agents a ON a.id = m.agent_id
      WHERE m.ticket_id = ? AND m.kind IS NOT NULL AND m.id > ? ORDER BY m.id LIMIT 200`,
   ).bind(chat.ticket_id, after).all<any>();
@@ -253,7 +254,17 @@ export async function chatMessages(env: Env, chat: ChatRow, after = 0) {
     text: m.body_text as string,
     files: (JSON.parse(m.attachments || "[]") as { id: string; filename: string; mimeType: string }[]).map((f) => ({ id: f.id, name: f.filename, mime: f.mimeType })),
     at: m.sent_at as string,
+    cards: m.extra ? (JSON.parse(m.extra) as ChatCards) : null,
   }));
+}
+
+/** Cards as plain lines, for emails and teammates' drafts. */
+export function cardsText(c: ChatCards | null | undefined): string {
+  if (!c) return "";
+  return [
+    c.articles.length ? `Read more:\n${c.articles.map((a) => `• ${a.title}: ${a.url}`).join("\n")}` : "",
+    c.products.length ? `Products:\n${c.products.map((p) => `• ${p.title} (${p.price}): ${p.url}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 /** The plain-text transcript for the email hand-off. */
@@ -264,7 +275,8 @@ async function transcript(env: Env, chat: ChatRow) {
     .filter((m) => m.from !== "system")
     .map((m) => {
       const who = m.from === "visitor" ? chat.name || "You" : m.from === "ai" ? "Tuft the World (AI assistant)" : `${m.name ?? "Tuft the World"} (Tuft the World)`;
-      return `${who} · ${time(m.at)}\n${m.text}${m.files.length ? `\n[${m.files.length} photo${m.files.length > 1 ? "s" : ""}]` : ""}`;
+      const cards = cardsText(m.cards);
+      return `${who} · ${time(m.at)}\n${m.text}${cards ? `\n\n${cards}` : ""}${m.files.length ? `\n[${m.files.length} photo${m.files.length > 1 ? "s" : ""}]` : ""}`;
     })
     .join("\n\n");
 }
@@ -492,11 +504,14 @@ export async function respond(env: Env, chatId: string) {
   if (s.aiMode === "draft") {
     const codeSent = await sendCode();
     // A teammate reads the draft and sends it (or writes their own)
-    await env.DB.prepare("UPDATE chats SET ai_draft = ? WHERE id = ?").bind(JSON.stringify(ans), chat.id).run();
+    // Teammates send drafts as plain text, so the article and product links go into the text
+    const cards = cardsText(ans.cards);
+    const draft = { ...ans, reply: cards ? `${ans.reply}\n\n${cards}` : ans.reply, cards: undefined };
+    await env.DB.prepare("UPDATE chats SET ai_draft = ? WHERE id = ?").bind(JSON.stringify(draft), chat.id).run();
     if (codeSent) return; // they're busy with the code; the next answer comes once it's entered
     if (!open) {
       await env.DB.prepare("INSERT INTO notes (ticket_id, agent_id, body) VALUES (?, NULL, ?)")
-        .bind(chat.ticket_id, `AI suggested reply (chat came in after hours):\n\n${ans.reply}${ans.reason ? `\n\nWhy: ${ans.reason}` : ""}`)
+        .bind(chat.ticket_id, `AI suggested reply (chat came in after hours):\n\n${draft.reply}${ans.reason ? `\n\nWhy: ${ans.reason}` : ""}`)
         .run();
     } else if (chat.state !== "waiting") {
       await addChatMessage(env, chat, { kind: "chat_system", direction: "out", text: SAY_WAITING });
@@ -505,7 +520,7 @@ export async function respond(env: Env, chatId: string) {
   }
 
   // Auto: the AI answers the customer directly
-  await addChatMessage(env, chat, { kind: "chat_ai", direction: "out", text: ans.reply });
+  await addChatMessage(env, chat, { kind: "chat_ai", direction: "out", text: ans.reply, extra: ans.cards });
   await sendCode();
   await env.DB.prepare("UPDATE chats SET ai_replies = ai_replies + 1, ai_draft = NULL WHERE id = ?").bind(chat.id).run();
   if (ans.handoff) return toPerson(`AI handed off: ${ans.reason}`);

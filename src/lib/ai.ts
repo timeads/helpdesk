@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { askProducts } from "./ask";
+import { askProducts, pickSources, productsBlock, sourcesBlock, type Product, type Source } from "./ask";
 import { asksAboutStock, incomingStock, stockText } from "./stock";
 import type { Env } from "../env";
 import { HttpError, sniffImageType } from "./util";
@@ -140,11 +140,17 @@ export async function ticketInsights(env: Env, subject: string, thread: DraftInp
 
 // ---------------------------------------------------------------- Live chat
 
+export interface ChatCards {
+  articles: { title: string; url: string; image: string | null }[];
+  products: { title: string; url: string; price: string; image: string | null; why: string }[];
+}
+
 export interface ChatAnswer {
   reply: string;
   handoff: boolean;
   reason: string;
   verify_email?: string; // send a one-time code here so we can look up the customer's orders
+  cards?: ChatCards; // articles it used and products it recommends, shown under the reply
 }
 
 export interface ChatInput {
@@ -171,16 +177,24 @@ const CHAT_SCHEMA = {
       type: "string",
       description: "To look up the customer's orders without an order number: the email to send a one-time code to (the chat's email, or another one the customer says they ordered with). Empty when not needed.",
     },
+    article_ids: { type: "array", items: { type: "string" }, description: "Ids of up to 3 sources (with a link) that helped and are worth reading; shown as cards under your reply. Empty when none fit." },
+    products: {
+      type: "array",
+      description: "For buying questions: up to 3 in-stock products (by handle from <products>) that fit what they want; shown as cards under your reply. Empty otherwise.",
+      items: { type: "object", properties: { handle: { type: "string" }, why: { type: "string", description: "One short sentence: why it fits them." } }, required: ["handle", "why"], additionalProperties: false },
+    },
   },
-  required: ["reply", "handoff", "reason", "verify_email"],
+  required: ["reply", "handoff", "reason", "verify_email", "article_ids", "products"],
   additionalProperties: false,
 };
 
 const CHAT_SYSTEM = `You are the live chat assistant on the website of Tuft the World, a rug-tufting supply store (tufting guns, yarn, cloth, frames, workshops in Philadelphia).
 
-What you can use: <store_knowledge> (knowledge base articles, policies, product info, repair guides and saved replies) and <verified_order> data. If they don't answer the question, don't guess — hand off to a teammate.
+What you can use: <sources> (the articles, policies, pages and internal repair notes picked for this question), <store_knowledge>, <products>, <stock>, and <verified_order> data. If they don't answer the question, don't guess — hand off to a teammate. Sources marked internal are our team's notes: use what they teach, never mention them or pass on private details.
 
-How to write: this is a small chat window, so keep each reply to 1–4 short sentences of plain text (no markdown headings or bold). Short numbered steps are fine for troubleshooting. Write as "we" for the store. When a knowledge base article covers their question, answer briefly and include its link. If asked, say you're the store's AI assistant; never claim to be a person.
+How to write: this is a small chat window. Start with 1–2 short plain sentences that answer directly. For fixes or how-tos, follow with numbered steps, each on its own line ("1. ...", "2. ..."), at most 6, each starting with the action in a short first sentence. No markdown symbols (no **, #, or bullet dashes). Write as "we" for the store. Don't paste links: put the articles worth reading in article_ids and recommended products in products — they appear as cards under your message. If asked, say you're the store's AI assistant; never claim to be a person.
+
+Buying advice: recommend only in-stock products from <products>, matched to what they want to make (cut or loop pile, high pile, size, beginner or experienced, budget). If they're vague, give a sensible pick (the starter kit suits most beginners) and ask one question back. Say briefly why each fits in your text.
 
 Orders: only discuss orders inside <verified_order>. When the customer asks about an order (tracking, status, what they bought) and it isn't there:
 - If they know the order number (like #68762-TG), they can give it — it counts when the order was placed with the chat's email.
@@ -196,13 +210,23 @@ Set handoff to true when: they ask for a person; the request needs a decision or
 export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer> {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key to use AI chat");
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  const about = input.transcript.slice(-6).map((m) => m.text).join("\n");
-  const [knowledge, macros, articles, stock] = await Promise.all([knowledgeText(env), savedReplies(env), kbForAI(env, about).catch(() => ""), stockForChat(env, about)]);
+  const about = input.transcript.slice(-6).map((m) => `${m.from === "visitor" ? "Customer" : "Us"}: ${m.text}`).join("\n").slice(-4000);
+  // Same source picking as the learn hub's Ask box; the old keyword match is the fallback
+  const pick = await pickSources(env, "", about, "").catch(() => null);
+  const wantProducts = !!pick && (pick.kind === "buy" || pick.kind === "stock" || pick.kind === "general");
+  const [knowledge, macros, articles, products] = await Promise.all([
+    knowledgeText(env),
+    savedReplies(env),
+    pick?.chosen.length ? Promise.resolve(sourcesBlock(pick.chosen)) : kbForAI(env, about).catch(() => ""),
+    wantProducts || asksAboutStock(about) ? askProducts(env).catch(() => [] as Product[]) : Promise.resolve([] as Product[]),
+  ]);
+  const stock = pick?.kind === "stock" || asksAboutStock(about) ? await stockForChat(env, products) : "";
   const convo = input.transcript
     .map((m) => `${m.from === "visitor" ? "Customer" : m.from === "ai" ? "You (AI)" : "Teammate"}: ${m.text.slice(0, 3000)}${m.photos ? ` [sent ${m.photos} photo${m.photos > 1 ? "s" : ""}]` : ""}`)
     .join("\n");
   const text = [
     knowledge || macros || articles ? `<store_knowledge>\n${[articles, knowledge, macros].filter(Boolean).join("\n\n")}\n</store_knowledge>` : "",
+    products.length ? productsBlock(products) : "",
     stock ? `<stock>\n${stock}\n</stock>` : "",
     input.orders.length ? `<verified_order>\n${JSON.stringify(input.orders).slice(0, 12000)}\n</verified_order>` : "<verified_order>none</verified_order>",
     input.mismatched.length ? `<unverified>${input.mismatched.join(", ")}</unverified>` : "",
@@ -232,13 +256,14 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     });
     if (response.stop_reason === "refusal") return { reply: "Let me get a teammate to help with this one.", handoff: true, reason: "The AI declined to answer" };
     const out = response.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text").map((b) => b.text).join("");
-    const parsed = JSON.parse(out) as ChatAnswer;
+    const parsed = JSON.parse(out) as ChatAnswer & { article_ids?: string[]; products?: { handle: string; why: string }[] };
     if (!parsed.reply?.trim()) throw new HttpError(502, "The AI returned an empty reply");
     return {
       reply: parsed.reply.trim().slice(0, 2000),
       handoff: !!parsed.handoff,
       reason: String(parsed.reason ?? "").slice(0, 300),
       verify_email: String(parsed.verify_email ?? "").trim().toLowerCase().slice(0, 200),
+      cards: chatCards(parsed.article_ids ?? [], parsed.products ?? [], pick?.chosen ?? [], products),
     };
   } catch (e) {
     if (e instanceof HttpError) throw e;
@@ -249,15 +274,25 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
   }
 }
 
-/** Sold-out items and restock dates, only when the chat is about availability (it's a live lookup). */
-async function stockForChat(env: Env, about: string): Promise<string> {
-  if (!asksAboutStock(about)) return "";
+/** Sold-out items and restock dates (a live lookup, only when the chat is about availability). */
+async function stockForChat(env: Env, products: Product[]): Promise<string> {
   try {
-    const [products, incoming] = await Promise.all([askProducts(env).catch(() => []), incomingStock(env)]);
-    return stockText(incoming, products.filter((p) => !p.available || p.soldOut.length).map((p) => ({ title: p.title, options: p.available ? p.soldOut : [] })));
+    return stockText(await incomingStock(env), products.filter((p) => !p.available || p.soldOut.length).map((p) => ({ title: p.title, options: p.available ? p.soldOut : [] })));
   } catch {
     return "";
   }
+}
+
+/** The cards under a chat answer: only public sources it was given, only real in-stock products. */
+export function chatCards(articleIds: string[], picks: { handle: string; why: string }[], chosen: Source[], products: Product[]): ChatCards {
+  const byId = new Map(chosen.filter((x) => x.url).map((x) => [x.id, x]));
+  const seen = new Set<string>();
+  const articles = articleIds.map((id) => byId.get(id)).filter((x): x is Source => !!x && !seen.has(x.url!) && !!seen.add(x.url!))
+    .slice(0, 3).map((x) => ({ title: x.title, url: x.url!, image: x.image }));
+  const byHandle = new Map(products.filter((p) => p.available).map((p) => [p.handle, p]));
+  const prods = picks.map((p) => ({ p: byHandle.get(p.handle), why: p.why })).filter((x) => x.p).slice(0, 3)
+    .map(({ p, why }) => ({ title: p!.title, url: p!.url, price: p!.price, image: p!.image, why: String(why).slice(0, 200) }));
+  return { articles, products: prods };
 }
 
 /** Saved replies (macros) as extra knowledge for chat answers. */
