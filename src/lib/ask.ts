@@ -108,8 +108,8 @@ const when = (iso: string) => new Date(iso).toLocaleString("en-US", { timeZone: 
 
 /** Classes with their next open dates, from the booking app's public availability (refreshed every 10 minutes). */
 export async function askClasses(env: Env, products: Product[]): Promise<ClassInfo[]> {
-  const base = env.BOOKING_SUPABASE_URL?.replace(/\/+$/, "");
-  const key = env.BOOKING_SUPABASE_ANON_KEY;
+  const base = env.BOOKING_SUPABASE_URL?.trim().replace(/\/+$/, "");
+  const key = env.BOOKING_SUPABASE_ANON_KEY?.trim();
   if (!base || !key) return [];
   return cached(env, "ask_classes", 10, async () => {
     const get = async <T>(path: string): Promise<T> => {

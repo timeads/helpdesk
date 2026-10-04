@@ -440,6 +440,24 @@ admin.post("/credentials/test/:group", async (c) => {
       await client.models.retrieve(env.AI_MODEL || "claude-opus-5-5");
       return c.json({ ok: true, message: `Key works · ${env.AI_MODEL || "claude-opus-5-5"} is available` });
     }
+    if (group === "booking") {
+      const base = env.BOOKING_SUPABASE_URL?.trim().replace(/\/+$/, "");
+      const key = env.BOOKING_SUPABASE_ANON_KEY?.trim();
+      if (!base || !key) throw new Error("Add the project URL and the anon key.");
+      if (!/^https:\/\/[\w.-]+$/.test(base)) throw new Error("The project URL should look like https://abcd1234.supabase.co (nothing after .co).");
+      const get = async (path: string) => {
+        const r = await fetch(`${base}/rest/v1/${path}`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+        if (r.status === 401 || r.status === 403) throw new Error("The booking app turned down that key — paste the anon (public) key from Supabase → Project settings → API.");
+        if (!r.ok) throw new Error(`The booking app answered ${r.status} — check the project URL.`);
+        return (await r.json()) as unknown[];
+      };
+      const [workshops, sessions] = await Promise.all([
+        get("workshops?active=eq.true&select=id"),
+        get(`widget_sessions?status=eq.scheduled&starts_at=gt.${encodeURIComponent(new Date().toISOString())}&select=id`),
+      ]);
+      await deleteSetting(c.env, "ask_classes");
+      return c.json({ ok: true, message: `Connected · ${workshops.length} active class${workshops.length === 1 ? "" : "es"}, ${sessions.length} upcoming date${sessions.length === 1 ? "" : "s"}` });
+    }
     throw new HttpError(404, "Unknown service");
   } catch (e) {
     if (e instanceof HttpError && e.status === 404) throw e;
