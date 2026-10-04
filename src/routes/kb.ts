@@ -12,6 +12,7 @@ import { shopify } from "../lib/shopify";
 import { autoMergeOn, findDuplicates, integrateSuggestions, mergeArticles, restoreVersion, saveVersion, versionsOf, type DuplicateGroup } from "../lib/kb-merge";
 import { getSetting, setSetting } from "../lib/util";
 import { pullFromStore } from "../lib/kb-pull";
+import { applyLinkFixes, checkExternalBatch, checkKbLinks, linkReport, type LinkFix } from "../lib/kb-links";
 import { addSources } from "../lib/site-knowledge";
 import { HttpError } from "../lib/util";
 
@@ -290,6 +291,32 @@ kb.get("/asks", async (c) => {
     gaps: rows.filter((r) => r.helpful === -1 || (!r.articles.length && r.kind !== "order" && r.kind !== "classes" && r.kind !== "buy")).slice(0, 60),
     recent: rows.slice(0, 100),
   });
+});
+
+// ---- Link check: every link in every article against what's really on the store
+
+kb.get("/links", async (c) => {
+  requireAdmin(c);
+  return c.json({ report: await linkReport(c.env) });
+});
+
+kb.post("/links/check", async (c) => {
+  requireAdmin(c);
+  return c.json({ report: await checkKbLinks(c.env) });
+});
+
+kb.post("/links/external", async (c) => {
+  requireAdmin(c);
+  return c.json(await checkExternalBatch(c.env));
+});
+
+kb.post("/links/fix", async (c) => {
+  requireAdmin(c);
+  const agent = c.get("agent");
+  const { fixes } = await c.req.json<{ fixes?: LinkFix[] }>();
+  if (!Array.isArray(fixes) || !fixes.length) throw new HttpError(400, "Nothing to fix");
+  const r = await applyLinkFixes(c.env, fixes.slice(0, 500).map((f) => ({ articleId: String(f.articleId), href: String(f.href), to: f.to === null ? null : String(f.to).trim() })), agent.id);
+  return c.json({ ...r, unsynced: await kbUnsynced(c.env) });
 });
 
 /** Queues articles already on the store whose tables and photos would look better with the current styling. */

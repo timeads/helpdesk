@@ -56,8 +56,8 @@ export function renderKb(main) {
 
   async function load() {
     try {
-      const [k, d] = await Promise.all([api("/kb"), api("/kb/duplicates").catch(() => ({ groups: [] }))]);
-      Object.assign(st, k, { dupeGroups: d.groups, dupes: d.groups.length });
+      const [k, d, l] = await Promise.all([api("/kb"), api("/kb/duplicates").catch(() => ({ groups: [] })), isAdmin ? api("/kb/links").catch(() => ({ report: null })) : { report: null }]);
+      Object.assign(st, k, { dupeGroups: d.groups, dupes: d.groups.length, links: l.report });
     } catch (e) {
       return mount(listEl, h("div", { class: "notice bad" }, e.message));
     }
@@ -66,6 +66,7 @@ export function renderKb(main) {
     if (sel === "suggestions") openSuggestions();
     else if (sel === "duplicates") openDuplicates();
     else if (sel === "questions") openQuestions();
+    else if (sel === "links") openLinks();
     else if (sel) openArticle(sel);
     else drawEmpty();
     // A job asked for from another view (e.g. “Merge with AI” on the suggestions page)
@@ -121,6 +122,15 @@ export function renderKb(main) {
       st.restyle = 0;
       await runJob("publish");
     });
+    const linksBtn = h("button", { class: "btn sm", title: "Checks every link in every article against your store's products, pages and blog posts" }, icon("search"), "Check links");
+    linksBtn.onclick = busy(linksBtn, async () => {
+      linksBtn.replaceChildren(spinner(), "Checking links…");
+      const r = await api("/kb/links/check", { method: "POST" });
+      st.links = r.report;
+      toast(r.report.issues.length ? `${r.report.issues.length} link${r.report.issues.length === 1 ? "" : "s"} to fix (of ${r.report.links} checked)` : `All ${r.report.links} store links are good`);
+      history.pushState(null, "", "/manual/kb/links");
+      renderKb(main);
+    });
     const pull = h("button", { class: "btn sm" }, icon("download"), "Update from store");
     pull.onclick = () => pullDialog();
     const auto = h("input", { type: "checkbox", checked: !!st.autoMerge });
@@ -145,7 +155,7 @@ export function renderKb(main) {
           st.ai ? ` · ${st.toScan} finished conversation${st.toScan === 1 ? "" : "s"} not read yet` : "",
           " · Each published article is a page on your store under /blogs/knowledge-base.")),
       running ? stop : h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } },
-        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, pull, st.restyle && !st.unsynced ? restyle : null, publish)));
+        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, st.articles.length ? linksBtn : null, pull, st.restyle && !st.unsynced ? restyle : null, publish)));
   }
 
   async function runJob(kind) {
@@ -189,6 +199,11 @@ export function renderKb(main) {
       items.push(h("a", { class: "manual-item kb-sugg" + (sel === "duplicates" ? " active" : ""), href: "/manual/kb/duplicates", "data-link": "" },
         h("span", { class: "manual-item-title" }, icon("merge"), ` ${st.dupes} set${st.dupes === 1 ? "" : "s"} of duplicates`),
         h("span", { class: "small muted" }, "Review and merge")));
+    }
+    if (st.links?.issues.length) {
+      items.push(h("a", { class: "manual-item kb-sugg" + (sel === "links" ? " active" : ""), href: "/manual/kb/links", "data-link": "" },
+        h("span", { class: "manual-item-title" }, icon("flag"), ` ${st.links.issues.length} link${st.links.issues.length === 1 ? "" : "s"} to fix`),
+        h("span", { class: "small muted" }, `Checked ${relTime(st.links.at)}`)));
     }
     if (st.asks) {
       items.push(h("a", { class: "manual-item kb-sugg" + (sel === "questions" ? " active" : ""), href: "/manual/kb/questions", "data-link": "" },
@@ -358,6 +373,74 @@ export function renderKb(main) {
       h("div", { class: "site-list blog-modes" }, data.blogs.map((b) => h("div", { class: "blog-mode" },
         h("span", {}, h("b", {}, b.title), h("span", { class: "small muted" }, ` · ${b.count} article${b.count === 1 ? "" : "s"}`)), choice(b)))),
       h("div", { class: "row" }, go));
+  }
+
+  // ---- Link check: fix links that go nowhere, to retired products, through redirects or the old domain
+  function openLinks() {
+    const r = st.links;
+    if (!r) return mount(detailEl, h("div", { class: "card empty" }, h("p", {}, "Use “Check links” above to check every link in every article.")));
+    const GROUPS = [
+      ["broken", "Broken — these go to a missing page (404)"],
+      ["retired", "Retired — the product, page or post is no longer on the store"],
+      ["redirect", "Redirected — they work, but link straight to where they end up"],
+      ["old-domain", "Old address — tuftinggun.com links that work through a redirect"],
+    ];
+    const rows = r.issues.map((i) => {
+      const pick = h("input", { type: "checkbox", checked: !!i.suggestion, "aria-label": "Fix this link" });
+      const to = h("input", { class: "input", value: i.suggestion?.href ?? "", placeholder: "New link, e.g. /products/the-duo", "aria-label": "New link" });
+      const remove = h("input", { type: "checkbox" });
+      to.oninput = () => { pick.checked = !!to.value.trim() || remove.checked; count(); };
+      remove.onchange = () => { to.disabled = remove.checked; pick.checked = remove.checked || !!to.value.trim(); count(); };
+      pick.onchange = count;
+      const el = h("div", { class: "link-row" },
+        h("label", { class: "link-pick" }, pick),
+        h("div", { class: "link-main" },
+          h("div", {}, h("a", { href: `/manual/kb/${encodeURIComponent(i.articleId)}`, "data-link": "" }, h("b", {}, i.articleTitle)), i.text ? h("span", { class: "muted" }, ` · “${i.text}”`) : null),
+          h("div", { class: "small" }, h("code", {}, i.href), h("span", { class: "muted" }, ` — ${i.problem}`)),
+          h("div", { class: "row link-fix" }, h("span", { class: "small muted" }, "Change to"), to,
+            i.suggestion?.title && i.suggestion.title !== i.suggestion.href ? h("span", { class: "small muted" }, i.suggestion.title) : null,
+            h("label", { class: "check small" }, remove, "Remove the link (keep the words)"))));
+      return { i, el, pick, to, remove };
+    });
+    const apply = h("button", { class: "btn primary sm" });
+    const count = () => {
+      const n = rows.filter((x) => x.pick.checked && (x.remove.checked || x.to.value.trim())).length;
+      apply.textContent = n ? `Fix ${n} link${n === 1 ? "" : "s"}` : "Fix links";
+      apply.disabled = !n;
+    };
+    apply.onclick = busy(apply, async () => {
+      const fixes = rows.filter((x) => x.pick.checked && (x.remove.checked || x.to.value.trim()))
+        .map((x) => ({ articleId: x.i.articleId, href: x.i.href, to: x.remove.checked ? null : x.to.value.trim() }));
+      const out = await api("/kb/links/fix", { method: "POST", body: { fixes } });
+      toast(`Fixed links in ${out.articles} article${out.articles === 1 ? "" : "s"} — press “Publish to store” to update the site`);
+      await load();
+    });
+    const outside = h("button", { class: "btn sm" }, icon("ext"), r.external.length > r.externalChecked ? `Check ${r.external.length - r.externalChecked} outside links` : "Outside links checked");
+    outside.disabled = r.external.length <= r.externalChecked;
+    outside.onclick = busy(outside, async () => {
+      let found = 0;
+      for (;;) {
+        outside.replaceChildren(spinner(), "Checking outside links…");
+        const x = await api("/kb/links/external", { method: "POST" });
+        found += x.found;
+        if (!x.remaining || !x.checked) break;
+      }
+      toast(found ? `${found} outside link${found === 1 ? "" : "s"} go nowhere — listed under Broken` : "All outside links answered");
+      await load();
+    });
+    count();
+    mount(detailEl, h("div", { class: "kb-edit" },
+      h("div", { class: "card" },
+        h("h2", { style: { margin: "0 0 6px" } }, "Link check"),
+        h("p", { class: "small muted", style: { margin: "0 0 10px" } },
+          `${r.links} links in ${r.articles} articles, checked ${relTime(r.at)} against your store's products, collections, pages and blog posts. `,
+          r.issues.length ? "Suggested fixes are filled in — check them, change any you like, then fix. Each article's earlier version is saved, and the fixes go to the site when you publish." : "Every store link goes somewhere real.",
+          r.redirectsChecked ? "" : " (Store redirects couldn't be read — add the read_online_store_navigation scope to check those too.)"),
+        h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap" } }, r.issues.length ? apply : null, outside)),
+      GROUPS.map(([k, title]) => {
+        const list = rows.filter((x) => x.i.status === k);
+        return list.length ? h("div", { class: "card" }, h("h3", { style: { margin: "0 0 6px" } }, `${title} (${list.length})`), list.map((x) => x.el)) : null;
+      })));
   }
 
   // ---- Learn hub questions: what visitors asked the Ask box, and where an article is missing
