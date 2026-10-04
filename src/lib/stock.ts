@@ -24,6 +24,7 @@ export async function fetchIncoming(env: Env): Promise<IncomingRow[]> {
   const r = await fetch(`${base}/api/incoming`, { headers: { authorization: `Bearer ${env.TUFTSTOCK_TOKEN!.trim()}`, accept: "application/json" } });
   if (r.status === 401 || r.status === 403) throw new HttpError(502, "TuftStock turned down the token — check HELPDESK_API_TOKEN in TuftStock matches the one here");
   if (r.status === 404) throw new HttpError(502, "TuftStock doesn't have the incoming-stock endpoint yet — deploy the latest TuftStock");
+  if (r.status === 503) throw new HttpError(502, "TuftStock doesn't see HELPDESK_API_TOKEN — add it to the TuftStock web service's variables in Railway and redeploy");
   if (!r.ok) throw new HttpError(502, `TuftStock answered ${r.status}`);
   const d = (await r.json()) as { items?: IncomingRow[] };
   return Array.isArray(d.items) ? d.items : [];
