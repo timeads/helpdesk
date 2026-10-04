@@ -1326,3 +1326,6 @@ a.view-chip { text-decoration: none; }
 .kb-bulk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 16px; position: sticky; top: 0; z-index: 2; }
 .dupe-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .dupe-row:last-of-type { border-bottom: 0; }
+.blog-mode { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.blog-mode:last-child { border-bottom: 0; }
+.blog-modes { max-height: 420px; }

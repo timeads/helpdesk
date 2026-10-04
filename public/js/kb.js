@@ -276,6 +276,7 @@ export function renderKb(main) {
       h("div", { class: "row kb-meta", style: { gap: "10px", flexWrap: "wrap" } },
         topic, status, h("label", { class: "check" }, useAi, "Use in chat & AI replies"),
         h("span", { style: { flex: 1 } }),
+        a.blog_handle && a.blog_handle !== "knowledge-base" ? h("span", { class: "badge plain", title: "This article stays in this blog on the store, at the same address" }, `${a.blog_handle.replace(/-/g, " ")} blog`) : null,
         a.url ? h("a", { class: "btn sm ghost", href: a.url, target: "_blank", rel: "noopener" }, icon("ext"), "View on store") : h("span", { class: "small muted" }, "Not on the store yet"),
         a.updated_at ? h("span", { class: "small muted" }, `edited ${relTime(a.updated_at)}`) : null,
         versionsEl),
@@ -297,45 +298,52 @@ export function renderKb(main) {
   // ---- Update from the store: the Knowledge Base blog wins; other blogs can feed the AI
   async function pullDialog() {
     const body = h("div", { class: "stack" }, skeletonRows(3));
-    const { close } = modal("Update from your store", body, { width: 620 });
-    let blogs = [];
+    const { close } = modal("Update from your store", body, { width: 640 });
+    let data;
     try {
-      ({ blogs } = await api("/kb/store-blogs"));
+      data = await api("/kb/store-blogs");
     } catch (e) {
       mount(body, h("div", { class: "notice bad" }, e.message));
       return;
     }
-    const picked = new Set(blogs.filter((b) => b.added || !/^(news|giving)$/.test(b.source.slice(5))).map((b) => b.source.slice(5)));
+    // First time: the Learn-hub blogs are edited here; stories are only read by the AI; press & giving left out
+    const LEARN = ["getting-started-with-tufting", "all-about-tufting", "compare-the-machines", "high-pile-machines", "all-about-yarn", "finishing-tufted-pieces",
+      "tech-support", "workshop-info", "shipping-info", "returns-and-exchanges", "reflect-rewards", "tufting-residency"];
+    const mode = new Map(data.blogs.map((b) => [b.handle,
+      b.handle === "knowledge-base" ? "edit"
+        : data.configured ? (b.managed ? "edit" : b.aiReads ? "ai" : "off")
+          : LEARN.includes(b.handle) ? "edit" : b.handle === "info" || b.aiReads ? "ai" : "off"]));
     const go = h("button", { class: "btn primary" }, icon("download"), "Update now");
     go.onclick = busy(go, async () => {
       go.replaceChildren(spinner(), "Reading your store…");
-      const r = await api("/kb/pull", { method: "POST", body: { blogs: [...picked] } });
+      const manage = [...mode].filter(([, m]) => m === "edit").map(([hd]) => hd);
+      const aiBlogs = [...mode].filter(([, m]) => m === "ai").map(([hd]) => hd);
+      const r = await api("/kb/pull", { method: "POST", body: { manage, aiBlogs } });
       close();
       toast([
-        `${r.onStore} articles on the store`,
+        `${r.onStore} articles in ${Object.keys(r.blogs ?? {}).length} blog${Object.keys(r.blogs ?? {}).length === 1 ? "" : "s"}`,
         r.updated ? `${r.updated} updated` : null,
         r.added ? `${r.added} added` : null,
         r.removed ? `${r.removed} removed (no longer on the store)` : null,
         r.unchanged ? `${r.unchanged} already the same` : null,
         r.topicsAdded ? `${r.topicsAdded} new topic${r.topicsAdded === 1 ? "" : "s"}` : null,
-        r.blogArticles ? `${r.blogArticles} articles from your other blogs given to the AI` : null,
+        r.blogArticles ? `${r.blogArticles} articles for the AI to read` : null,
       ].filter(Boolean).join(" · "));
       history.pushState(null, "", "/manual/kb");
       renderKb(main);
     });
+    const choice = (b) => {
+      if (b.handle === "knowledge-base") return h("span", { class: "small muted" }, "Always edited here");
+      const sel = h("select", { class: "input", "aria-label": `${b.title}: how to use it`, style: { width: "auto" } },
+        [["edit", "Edit here"], ["ai", "AI reads only"], ["off", "Leave out"]].map(([v, t]) => h("option", { value: v, selected: mode.get(b.handle) === v }, t)));
+      sel.onchange = () => mode.set(b.handle, sel.value);
+      return sel;
+    };
     mount(body,
-      h("p", { style: { margin: 0 } }, "Makes the knowledge base here match your store's Knowledge Base blog: your edits on the store replace the text here, articles you added there come in, and ones you deleted or merged there are removed here."),
-      h("p", { class: "small muted", style: { margin: 0 } }, "Everything that changes is saved as an earlier version first, so any article can be put back. Drafts you never published are left alone."),
-      blogs.length ? [
-        h("h3", { class: "section" }, "Also give the AI your other blogs"),
-        h("p", { class: "small muted", style: { marginTop: 0 } }, "These stay on your store as they are; the chat and AI replies look things up in them (refreshed daily). Untick any that aren't helpful for customers' questions."),
-        h("div", { class: "site-list" }, blogs.map((b) => {
-          const handle = b.source.slice(5);
-          const c = h("input", { type: "checkbox", checked: picked.has(handle) });
-          c.onchange = () => (c.checked ? picked.add(handle) : picked.delete(handle));
-          return h("label", { class: "check site-row" }, c, h("span", {}, h("b", {}, b.title), h("span", { class: "small muted" }, ` · ${b.count} article${b.count === 1 ? "" : "s"}${b.added ? " · already added" : ""}`)));
-        })),
-      ] : null,
+      h("p", { style: { margin: 0 } }, "Makes the knowledge base here match your store. For each blog edited here: your edits on the store replace the text here, articles added there come in, and ones deleted or merged there are removed here. Articles stay in their own blog with the same address."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "Everything that changes is saved as an earlier version first. Drafts you never published are left alone. “AI reads only” blogs stay as they are on the store; the chat and AI replies look things up in them."),
+      h("div", { class: "site-list blog-modes" }, data.blogs.map((b) => h("div", { class: "blog-mode" },
+        h("span", {}, h("b", {}, b.title), h("span", { class: "small muted" }, ` · ${b.count} article${b.count === 1 ? "" : "s"}`)), choice(b)))),
       h("div", { class: "row" }, go));
   }
 

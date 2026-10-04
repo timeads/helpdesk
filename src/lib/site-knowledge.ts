@@ -21,6 +21,7 @@ export async function siteSources(env: Env) {
     env,
     `query SiteSources { shop { shopPolicies { id type title body url updatedAt } } pages(first: 100, sortKey: TITLE) { nodes { id title handle isPublished updatedAt bodySummary } } blogs(first: 50) { nodes { id title handle articlesCount { count } } } }`,
   );
+  const managed = await getSetting<string[]>(env, "kb_blogs", ["knowledge-base"]).then((m) => [...new Set(["knowledge-base", ...m])]);
   const { results } = await env.DB.prepare("SELECT source FROM knowledge WHERE source IS NOT NULL").all<{ source: string }>();
   const added = new Set(results.map((r) => (r.source.startsWith("blog:") ? r.source.split(":").slice(0, 2).join(":") : r.source)));
   return {
@@ -28,8 +29,8 @@ export async function siteSources(env: Env) {
     pages: d.pages.nodes.filter((p) => p.isPublished !== false).map((p) => ({
       source: `page:${p.id}`, title: p.title, url: `${STORE}/pages/${p.handle}`, summary: (p.bodySummary ?? "").slice(0, 140), added: added.has(`page:${p.id}`),
     })),
-    // The knowledge base's own blog is edited in Repair manual → Knowledge base, so it isn't offered here
-    blogs: (d.blogs?.nodes ?? []).filter((b) => b.handle !== "knowledge-base" && b.articlesCount.count > 0).map((b) => ({
+    // Blogs edited in Repair manual → Knowledge base aren't offered here (the AI already has them)
+    blogs: (d.blogs?.nodes ?? []).filter((b) => !managed.includes(b.handle) && b.articlesCount.count > 0).map((b) => ({
       source: `blog:${b.handle}`, title: b.title, url: `${STORE}/blogs/${b.handle}`, count: b.articlesCount.count, added: added.has(`blog:${b.handle}`),
     })),
   };

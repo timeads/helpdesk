@@ -6,13 +6,13 @@ import { requireAdmin } from "../lib/auth";
 import { aiConfigured } from "../lib/ai";
 import {
   acceptSuggestion, cleanHtml, descriptionFor, importKb, kbArticles, kbPending, kbScanBatch, kbTopics, kbUnsynced, publishBatch, slugify,
-  textOf, uniqueId, articleUrl, type ImportInput,
+  textOf, uniqueId, articleUrl, managedBlogs, type ImportInput,
 } from "../lib/kb";
 import { shopify } from "../lib/shopify";
 import { autoMergeOn, findDuplicates, integrateSuggestions, mergeArticles, restoreVersion, saveVersion, versionsOf, type DuplicateGroup } from "../lib/kb-merge";
 import { getSetting, setSetting } from "../lib/util";
 import { pullFromStore } from "../lib/kb-pull";
-import { addSources, siteSources } from "../lib/site-knowledge";
+import { addSources } from "../lib/site-knowledge";
 import { HttpError } from "../lib/util";
 
 const kb = new Hono<AppEnv>();
@@ -28,7 +28,7 @@ kb.get("/", async (c) => {
   ]);
   return c.json({
     topics,
-    articles: articles.map(({ body_html: _h, body_text, ...a }) => ({ ...a, words: body_text.split(/\s+/).filter(Boolean).length, url: a.shopify_handle && a.synced_at ? articleUrl(a.shopify_handle) : null })),
+    articles: articles.map(({ body_html: _h, body_text, ...a }) => ({ ...a, words: body_text.split(/\s+/).filter(Boolean).length, url: a.shopify_handle && a.synced_at ? articleUrl(a.blog_handle, a.shopify_handle) : null })),
     suggestions: pending?.n ?? 0,
     toScan: scan,
     unsynced,
@@ -40,7 +40,7 @@ kb.get("/", async (c) => {
 kb.get("/article/:id", async (c) => {
   const a = await c.env.DB.prepare("SELECT * FROM kb_articles WHERE id = ?").bind(c.req.param("id")).first<any>();
   if (!a) throw new HttpError(404, "Article not found");
-  return c.json({ article: { ...a, autoDescription: descriptionFor({ body_text: a.body_text }), url: a.shopify_handle && a.synced_at ? articleUrl(a.shopify_handle) : null } });
+  return c.json({ article: { ...a, autoDescription: descriptionFor({ body_text: a.body_text }), url: a.shopify_handle && a.synced_at ? articleUrl(a.blog_handle, a.shopify_handle) : null } });
 });
 
 kb.post("/article", async (c) => {
@@ -143,10 +143,19 @@ kb.post("/duplicates/merge", async (c) => {
   return c.json(await mergeArticles(c.env, b.keep, b.merge.slice(0, 12), c.get("agent").id, b.title));
 });
 
-/** The store's other blogs (for “Update from store”: which to also give the AI). */
+/** The store's blogs, which are edited here, and which the AI only reads (for “Update from store”). */
 kb.get("/store-blogs", async (c) => {
-  const s = await siteSources(c.env);
-  return c.json({ blogs: s.blogs });
+  const d = await shopify<{ blogs: { nodes: { id: string; title: string; handle: string; articlesCount: { count: number } }[] } }>(c.env,
+    `query SiteBlogs { blogs(first: 50) { nodes { id title handle articlesCount { count } } } }`);
+  const managed = await managedBlogs(c.env);
+  const { results } = await c.env.DB.prepare("SELECT DISTINCT substr(source, 6, instr(substr(source, 6), ':') - 1) AS handle FROM knowledge WHERE source LIKE 'blog:%'").all<{ handle: string }>();
+  const aiReads = new Set(results.map((r) => r.handle));
+  return c.json({
+    blogs: d.blogs.nodes.filter((b) => b.articlesCount.count > 0 || b.handle === "knowledge-base").map((b) => ({
+      handle: b.handle, title: b.title, count: b.articlesCount.count, managed: managed.includes(b.handle), aiReads: aiReads.has(b.handle),
+    })),
+    configured: (await getSetting<string[] | null>(c.env, "kb_blogs", null)) !== null,
+  });
 });
 
 /**
@@ -155,10 +164,14 @@ kb.get("/store-blogs", async (c) => {
  */
 kb.post("/pull", async (c) => {
   requireAdmin(c);
-  const { blogs } = await c.req.json<{ blogs?: string[] }>().catch(() => ({ blogs: [] as string[] }));
-  const r = await pullFromStore(c.env, c.get("agent").id);
-  const chosen = (blogs ?? []).filter((h) => /^[\w-]+$/.test(h)).slice(0, 20);
-  const ai = chosen.length ? await addSources(c.env, chosen.map((h) => `blog:${h}`)) : { added: 0 };
+  const b = await c.req.json<{ manage?: string[]; aiBlogs?: string[]; blogs?: string[] }>().catch(() => ({}) as { manage?: string[]; aiBlogs?: string[]; blogs?: string[] });
+  const valid = (list?: string[]) => (list ?? []).filter((h) => /^[\w-]+$/.test(h)).slice(0, 25);
+  const manage = b.manage ? valid(b.manage) : undefined;
+  const r = await pullFromStore(c.env, c.get("agent").id, manage);
+  // Blogs only for the AI to read (not edited here)
+  const managed = await managedBlogs(c.env);
+  const aiOnly = valid(b.aiBlogs ?? b.blogs).filter((h) => !managed.includes(h));
+  const ai = aiOnly.length ? await addSources(c.env, aiOnly.map((h) => `blog:${h}`)) : { added: 0 };
   return c.json({ ...r, blogArticles: ai.added });
 });
 

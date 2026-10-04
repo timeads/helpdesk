@@ -83,7 +83,7 @@ const GROUPS_SCHEMA = {
 export async function findDuplicates(env: Env): Promise<DuplicateGroup[]> {
   const all = await kbArticles(env);
   if (all.length < 2) return [];
-  const index = all.map((a) => `[${a.id}] (${a.topic_id}; ${a.status}${a.shopify_id ? "; on store" : ""}; ${a.body_text.split(/\s+/).length} words) ${a.title}: ${a.body_text.slice(0, 350).replace(/\s+/g, " ")}`).join("\n");
+  const index = all.map((a) => `[${a.id}] (${a.topic_id}; ${a.status}${a.shopify_id ? `; on store in blog ${a.blog_handle}` : ""}; ${a.body_text.split(/\s+/).length} words) ${a.title}: ${a.body_text.slice(0, 350).replace(/\s+/g, " ")}`).join("\n");
   const r = await ask<{ groups: DuplicateGroup[] }>(
     env,
     [{ type: "text", text: `<articles>\n${index}\n</articles>` },
@@ -135,7 +135,7 @@ async function removeFromStore(env: Env, gone: KbArticle, into: KbArticle) {
     await shopify(env, `mutation KbArticleDelete($id: ID!) { articleDelete(id: $id) { deletedArticleId userErrors { field message } } }`, { id: gone.shopify_id });
     if (gone.shopify_handle && into.shopify_handle) {
       await shopify(env, `mutation KbRedirect($r: UrlRedirectInput!) { urlRedirectCreate(urlRedirect: $r) { urlRedirect { id } userErrors { field message } } }`, {
-        r: { path: `/blogs/knowledge-base/${gone.shopify_handle}`, target: `/blogs/knowledge-base/${into.shopify_handle}` },
+        r: { path: `/blogs/${gone.blog_handle || "knowledge-base"}/${gone.shopify_handle}`, target: `/blogs/${into.blog_handle || "knowledge-base"}/${into.shopify_handle}` },
       });
     }
   } catch (e) {

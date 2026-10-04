@@ -24,6 +24,8 @@ export interface KbArticle {
   shopify_handle: string | null;
   synced_at: string | null;
   updated_at: string;
+  blog_handle: string; // the store blog it lives in (knowledge-base, tech-support, …)
+  store_tags: string | null;
 }
 
 
@@ -149,7 +151,7 @@ export function rankArticles<A extends Pick<KbArticle, "id" | "title" | "body_te
 /** Knowledge-base context for the AI: the full text of the best matches plus every article's title and link. */
 export async function kbForAI(env: Env, conversation: string): Promise<string> {
   const kb = (await kbArticles(env, true)).filter((a) => a.use_in_ai)
-    .map((a) => ({ id: a.id, title: a.title, body_text: a.body_text, url: a.shopify_handle && a.synced_at ? articleUrl(a.shopify_handle) : null }));
+    .map((a) => ({ id: a.id, title: a.title, body_text: a.body_text, url: a.shopify_handle && a.synced_at ? articleUrl(a.blog_handle, a.shopify_handle) : null }));
   // Articles from the store's other blogs (added under AI knowledge → From your website)
   const { results: blogPosts } = await env.DB.prepare("SELECT id, name, content, source_url FROM knowledge WHERE type = 'article' AND status = 'active'")
     .all<{ id: number; name: string; content: string; source_url: string | null }>()
@@ -279,9 +281,15 @@ export async function uniqueId(env: Env, base: string) {
 // Real pages on the store's own domain (own URL, title, description, in the sitemap) are what
 // search engines and AI assistants read; a framed HTML file isn't.
 
-const BLOG_HANDLE = "knowledge-base";
+export const KB_BLOG = "knowledge-base";
+const BLOG_HANDLE = KB_BLOG;
 export const STORE_URL = "https://tufttheworld.com";
-export const articleUrl = (handle: string) => `${STORE_URL}/blogs/${BLOG_HANDLE}/${handle}`;
+export const articleUrl = (blog: string, handle: string) => `${STORE_URL}/blogs/${blog || KB_BLOG}/${handle}`;
+
+/** The store blogs whose articles are edited here (the Knowledge Base blog always). */
+export async function managedBlogs(env: Env): Promise<string[]> {
+  return [...new Set([KB_BLOG, ...(await getSetting<string[]>(env, "kb_blogs", [KB_BLOG]))])];
+}
 const handleFor = (a: Pick<KbArticle, "title"> & { shopify_handle?: string | null }) => a.shopify_handle || slugify(a.title).slice(0, 80);
 
 /** The meta description: the one written for it, else the opening sentences (about 155 characters). */
@@ -294,11 +302,11 @@ export function descriptionFor(a: Pick<KbArticle, "body_text"> & { description?:
   return end > 80 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(" "))}…`;
 }
 
-/** Article HTML for the store: images by full URL, links between articles as store URLs. */
-export function storeBody(html: string, appOrigin: string, handles: Map<string, string>) {
+/** Article HTML for the store: images by full URL, links between articles as store paths (id → /blogs/<blog>/<handle>). */
+export function storeBody(html: string, appOrigin: string, paths: Map<string, string>) {
   return html
     .replace(/src="\/kb\/img\//g, `src="${appOrigin}/kb/img/`)
-    .replace(/href="#([\w-]+)"/g, (m, id: string) => (handles.has(id) ? `href="/blogs/${BLOG_HANDLE}/${handles.get(id)}"` : m));
+    .replace(/href="#([\w-]+)"/g, (m, id: string) => (paths.has(id) ? `href="${paths.get(id)}"` : m));
 }
 
 export async function kbBlogId(env: Env): Promise<string> {
@@ -334,17 +342,18 @@ export async function publishBatch(env: Env, appOrigin: string, size = 6) {
   ).bind(Math.max(1, Math.min(8, size))).all<KbArticle & { topic_name: string; description: string; shopify_id: string | null; shopify_handle: string | null }>();
   if (!todo.length) return { published: 0, remaining: 0 };
   const blogId = await kbBlogId(env);
-  const all = await env.DB.prepare("SELECT id, title, shopify_handle FROM kb_articles").all<{ id: string; title: string; shopify_handle: string | null }>();
-  const handles = new Map(all.results.map((a) => [a.id, handleFor(a)]));
+  const all = await env.DB.prepare("SELECT id, title, shopify_handle, blog_handle FROM kb_articles").all<{ id: string; title: string; shopify_handle: string | null; blog_handle: string }>();
+  const paths = new Map(all.results.map((a) => [a.id, `/blogs/${a.blog_handle || KB_BLOG}/${handleFor(a)}`]));
   let published = 0;
   for (const a of todo) {
     const live = a.status === "published";
     const description = descriptionFor(a);
     const input = {
       title: a.title,
-      body: storeBody(a.body_html, appOrigin, handles),
+      body: storeBody(a.body_html, appOrigin, paths),
       summary: `<p>${description.replace(/[<>&]/g, "")}</p>`,
-      tags: ["Knowledge Base", a.topic_name],
+      // Knowledge Base posts are tagged by topic (the Learn hub groups them that way); posts in other blogs keep their tags
+      tags: a.shopify_id && a.blog_handle !== KB_BLOG ? (JSON.parse(a.store_tags || "[]") as string[]) : ["Knowledge Base", a.topic_name],
       isPublished: live,
       metafields: [
         { namespace: "global", key: "description_tag", type: "single_line_text_field", value: description.slice(0, 320) },
@@ -371,7 +380,8 @@ export async function publishBatch(env: Env, appOrigin: string, size = 6) {
       id = r.articleCreate.article.id;
       handle = r.articleCreate.article.handle;
     }
-    await env.DB.prepare("UPDATE kb_articles SET shopify_id = ?, shopify_handle = ?, synced_at = updated_at WHERE id = ?").bind(id, handle, a.id).run();
+    // New articles always go to the Knowledge Base blog
+    await env.DB.prepare(`UPDATE kb_articles SET shopify_id = ?, shopify_handle = ?, synced_at = updated_at${a.shopify_id ? "" : ", blog_handle = 'knowledge-base'"} WHERE id = ?`).bind(id, handle, a.id).run();
     published++;
   }
   return { published, remaining: await kbUnsynced(env) };

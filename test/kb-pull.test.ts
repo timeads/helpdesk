@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testD1 } from "./helpers/d1";
 
-const store = vi.hoisted(() => ({ kb: [] as any[], blog: [] as any[] }));
+const store = vi.hoisted(() => ({ kb: [] as any[], blog: [] as any[], tech: [] as any[] }));
 vi.mock("../src/lib/shopify", () => ({
   shopify: vi.fn(async (_env: unknown, query: string, vars: any) => {
-    if (query.includes("KbPull")) return { blog: { articles: { nodes: store.kb, pageInfo: { hasNextPage: false, endCursor: "" } } } };
+    if (query.includes("KbPull")) return { blog: { articles: { nodes: vars.id === "B2" ? store.tech : store.kb, pageInfo: { hasNextPage: false, endCursor: "" } } } };
+    if (query.includes("KbBlog(")) return { blogs: { nodes: vars.q === "handle:tech-support" ? [{ id: "B2", handle: "tech-support", title: "Tech Support" }] : [] } };
     if (query.includes("SiteBlogArticles")) return { blogs: { nodes: [{ id: "b1", handle: vars.q.slice(7), title: "Tech Support", articles: { nodes: store.blog, pageInfo: { hasNextPage: false } } }] } };
     throw new Error(query);
   }),
@@ -45,14 +46,14 @@ beforeEach(async () => {
 
 describe("updating the knowledge base from the store", () => {
   it("turns store links and our photo URLs back into the desk's", () => {
-    const m = new Map([["workshops-in-philly", "workshops"]]);
+    const m = new Map([["knowledge-base/workshops-in-philly", "workshops"]]);
     expect(fromStoreBody(`<a href="/blogs/knowledge-base/workshops-in-philly">x</a><img src="https://helpdesk.example/kb/img/4">`, m))
       .toBe(`<a href="#workshops">x</a><img src="/kb/img/4">`);
   });
 
   it("store edits win, new store articles come in, deleted ones go, and local drafts stay", async () => {
     const r = await pullFromStore(env, 1);
-    expect(r).toEqual({ updated: 1, added: 1, removed: 1, unchanged: 0, topicsAdded: 1, onStore: 2 });
+    expect(r).toMatchObject({ updated: 1, added: 1, removed: 1, unchanged: 0, topicsAdded: 1, onStore: 2, blogs: { "knowledge-base": 2 } });
     const jam = await one("SELECT * FROM kb_articles WHERE id = 'jam'");
     expect(jam).toMatchObject({ title: "Fixing a jammed gun", description: "How to fix a jam.", status: "published" });
     expect(jam.body_html).toBe(`<p>New text from the store. See <a href="#workshops-in-philly">workshops</a>.</p><img src="/kb/img/1" alt="x">`);
@@ -79,5 +80,31 @@ describe("updating the knowledge base from the store", () => {
     store.blog = []; // deleted on the store
     await refreshSources(env);
     expect(await one("SELECT COUNT(*) AS n FROM knowledge")).toEqual({ n: 0 });
+  });
+
+  it("manages older blogs in place: same blog and address, own tags, and no duplicate read-only copy for the AI", async () => {
+    store.blog = [{ id: "P1", handle: "white-gear-fix", title: "Replacing the white gear", body: "<p>Old AI copy.</p>", isPublished: true }];
+    await addSources(env, ["blog:tech-support"]); // was read-only AI knowledge before
+    store.tech = [{ id: "T1", handle: "how-to-finish-a-tufted-rug", title: "How to Finish a Tufted Rug", tags: ["finishing", "guide"], isPublished: true, updatedAt: "2026-10-04",
+      body: `<p>Glue, then back. See <a href="/blogs/knowledge-base/fixing-jams">jams</a>.</p>`, description: null }];
+    const r = await pullFromStore(env, 1, ["tech-support"]);
+    expect(r.blogs).toEqual({ "knowledge-base": 2, "tech-support": 1 });
+    const a = await one("SELECT * FROM kb_articles WHERE shopify_id = 'T1'");
+    expect(a).toMatchObject({ blog_handle: "tech-support", shopify_handle: "how-to-finish-a-tufted-rug", topic_id: "troubleshoot", store_tags: '["finishing","guide"]' });
+    expect(a.body_html).toContain('href="#jam"'); // link to a managed article, mapped back
+    expect(await one("SELECT COUNT(*) AS n FROM knowledge WHERE source LIKE 'blog:tech-support:%'")).toEqual({ n: 0 });
+
+    // Publishing an edit updates the post in its own blog, keeping its tags and address
+    const { publishBatch } = await import("../src/lib/kb");
+    const { shopify } = await import("../src/lib/shopify");
+    (shopify as any).mockImplementation(async (_e: unknown, q: string, vars: any) => {
+      if (q.includes("articleUpdate")) return { articleUpdate: { article: { id: vars.id, handle: "how-to-finish-a-tufted-rug" }, userErrors: [] } };
+      return {};
+    });
+    await env.DB.prepare("UPDATE kb_articles SET body_html = '<p>Edited. See <a href=\"#jam\">jams</a>.</p>', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','+1 second') WHERE shopify_id = 'T1'").run();
+    expect((await publishBatch(env, "https://helpdesk.example")).published).toBe(1);
+    const call = (shopify as any).mock.calls.find((c: any[]) => String(c[1]).includes("articleUpdate"));
+    expect(call[2].article.tags).toEqual(["finishing", "guide"]);
+    expect(call[2].article.body).toContain('href="/blogs/knowledge-base/fixing-jams"');
   });
 });
