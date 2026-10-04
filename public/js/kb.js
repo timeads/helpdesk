@@ -114,7 +114,7 @@ export function renderKb(main) {
       if (r.groups.length) { history.pushState(null, "", "/manual/kb/duplicates"); renderKb(main); }
       else dupes.replaceChildren(icon("merge"), "Find duplicates");
     });
-    const restyle = h("button", { class: "btn sm", title: "Republishes articles that have tables or photo captions, so they get the easier-to-read table style on the store" }, icon("ext"), `Restyle ${st.restyle} on store`);
+    const restyle = h("button", { class: "btn sm", title: "Your older posts with tables still show the old plain tables on the store. This republishes just those posts so their tables get the new style. Their text doesn't change." }, icon("ext"), `Apply new table style to ${st.restyle} post${st.restyle === 1 ? "" : "s"}`);
     restyle.onclick = busy(restyle, async () => {
       await api("/kb/restyle", { method: "POST" });
       st.restyle = 0;
