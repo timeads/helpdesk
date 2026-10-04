@@ -114,6 +114,12 @@ export function renderKb(main) {
       if (r.groups.length) { history.pushState(null, "", "/manual/kb/duplicates"); renderKb(main); }
       else dupes.replaceChildren(icon("merge"), "Find duplicates");
     });
+    const restyle = h("button", { class: "btn sm", title: "Republishes articles that have tables or photo captions, so they get the easier-to-read table style on the store" }, icon("ext"), `Restyle ${st.restyle} on store`);
+    restyle.onclick = busy(restyle, async () => {
+      await api("/kb/restyle", { method: "POST" });
+      st.restyle = 0;
+      await runJob("publish");
+    });
     const pull = h("button", { class: "btn sm" }, icon("download"), "Update from store");
     pull.onclick = () => pullDialog();
     const auto = h("input", { type: "checkbox", checked: !!st.autoMerge });
@@ -138,7 +144,7 @@ export function renderKb(main) {
           st.ai ? ` · ${st.toScan} finished conversation${st.toScan === 1 ? "" : "s"} not read yet` : "",
           " · Each published article is a page on your store under /blogs/knowledge-base.")),
       running ? stop : h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } },
-        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, pull, publish)));
+        autoLabel, st.ai && st.toScan ? scan : null, st.ai && st.articles.length > 1 ? dupes : null, pull, st.restyle && !st.unsynced ? restyle : null, publish)));
   }
 
   async function runJob(kind) {
@@ -326,6 +332,7 @@ export function renderKb(main) {
         r.added ? `${r.added} added` : null,
         r.removed ? `${r.removed} removed (no longer on the store)` : null,
         r.unchanged ? `${r.unchanged} already the same` : null,
+        r.kept ? `${r.kept} kept as in the desk (changes not published yet — publish them first)` : null,
         r.topicsAdded ? `${r.topicsAdded} new topic${r.topicsAdded === 1 ? "" : "s"}` : null,
         r.blogArticles ? `${r.blogArticles} articles for the AI to read` : null,
       ].filter(Boolean).join(" · "));

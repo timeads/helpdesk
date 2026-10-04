@@ -5,7 +5,7 @@ import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { aiConfigured } from "../lib/ai";
 import {
-  acceptSuggestion, cleanHtml, descriptionFor, importKb, kbArticles, kbPending, kbScanBatch, kbTopics, kbUnsynced, publishBatch, slugify,
+  acceptSuggestion, cleanHtml, descriptionFor, importKb, kbArticles, kbPending, kbRestyle, kbRestyleCount, kbScanBatch, kbTopics, kbUnsynced, publishBatch, slugify,
   textOf, uniqueId, articleUrl, managedBlogs, type ImportInput,
 } from "../lib/kb";
 import { shopify } from "../lib/shopify";
@@ -19,12 +19,13 @@ const kb = new Hono<AppEnv>();
 const now = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 kb.get("/", async (c) => {
-  const [topics, articles, pending, scan, unsynced] = await Promise.all([
+  const [topics, articles, pending, scan, unsynced, restyle] = await Promise.all([
     kbTopics(c.env),
     kbArticles(c.env),
     c.env.DB.prepare("SELECT COUNT(*) AS n FROM kb_suggestions WHERE status = 'pending'").first<{ n: number }>(),
     kbPending(c.env),
     kbUnsynced(c.env),
+    kbRestyleCount(c.env),
   ]);
   return c.json({
     topics,
@@ -32,6 +33,7 @@ kb.get("/", async (c) => {
     suggestions: pending?.n ?? 0,
     toScan: scan,
     unsynced,
+    restyle,
     ai: aiConfigured(c.env),
     autoMerge: await autoMergeOn(c.env),
   });
@@ -263,6 +265,12 @@ kb.post("/scan", async (c) => {
   requireAdmin(c);
   const { size } = await c.req.json<{ size?: number }>().catch(() => ({ size: undefined }));
   return c.json(await kbScanBatch(c.env, size ?? 6));
+});
+
+/** Queues articles already on the store whose tables and photos would look better with the current styling. */
+kb.post("/restyle", async (c) => {
+  requireAdmin(c);
+  return c.json(await kbRestyle(c.env));
 });
 
 /** Publishes changed articles to the store (a few per call; the page repeats). */

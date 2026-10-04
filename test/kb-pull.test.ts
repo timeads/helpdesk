@@ -12,7 +12,7 @@ vi.mock("../src/lib/shopify", () => ({
 }));
 vi.mock("../src/lib/manual", () => ({ ask: vi.fn() }));
 
-import { importKb, kbForAI } from "../src/lib/kb";
+import { cleanHtml, importKb, kbForAI, kbRestyle, kbRestyleCount, kbUnsynced, storeBody, styleForStore } from "../src/lib/kb";
 import { fromStoreBody, pullFromStore } from "../src/lib/kb-pull";
 import { addSources, refreshSources } from "../src/lib/site-knowledge";
 import { versionsOf } from "../src/lib/kb-merge";
@@ -49,6 +49,39 @@ describe("updating the knowledge base from the store", () => {
     const m = new Map([["knowledge-base/workshops-in-philly", "workshops"]]);
     expect(fromStoreBody(`<a href="/blogs/knowledge-base/workshops-in-philly">x</a><img src="https://helpdesk.example/kb/img/4">`, m))
       .toBe(`<a href="#workshops">x</a><img src="/kb/img/4">`);
+  });
+
+  it("styles tables, tips and photo rows for the store, and takes the styling back off on the way in", () => {
+    const desk = `<table><thead><tr><th>Cloth</th><th>Pieces</th></tr></thead><tbody><tr><th colspan="2">1 yard</th></tr><tr><td>30 × 30</td><td>4</td></tr><tr><td>48 × 30</td><td>3</td></tr></tbody></table>`
+      + `<p class="kb-tip">Tack points away from the center.</p><div class="kb-gallery"><figure><img src="/kb/img/2" alt="a"><figcaption>Step 1</figcaption></figure></div>`;
+    const out = storeBody(desk, "https://helpdesk.example", new Map());
+    expect(out).toMatch(/^<div class="kb-table-wrap" style="overflow-x:auto/);
+    expect(out).toContain(`<th style="text-align:left;padding:12px 14px;background:rgba(0,0,0,.06)`);
+    expect(out).toMatch(/<th style="text-align:left;padding:10px 14px;background:rgba\(0,0,0,.035\)[^"]*" colspan="2">1 yard/);
+    expect(out.match(/<tr style="background:rgba\(0,0,0,.025\)">/g)).toHaveLength(1); // every other body row
+    expect(out).toContain(`<p class="kb-tip" style="padding:14px 18px`);
+    expect(out).toContain(`<figure style="flex:1 1 220px;margin:0;min-width:0"><img style="max-width:100%`);
+    expect(out).toContain(`src="https://helpdesk.example/kb/img/2"`);
+    expect(cleanHtml(fromStoreBody(out, new Map()))).toBe(desk);
+    expect(styleForStore(`<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>`)).toContain(`<th style="text-align:left;padding:12px 14px`);
+  });
+
+  it("keeps desk edits that aren't published yet instead of overwriting them with the store's copy", async () => {
+    await env.DB.prepare("UPDATE kb_articles SET body_html = '<p>Rewritten in the desk.</p>', updated_at = '2999-01-01T00:00:00.000Z' WHERE id = 'jam'").run();
+    const r = await pullFromStore(env, 1);
+    expect(r).toMatchObject({ kept: 1, updated: 0 });
+    expect((await one("SELECT body_html FROM kb_articles WHERE id = 'jam'")).body_html).toBe("<p>Rewritten in the desk.</p>");
+    expect(await kbUnsynced(env)).toBeGreaterThanOrEqual(1); // still waiting to be published
+  });
+
+  it("queues store articles with tables for republishing once, so they pick up the new table style", async () => {
+    await env.DB.prepare("UPDATE kb_articles SET body_html = '<table><tr><td>1</td></tr></table>' WHERE id = 'jam'").run();
+    await env.DB.prepare("UPDATE kb_articles SET synced_at = updated_at WHERE id = 'jam'").run();
+    expect(await kbRestyleCount(env)).toBe(1);
+    const before = await kbUnsynced(env);
+    expect(await kbRestyle(env)).toEqual({ marked: 1 });
+    expect(await kbUnsynced(env)).toBe(before + 1);
+    expect(await kbRestyleCount(env)).toBe(0); // done for this style version
   });
 
   it("store edits win, new store articles come in, deleted ones go, and local drafts stay", async () => {

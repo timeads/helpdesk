@@ -1,7 +1,8 @@
 // Bringing the knowledge base back from the store. The desk manages articles in several store
 // blogs (the Knowledge Base blog plus older ones like Tech Support); each article stays in its own
 // blog with its own URL. When articles are edited, merged or added on Shopify, the store's version
-// replaces the desk's. Everything changed or removed here is saved as an earlier version first.
+// replaces the desk's, unless the desk has changes of its own not published yet. Everything changed or
+// removed here is saved as an earlier version first.
 import type { Env } from "../env";
 import { KB_BLOG, cleanHtml, kbBlogId, managedBlogs, slugify, textOf, uniqueId, type KbArticle } from "./kb";
 import { saveVersion } from "./kb-merge";
@@ -53,6 +54,7 @@ async function storeArticles(env: Env, blogId: string): Promise<StoreArticle[]> 
 /** Store HTML → the desk's: our own photos back to /kb/img, links to managed articles back to #id. */
 export function fromStoreBody(html: string, pathToId: Map<string, string>) {
   return html
+    .replace(/<div class="kb-table-wrap"[^>]*>\s*(<table\b[\s\S]*?<\/table>)\s*<\/div>/g, "$1") // the publish-time wrapper
     .replace(/src="https?:\/\/[^"]+?(\/kb\/img\/\d+)"/g, 'src="$1"')
     .replace(/href="(?:https?:\/\/(?:www\.)?tufttheworld\.com)?\/blogs\/([\w-]+)\/([\w-]+)"/g, (m, blog: string, handle: string) => {
       const id = pathToId.get(`${blog}/${handle}`);
@@ -116,7 +118,7 @@ export async function pullFromStore(env: Env, agentId: number | null, blogs?: st
     pathToId.set(`${s.blog}/${s.handle}`, id);
   }
 
-  let updated = 0, added = 0, unchanged = 0;
+  let updated = 0, added = 0, unchanged = 0, kept = 0;
   const now = nowIso();
   for (const s of all) {
     const local = matched.get(s.id);
@@ -125,6 +127,7 @@ export async function pullFromStore(env: Env, agentId: number | null, blogs?: st
     const status = s.isPublished ? "published" : "draft";
     const description = (s.description?.value ?? "").slice(0, 300);
     const tags = s.blog === KB_BLOG ? null : JSON.stringify(s.tags);
+    if (local?.synced_at && local.updated_at > local.synced_at) { kept++; continue; } // desk changes not published yet win
     if (local) {
       const same = local.title === s.title && local.body_html === body && local.topic_id === topicId && local.status === status && (local.description ?? "") === description;
       if (!same) {
@@ -161,5 +164,5 @@ export async function pullFromStore(env: Env, agentId: number | null, blogs?: st
   // Blogs managed here no longer need a read-only copy in AI knowledge
   for (const blog of pulledBlogs) if (blog !== KB_BLOG) await removeBlog(env, blog);
   const perBlog = Object.fromEntries(fetched.map((f) => [f.blog, f.articles.length]));
-  return { updated, added, removed, unchanged, topicsAdded, onStore: all.length, blogs: perBlog };
+  return { updated, added, removed, unchanged, kept, topicsAdded, onStore: all.length, blogs: perBlog };
 }

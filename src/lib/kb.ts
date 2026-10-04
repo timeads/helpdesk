@@ -302,11 +302,68 @@ export function descriptionFor(a: Pick<KbArticle, "body_text"> & { description?:
   return end > 80 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(" "))}…`;
 }
 
-/** Article HTML for the store: images by full URL, links between articles as store paths (id → /blogs/<blog>/<handle>). */
+/** Article HTML for the store: images by full URL, links between articles as store paths (id → /blogs/<blog>/<handle>), tables and photos styled. */
 export function storeBody(html: string, appOrigin: string, paths: Map<string, string>) {
-  return html
+  return styleForStore(html
     .replace(/src="\/kb\/img\//g, `src="${appOrigin}/kb/img/`)
-    .replace(/href="#([\w-]+)"/g, (m, id: string) => (paths.has(id) ? `href="${paths.get(id)}"` : m));
+    .replace(/href="#([\w-]+)"/g, (m, id: string) => (paths.has(id) ? `href="${paths.get(id)}"` : m)));
+}
+
+// Inline styles for the store copy (the desk keeps plain HTML; these go on at publish and come off on pull).
+// Neutral tints over the theme's own colors, so they suit any page background.
+const S = {
+  wrap: "overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1.5em 0;border:1px solid rgba(0,0,0,.12);border-radius:10px",
+  table: "width:100%;border-collapse:collapse;margin:0;font-size:.95em;line-height:1.4",
+  th: "text-align:left;padding:12px 14px;background:rgba(0,0,0,.06);font-weight:700;border-bottom:2px solid rgba(0,0,0,.15)",
+  section: "text-align:left;padding:10px 14px;background:rgba(0,0,0,.035);font-weight:700;border-top:1px solid rgba(0,0,0,.12);border-bottom:1px solid rgba(0,0,0,.08)",
+  rowHead: "text-align:left;padding:10px 14px;font-weight:600;border-bottom:1px solid rgba(0,0,0,.08)",
+  td: "padding:10px 14px;border-bottom:1px solid rgba(0,0,0,.08);vertical-align:top",
+  stripe: "background:rgba(0,0,0,.025)",
+  tip: "padding:14px 18px;margin:1.5em 0;border-left:4px solid currentColor;background:rgba(0,0,0,.04);border-radius:0 8px 8px 0",
+  gallery: "display:flex;flex-wrap:wrap;gap:16px;margin:1.5em 0",
+  galleryFigure: "flex:1 1 220px;margin:0;min-width:0",
+  figure: "margin:1.5em 0",
+  img: "max-width:100%;height:auto;border-radius:8px;display:block",
+  caption: "font-size:.85em;opacity:.75;margin-top:6px;line-height:1.4",
+};
+
+const withStyle = (tag: string, style: string) => tag.replace(/\s+style="[^"]*"/g, "").replace(/^<([a-z0-9]+)/i, `<$1 style="${style}"`);
+
+/** One table, styled: a header row, striped body rows, a full-width heading cell as a section row, scrolling sideways on phones. */
+function styleTable(table: string): string {
+  const hasHead = /<thead\b/i.test(table);
+  let inHead = false;
+  let first = true;
+  let stripe = false;
+  const out = table.replace(/(<thead\b[^>]*>)|(<\/thead>)|<tr\b[^>]*>([\s\S]*?)<\/tr>/gi, (m, open, close, cells: string) => {
+    if (open) { inHead = true; return m; }
+    if (close) { inHead = false; return m; }
+    const tags = cells.match(/<t[hd]\b[^>]*>/gi) ?? [];
+    const allTh = tags.length > 0 && tags.every((t) => /^<th/i.test(t));
+    const isFirst = first;
+    first = false;
+    if (inHead || (!hasHead && isFirst && allTh && tags.length > 1)) return `<tr>${cells.replace(/<th\b[^>]*>/gi, (t) => withStyle(t, S.th))}</tr>`;
+    if (allTh && tags.length === 1) { // a heading cell spanning the table starts a section
+      stripe = false;
+      return `<tr>${cells.replace(/<th\b[^>]*>/gi, (t) => withStyle(t, S.section))}</tr>`;
+    }
+    const row = stripe ? `<tr style="${S.stripe}">` : "<tr>";
+    stripe = !stripe;
+    return row + cells.replace(/<th\b[^>]*>/gi, (t) => withStyle(t, S.rowHead)).replace(/<td\b[^>]*>/gi, (t) => withStyle(t, S.td)) + "</tr>";
+  });
+  return `<div class="kb-table-wrap" style="${S.wrap}">${out.replace(/^<table\b[^>]*>/i, (t) => withStyle(t, S.table))}</div>`;
+}
+
+/** Inline styles for tables, tip boxes, photo rows and captions, since the store's theme doesn't style them. */
+export function styleForStore(html: string): string {
+  return html
+    .replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, styleTable)
+    .replace(/<p class="kb-tip">/g, `<p class="kb-tip" style="${S.tip}">`)
+    .replace(/<div class="kb-gallery">([\s\S]*?)<\/div>/g, (_m, inner: string) =>
+      `<div class="kb-gallery" style="${S.gallery}">${inner.replace(/<figure>/g, `<figure style="${S.galleryFigure}">`)}</div>`)
+    .replace(/<figure>/g, `<figure style="${S.figure}">`)
+    .replace(/<figure style="([^"]*)">([\s\S]*?)<\/figure>/g, (_m, st: string, inner: string) =>
+      `<figure style="${st}">${inner.replace(/<img\b[^>]*>/g, (t) => withStyle(t, S.img)).replace(/<figcaption>/g, `<figcaption style="${S.caption}">`)}</figure>`);
 }
 
 export async function kbBlogId(env: Env): Promise<string> {
@@ -325,6 +382,23 @@ export async function kbBlogId(env: Env): Promise<string> {
   }
   await setSetting(env, "kb_blog_id", id);
   return id;
+}
+
+/** Bumped when styleForStore changes, so articles already on the store can be republished with the new look. */
+export const STYLE_VERSION = 1;
+const STYLED = "a.status = 'published' AND a.shopify_id IS NOT NULL AND a.synced_at IS NOT NULL AND a.updated_at <= a.synced_at AND (a.body_html LIKE '%<table%' OR a.body_html LIKE '%<figure%')";
+
+/** How many store articles would look different with the current styling (0 once they've been republished). */
+export async function kbRestyleCount(env: Env) {
+  if ((await getSetting<number>(env, "kb_style_version", 0)) >= STYLE_VERSION) return 0;
+  return (await env.DB.prepare(`SELECT COUNT(*) AS n FROM kb_articles a WHERE ${STYLED}`).first<{ n: number }>())?.n ?? 0;
+}
+
+/** Marks those articles as needing publishing (Publish then sends them). */
+export async function kbRestyle(env: Env) {
+  const r = await env.DB.prepare(`UPDATE kb_articles AS a SET synced_at = '2000-01-01T00:00:00.000Z' WHERE ${STYLED}`).run();
+  await setSetting(env, "kb_style_version", STYLE_VERSION);
+  return { marked: r.meta.changes ?? 0 };
 }
 
 /** Articles whose store copy is out of date (new, edited, or unpublished since). */
