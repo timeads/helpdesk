@@ -1369,3 +1369,16 @@ a.view-chip { text-decoration: none; }
 .suggest-preview { font-size: 12.5px; line-height: 1.4; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
 .hbar-row.ai { grid-template-columns: minmax(130px, 1.2fr) 2fr auto 64px; }
 @media (max-width: 700px) { .hbar-row.ai { grid-template-columns: 1fr 1.2fr auto; } .hbar-row.ai .small { display: none; } }
+
+/* Ship together: suggestions above the queue and the dialog */
+.merge-sugs { display: grid; gap: 8px; margin-bottom: 12px; }
+.merge-sugs:empty { display: none; }
+.merge-sug { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-left: 3px solid var(--ochre); flex-wrap: wrap; }
+.merge-ico { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--select); color: var(--ochre); flex: none; }
+.merge-text { min-width: 0; flex: 1 1 260px; }
+.merge-text .small { margin-top: 2px; }
+.merge-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 16px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.merge-h { font-size: 13px; margin: 16px 0 6px; }
+.merge-rates { display: grid; gap: 6px; }
+.merge-rate { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.merge-rate:has(input:checked) { border-color: var(--ochre); background: var(--select); }

@@ -21,6 +21,7 @@ import { escapeHtml } from "../lib/mime";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
+import { addressKey, combineOrders, dismissMerge, dismissedMerges, mergeSuggestions } from "../lib/merge";
 
 const shipping = new Hono<AppEnv>();
 const demo = (env: Env) => !shopifyConfigured(env) && env.DEMO_DATA === "1";
@@ -125,7 +126,7 @@ async function idMap(env: Env, sql: string, ids: string[]) {
 async function describe(env: Env, all: ShopifyOrder[]) {
   const orders = all.map(remaining); // after a partial shipment, only what's still to ship
   const ids = orders.map((o) => o.id);
-  const [plans, holds, labelled, slips, drafts, presets, pickups] = await Promise.all([
+  const [plans, holds, labelled, slips, drafts, presets, pickups, merged] = await Promise.all([
     planOrders(env, orders),
     holdsFor(env, ids),
     idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND COALESCE(partial, 0) = 0 AND order_id IN (?)", ids),
@@ -133,6 +134,8 @@ async function describe(env: Env, all: ShopifyOrder[]) {
     loadDrafts(env, ids),
     loadPresets(env),
     idMap(env, "SELECT order_id, COALESCE(ready_at, '') || '|' || COALESCE(picked_up_at, '') AS v FROM pickup_status WHERE order_id IN (?)", ids),
+    // Shipped together with another order: that order's label covers this one
+    idMap(env, "SELECT m.order_id, s.order_name AS v FROM merged_orders m JOIN shipments s ON s.id = m.shipment_id WHERE s.status = 'purchased' AND m.order_id IN (?)", ids),
   ]);
   return orders.map((o) => {
     const draft = drafts.get(o.id) ?? null;
@@ -151,7 +154,8 @@ async function describe(env: Env, all: ShopifyOrder[]) {
       hold,
       holdUntil: hold && h?.status === "hold" ? h.hold_until : null,
       holdEnded,
-      hasLabel: labelled.has(o.id),
+      hasLabel: labelled.has(o.id) || merged.has(o.id),
+      shippedWith: merged.get(o.id) ?? null,
       slipPrinted: slips.has(o.id),
       slipPrintedAt: slips.get(o.id) ?? null,
       itemCount: itemCount(o),
@@ -189,7 +193,7 @@ shipping.get("/queue", async (c) => {
   const orders = demo(c.env) ? demoOrders() : await queueOrders(c.env);
   const described = await describe(c.env, orders);
   const counts = Object.fromEntries(Object.entries(VIEWS).map(([k, f]) => [k, described.filter(f).length]));
-  return c.json({ orders: described, counts });
+  return c.json({ orders: described, counts, merges: mergeSuggestions(described, await dismissedMerges(c.env)) });
 });
 
 shipping.get("/orders", async (c) => {
@@ -552,6 +556,108 @@ shipping.post("/labels/auto", async (c) => {
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });
 });
 
+// ---- Shipping orders together: one box, one label, every order marked shipped with its tracking
+
+shipping.post("/merge/dismiss", async (c) => {
+  const { key } = await c.req.json<{ key?: string }>();
+  if (!key) throw new HttpError(400, "Nothing to dismiss");
+  await dismissMerge(c.env, String(key).slice(0, 2000));
+  return c.json({ ok: true });
+});
+
+/** The orders to ship together, checked: unshipped, not on hold, same person and address. Oldest first. */
+async function mergeGroup(env: Env, orderIds: unknown) {
+  const ids = [...new Set(Array.isArray(orderIds) ? orderIds.map(String) : [])];
+  if (ids.length < 2) throw new HttpError(400, "Pick at least two orders to ship together");
+  if (ids.length > 10) throw new HttpError(400, "Ship at most 10 orders together");
+  const found = await Promise.all(ids.map((id) => (demo(env) ? Promise.resolve(demoOrders().find((o) => o.id === id) ?? null) : getOrder(env, id))));
+  if (found.some((o) => !o)) throw new HttpError(404, "One of those orders wasn't found");
+  const orders = (found as ShopifyOrder[]).map(remaining);
+  const described = await describe(env, orders);
+  for (const d of described) {
+    if (d.hasLabel) throw new HttpError(409, `${d.name} already has a label`);
+    if (d.hold) throw new HttpError(409, `${d.name} is on hold: ${d.hold}`);
+    if (d.pickup) throw new HttpError(409, `${d.name} is an in-store pickup`);
+  }
+  const keys = new Set(orders.map(addressKey));
+  if (keys.size > 1 || keys.has(null)) throw new HttpError(409, "These orders don't go to the same name and address — fix the addresses first, or ship them separately");
+  return { orders: orders.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), described };
+}
+
+/** What shipping together looks like: combined items, planned boxes and weight, and quotes. */
+shipping.post("/merge/preview", async (c) => {
+  const body = await c.req.json<{ orderIds?: unknown }>();
+  const { orders } = await mergeGroup(c.env, body.orderIds);
+  const combined = combineOrders(orders);
+  const plan = (await planOrders(c.env, [combined])).get(combined.id)!;
+  const to = addressFromOrder(combined);
+  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, combined) : undefined;
+  let rates: Awaited<ReturnType<typeof getRates>> = [];
+  let quoteError: string | null = null;
+  if (plan.weightKnown) {
+    try {
+      rates = await getRates(c.env, await shipFrom(c.env), to, plan.boxes.map((b) => b.parcel), plan.signature, customs);
+    } catch (e) {
+      quoteError = (e as Error).message;
+    }
+  }
+  return c.json({ names: orders.map((o) => o.name), items: itemCount(combined), shippingPaid: shippingPaid(combined), plan, rates, quoteError, to });
+});
+
+/** Buys one label for the group, then marks every order shipped with its tracking numbers. */
+shipping.post("/labels/merged", async (c) => {
+  const body = await c.req.json<{ orderIds?: unknown; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; parcels?: Parcel[] }>();
+  const { orders } = await mergeGroup(c.env, body.orderIds);
+  const combined = combineOrders(orders);
+  const [first, ...rest] = orders;
+  const plan = (await planOrders(c.env, [combined])).get(combined.id)!;
+  const parcels = Array.isArray(body.parcels) && body.parcels.length
+    ? validParcels(body.parcels)
+    : plan.weightKnown
+      ? validParcels(plan.boxes.map((b) => ({ ...b.parcel, presetId: b.preset?.id ?? null, box: b.preset?.name })))
+      : (() => { throw new HttpError(422, "No weight known for these items together — enter the box weight"); })();
+  let to = validAddress(addressFromOrder(combined));
+  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, combined) : undefined;
+  if (customs) {
+    const problems = customsProblems(customs);
+    if (problems.length) throw new HttpError(422, `${problems[0]} — open ${first.name} to fix the customs list`);
+  }
+  const check = await checkAddress(c.env, to);
+  if (check.status === "invalid") throw new HttpError(422, `${check.message} — open ${first.name} to fix the address`);
+  if (check.status === "corrected" || check.status === "ambiguous") throw new HttpError(422, `${check.message} — open ${first.name} to review`);
+  if (check.residential !== null) to = { ...to, residential: check.residential };
+  const rates = await getRates(c.env, await shipFrom(c.env), to, parcels, plan.signature, customs);
+  const rate = chooseRate(rates, !body.policy || body.policy === "rule" ? plan.service ?? "cheapest" : body.policy);
+  const notify = body.notifyCustomer ?? true;
+  const r = await buyLabel(c.env, c.get("agent"), {
+    order: combined, to, parcels, presetId: plan.preset?.id ?? null, rate, signature: plan.signature,
+    labelFormat: labelFormat(body.labelFormat), fulfill: true, notifyCustomer: notify, batchId: body.batchId ?? null, customs,
+  });
+  const names = orders.map((o) => o.name).join(" + ");
+  await c.env.DB.prepare("UPDATE shipments SET order_name = ? WHERE id = ?").bind(names.slice(0, 200), r.id).run();
+  // The other orders ride along: each is marked shipped with the same tracking, so every confirmation email has it
+  const errors: string[] = r.fulfillError ? [`${first.name}: ${r.fulfillError}`] : [];
+  for (const o of rest) {
+    let fid: string | null = null;
+    let ok = false;
+    if (r.trackingNumbers[0]) {
+      try {
+        const f = demo(c.env) ? null : await fulfillOrder(c.env, o.id, { company: r.carrier, numbers: r.trackingNumbers, urls: r.trackingNumbers.map((n: string) => trackingUrlFor(r.carrier, n)) }, notify);
+        fid = f?.id ?? null;
+        ok = true;
+      } catch (e) {
+        errors.push(`${o.name}: ${(e as Error).message}`);
+      }
+    }
+    await c.env.DB.batch([
+      c.env.DB.prepare("INSERT OR REPLACE INTO merged_orders (order_id, order_name, shipment_id, fulfilled, fulfillment_id) VALUES (?, ?, ?, ?, ?)").bind(o.id, o.name, r.id, ok ? 1 : 0, fid),
+      c.env.DB.prepare("DELETE FROM order_drafts WHERE order_id = ?").bind(o.id),
+      c.env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id),
+    ]);
+  }
+  return c.json({ ...r, orderName: names, serviceName: rate.serviceName, fulfillError: errors.length ? errors.join("; ") : null });
+});
+
 // ---- In-store pickup: "ready for pickup" (Shopify emails the customer), then "picked up" (fulfilled)
 shipping.post("/pickup/:id/ready", async (c) => {
   const id = decodeURIComponent(c.req.param("id"));
@@ -832,7 +938,15 @@ shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
       shopify = (e as Error).message;
     }
   }
-  return c.json({ ok: true, carrier: s.carrier ?? (s.shipment_id.startsWith("ep:") ? "USPS" : "UPS"), refund: s.shipment_id.startsWith("ep:") ? "requested" : "voided", shopify });
+  // Orders that shipped together on this label go back to unshipped too
+  const { results: riders } = await c.env.DB.prepare("SELECT order_id, fulfilled, fulfillment_id FROM merged_orders WHERE shipment_id = ?").bind(id).all<{ order_id: string; fulfilled: number; fulfillment_id: string | null }>();
+  for (const m of riders) {
+    if (m.fulfilled && !demo(c.env)) {
+      try { await cancelFulfillment(c.env, m.order_id, m.fulfillment_id, JSON.parse(s.tracking_numbers || "[]")); } catch (e) { console.error("void merged", e); }
+    }
+  }
+  if (riders.length) await c.env.DB.prepare("DELETE FROM merged_orders WHERE shipment_id = ?").bind(id).run();
+  return c.json({ ok: true, carrier: s.carrier ?? (s.shipment_id.startsWith("ep:") ? "USPS" : "UPS"), refund: s.shipment_id.startsWith("ep:") ? "requested" : "voided", shopify, merged: riders.length });
 });
 
 /** Label batches: every bulk run (and single labels) grouped for reprinting. */

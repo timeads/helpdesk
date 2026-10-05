@@ -32,6 +32,7 @@ const people = (): Record<string, { name: string; since: string; tags: string[];
     name: "Jane Doe", since: "2024-03-02", tags: ["workshop alum"],
     orders: [
       order(9042, "#1042", 6, "289.00", "PAID", "UNFULFILLED", [line("AK-I Cut Pile Tufting Gun", null, 1, "239.00", "AK-I", "#213838", 4.5), line("Primary Tufting Cloth", "2m width", 2, "25.00", "CLOTH", "#b4b098", 1)], address("Jane Doe", "Austin", "TX", "78701")),
+      order(9055, "#1055-TG", 1, "48.00", "PAID", "UNFULFILLED", [line("Acrylic Yarn Cone", "Teal", 3, "16.00", "YARN", "#2f7a74", 0.6)], address("Jane Doe", "Austin", "TX", "78701"), undefined, "UPS Ground", "8.00"),
       order(8811, "#0988", 210, "64.00", "PAID", "FULFILLED", [line("Acrylic Yarn Cone", "Mustard", 4, "16.00", "YARN", "#c78c2b", 0.6)], address("Jane Doe", "Austin", "TX", "78701"), "1Z999AA10123456784"),
     ],
   },

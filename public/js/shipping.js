@@ -170,6 +170,66 @@ async function customsFor(o) {
 }
 
 const addrCache = new Map();
+/** One box, one label for several orders to the same person and address; every order is marked shipped with the tracking. */
+function shipTogether(orderIds, onDone) {
+  const body = h("div", {}, h("div", { class: "row" }, spinner(), h("span", { class: "muted" }, "Combining the orders and getting quotes…")));
+  const dlg = modal("Ship together", body, { width: 600 });
+  api("/shipping/merge/preview", { method: "POST", body: { orderIds } }).then((p) => {
+    const rates = [...(p.rates ?? [])].sort((a, b) => a.total - b.total);
+    let chosen = rates[0]?.serviceCode ?? null;
+    const boxes = p.plan.boxes ?? [];
+    const weight = h("input", { class: "input", type: "number", min: "0.1", step: "0.1", placeholder: "lb", style: { width: "90px" }, "aria-label": "Weight in pounds" });
+    const dims = ["Length", "Width", "Height"].map((d) => h("input", { class: "input", type: "number", min: "1", step: "0.5", placeholder: d[0], style: { width: "64px" }, "aria-label": `${d} in inches` }));
+    const rateList = rates.length
+      ? h("div", { class: "merge-rates" }, rates.map((r) => {
+          const radio = h("input", { type: "radio", name: "merge-rate", value: r.serviceCode, checked: r.serviceCode === chosen });
+          radio.onchange = () => { chosen = r.serviceCode; };
+          const m = p.shippingPaid - r.total;
+          return h("label", { class: "merge-rate" }, radio, h("span", {}, r.serviceName, r.days ? h("span", { class: "small muted" }, ` · ${r.days} day${r.days === 1 ? "" : "s"}`) : null),
+            h("span", { class: "margin " + (m >= 0 ? "pos" : "neg"), style: { marginLeft: "auto" } }, `${marginText(m)}`), h("b", {}, money(r.total, "USD")));
+        }))
+      : null;
+    const buy = h("button", { class: "btn primary" }, icon("printer"), `Buy 1 label for ${p.names.length} orders`);
+    buy.onclick = busy(buy, async () => {
+      let parcels;
+      if (!p.plan.weightKnown) {
+        const [l, w, hh] = dims.map((i) => Number(i.value));
+        if (!(Number(weight.value) > 0) || !(l > 0 && w > 0 && hh > 0)) return toast("Enter the box weight and size", true);
+        parcels = [{ weight: Number(weight.value), length: l, width: w, height: hh }];
+      }
+      const win = reserveWindow();
+      const batch = newBatchId();
+      try {
+        const r = await api("/shipping/labels/merged", { method: "POST", body: { orderIds, policy: chosen ?? "cheapest", labelFormat: labelFormat(), batchId: batch, parcels } });
+        dlg.close();
+        toast(r.fulfillError ? `Label bought for ${r.orderName}, but not every order was marked shipped: ${r.fulfillError}` : `${r.orderName} ship together — ${r.serviceName}, ${money(r.cost, "USD")}`, !!r.fulfillError);
+        await printLabels({ batch }, win).catch((e) => toast(e.message, true));
+        onDone?.();
+      } catch (e) {
+        if (win) win.close();
+        toast(e.message, true);
+      }
+    });
+    mount(body,
+      h("p", { class: "muted", style: { marginTop: 0 } }, "Everything goes in one shipment with one label. Each order is marked shipped in Shopify with the same tracking number."),
+      h("div", { class: "merge-sum" },
+        h("div", {}, h("div", { class: "small muted" }, "Orders"), h("b", {}, p.names.join(" + "))),
+        h("div", {}, h("div", { class: "small muted" }, "Ship to"), h("div", {}, [p.to.name, p.to.city, p.to.state || p.to.country].filter(Boolean).join(", "))),
+        h("div", {}, h("div", { class: "small muted" }, "Items"), h("b", {}, p.items)),
+        h("div", {}, h("div", { class: "small muted" }, "Shipping paid"), h("b", {}, money(p.shippingPaid, "USD")))),
+      h("h3", { class: "merge-h" }, boxes.length > 1 ? `${boxes.length} boxes` : "Box"),
+      p.plan.weightKnown
+        ? h("div", { class: "small" }, boxes.map((b) => h("div", {}, `${b.preset?.name ?? "Custom"} · ${b.parcel.length}×${b.parcel.width}×${b.parcel.height} in · ${lbOz(b.parcel.weight)}`)))
+        : h("div", {}, h("div", { class: "notice warn", style: { marginBottom: "8px" } }, "Some items have no weight — weigh the packed box."),
+            h("div", { class: "row", style: { gap: "6px" } }, weight, h("span", { class: "small muted" }, "Box (in)"), ...dims)),
+      p.plan.weightKnown ? h("h3", { class: "merge-h" }, "Service") : null,
+      p.quoteError ? h("div", { class: "notice bad" }, p.quoteError) : rateList,
+      h("div", { class: "row", style: { marginTop: "16px", justifyContent: "flex-end" } },
+        h("button", { class: "btn ghost", onclick: () => dlg.close() }, "Cancel"),
+        p.quoteError ? null : buy));
+  }).catch((e) => mount(body, h("div", { class: "notice bad" }, e.message), h("div", { class: "row", style: { marginTop: "12px", justifyContent: "flex-end" } }, h("button", { class: "btn", onclick: () => dlg.close() }, "Close"))));
+}
+
 function loadAddressChecks(orders, onEach) {
   const todo = orders.filter((o) => !o.hasLabel && !o.international && !o.pickup && !addrCache.has(o.id));
   let i = 0;
@@ -194,19 +254,21 @@ function renderQueue(root, params) {
   const search = h("input", { class: "input", type: "search", placeholder: "Find any order — #, email or name", "aria-label": "Search orders" });
   const bulk = h("div", { class: "bulk-bar card", hidden: true });
   const progress = h("div");
+  const mergeEl = h("div", { class: "merge-sugs" });
   const tableWrap = h("div", { class: "card table-card" }, skeletonRows(5));
   const updated = h("span", { class: "small muted", style: { whiteSpace: "nowrap" } });
   const refresh = h("button", { class: "btn sm", title: "Get the latest orders from Shopify (also happens every few minutes)" }, icon("refresh"), "Refresh");
   refresh.onclick = busy(refresh, async () => { await load(); toast("Up to date with Shopify"); });
   mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips,
     h("div", { class: "row", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
-    bulk, progress, tableWrap);
+    bulk, progress, mergeEl, tableWrap);
 
   const load = async () => {
     try {
       const r = await api("/shipping/queue");
       st.orders = r.orders;
       st.counts = r.counts;
+      st.merges = r.merges ?? [];
       st.loadedAt = Date.now();
       draw();
       tick();
@@ -237,6 +299,7 @@ function renderQueue(root, params) {
     const rows = visible();
     for (const id of [...st.selected]) if (!rows.some((o) => o.id === id)) st.selected.delete(id);
     drawBulk(rows);
+    drawMerges();
     if (!rows.length) {
       mount(tableWrap, h("div", { class: "empty" }, h("h2", {}, st.searchResults ? "No matching orders" : st.view === "ready" ? "Nothing waiting to ship" : "Nothing here"),
         h("p", {}, st.searchResults ? "Try the order number (e.g. 68762), the customer's email or their name." : "Orders appear here as they come in from Shopify.")));
@@ -325,6 +388,24 @@ function renderQueue(root, params) {
   }
   const refreshAddresses = (rows) => loadAddressChecks(rows, (o) => fillAddr(o));
 
+  // ---- Ship together: orders to the same person and address (suggested, or picked by hand)
+  function drawMerges() {
+    const show = !st.searchResults && ["ready", "priority", "international", "all"].includes(st.view) && st.merges?.length;
+    if (!show) return mount(mergeEl);
+    mount(mergeEl, st.merges.map((m) => {
+      const go = h("button", { class: "btn primary sm" }, icon("box"), "Ship together");
+      go.onclick = () => shipTogether(m.orderIds, load);
+      const no = h("button", { class: "btn ghost sm" }, "Not now");
+      no.onclick = busy(no, async () => { await api("/shipping/merge/dismiss", { method: "POST", body: { key: m.key } }); st.merges = st.merges.filter((x) => x !== m); drawMerges(); });
+      return h("div", { class: "card merge-sug" },
+        h("span", { class: "merge-ico" }, icon("box")),
+        h("div", { class: "merge-text" },
+          h("b", {}, `Ship together? ${m.names.length} orders for ${m.customer}`),
+          h("div", { class: "small muted" }, `${m.names.join(" + ")} · ${m.items} item${m.items === 1 ? "" : "s"} · ${m.address}`)),
+        h("div", { class: "row", style: { gap: "6px", marginLeft: "auto" } }, no, go));
+    }));
+  }
+
   function drawBulk(rows) {
     const picked = rows.filter((o) => st.selected.has(o.id));
     bulk.hidden = !picked.length;
@@ -357,6 +438,8 @@ function renderQueue(root, params) {
       st.selected.clear();
       load();
     });
+    const together = h("button", { class: "btn", title: "One box and one label for these orders (same name and address)" }, icon("box"), "Ship together");
+    together.onclick = () => shipTogether(picked.map((o) => o.id), () => { st.selected.clear(); load(); });
     const release = h("button", { class: "btn" }, "Release");
     release.onclick = busy(release, async () => {
       await api("/shipping/holds", { method: "POST", body: { hold: false, orders: picked.map((o) => ({ id: o.id, name: o.name })) } });
@@ -369,7 +452,8 @@ function renderQueue(root, params) {
         `Est. ${money(est, "USD")} · `, h("span", { class: "margin " + (estMargin >= 0 ? "pos" : "neg") }, `${marginText(estMargin)} margin`),
         quoted.length < picked.length ? h("span", { class: "muted" }, ` (${quoted.length} of ${picked.length} quoted)`) : null) : null,
       h("div", { class: "row", style: { marginLeft: "auto" } }, pickups.length ? readyBtn : null,
-        picked.some((o) => !o.pickup) ? [h("span", { class: "small muted" }, "Service"), policy, buy] : null, slips,
+        picked.some((o) => !o.pickup) ? [h("span", { class: "small muted" }, "Service"), policy, buy] : null,
+        picked.length > 1 && picked.every((o) => !o.pickup && !o.hasLabel) ? together : null, slips,
         picked.some((o) => !o.hold) ? hold : null, picked.some((o) => o.hold) ? release : null,
         h("button", { class: "btn ghost icon-only", "aria-label": "Clear selection", onclick: () => { st.selected.clear(); draw(); } }, icon("x"))));
   }
