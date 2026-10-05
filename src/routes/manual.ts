@@ -5,6 +5,7 @@ import { requireAdmin } from "../lib/auth";
 import { HttpError } from "../lib/util";
 import { aiConfigured } from "../lib/ai";
 import { pendingCount, scanBatch } from "../lib/manual";
+import { copyTopicFor } from "../lib/manual-copy";
 
 const manual = new Hono<AppEnv>();
 
@@ -22,7 +23,9 @@ manual.get("/", async (c) => {
 
 manual.get("/:id{[0-9]+}", async (c) => {
   const id = Number(c.req.param("id"));
-  const topic = await c.env.DB.prepare("SELECT * FROM manual_topics WHERE id = ?").bind(id).first();
+  const topic = await c.env.DB.prepare(
+    "SELECT t.*, f.title AS copied_from_title, f.product AS copied_from_product FROM manual_topics t LEFT JOIN manual_topics f ON f.id = t.copied_from WHERE t.id = ?",
+  ).bind(id).first();
   if (!topic) throw new HttpError(404, "Topic not found");
   const [cases, media] = await Promise.all([
     c.env.DB.prepare(
@@ -76,6 +79,13 @@ manual.delete("/:id{[0-9]+}", async (c) => {
     c.env.DB.prepare("DELETE FROM manual_topics WHERE id = ?").bind(id),
   ]);
   return c.json({ ok: true });
+});
+
+/** A draft copy of this topic adapted for another machine (AI), with what to check before publishing. */
+manual.post("/:id{[0-9]+}/copy", async (c) => {
+  if (!aiConfigured(c.env)) throw new HttpError(409, "AI is off — add an Anthropic API key in Settings → Connections");
+  const b = await c.req.json<{ product?: string; notes?: string; withMedia?: boolean }>();
+  return c.json(await copyTopicFor(c.env, Number(c.req.param("id")), String(b.product ?? ""), { notes: b.notes, withMedia: !!b.withMedia }));
 });
 
 /** Moves every case and photo of one topic into another, then removes the first. */

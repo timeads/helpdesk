@@ -202,6 +202,38 @@ export function renderManual(main) {
       });
     };
 
+    // Copy for another machine: an AI-adapted draft (e.g. an AK-I fix rewritten for the Duo)
+    const copyFor = () => {
+      const products = [...new Set(st.topics.map((x) => x.product).filter((p) => p && p !== t.product))].sort();
+      const listId = "copy-machines";
+      const machine = h("input", { class: "input", list: listId, placeholder: "e.g. The Duo", "aria-label": "Machine" });
+      const notes = h("textarea", { class: "input", rows: 3, placeholder: "Optional — what's different, e.g. “the Duo's blade is adjusted with the front screw, not the side”" });
+      const photos = h("input", { type: "checkbox" });
+      const go = h("button", { class: "btn primary" }, icon("copy"), "Make the copy");
+      const status = h("div", { class: "small muted", role: "status" });
+      const dlg = modal("Copy for another machine", h("div", { class: "stack" },
+        h("p", { class: "small muted", style: { margin: 0 } }, `The AI rewrites “${t.title}” for the machine you pick, using what the desk already knows about it (its repair topics, help articles and store listing). The copy is a draft with a list of things to check — nothing changes for customers until you publish it. This topic stays as it is.`),
+        h("label", { class: "field" }, "Copy it for", machine, h("datalist", { id: listId }, products.map((p) => h("option", { value: p })))),
+        h("label", { class: "field" }, "Notes for the AI", notes),
+        h("label", { class: "check small" }, photos, `Also copy the photos and videos${media.length ? ` (${media.length}, showing the ${t.product || "original machine"})` : ""}`),
+        h("div", { class: "row" }, go, status)), { width: 560 });
+      go.onclick = busy(go, async () => {
+        if (!machine.value.trim()) return toast("Pick the machine to copy it for", true);
+        mount(status, spinner(), " Writing the copy — about half a minute…");
+        try {
+          const r = await api(`/manual/${t.id}/copy`, { method: "POST", body: { product: machine.value, notes: notes.value, withMedia: photos.checked } });
+          dlg.close();
+          await refreshList();
+          history.pushState(null, "", `/manual/${r.id}`);
+          await openTopic(r.id);
+          toast(r.review.length ? `Draft made — ${r.review.length} thing${r.review.length === 1 ? "" : "s"} to check, listed at the bottom` : "Draft made — read it over, then publish");
+        } catch (e) {
+          mount(status);
+          toast(e.message, true);
+        }
+      });
+    };
+
     let body;
     if (editing) {
       const title = h("input", { class: "input", value: t.title });
@@ -259,9 +291,11 @@ export function renderManual(main) {
           t.summary ? h("p", { class: "muted", style: { margin: "4px 0 0" } }, t.summary) : null),
         editing ? null : h("div", { class: "row", style: { gap: "6px", flexWrap: "nowrap" } },
           h("button", { class: "btn sm", onclick: () => drawTopic({ topic: t, cases, media }, true) }, icon("edit"), "Edit"),
+          h("button", { class: "btn sm", title: "Make an adapted draft of this topic for another machine", onclick: copyFor }, icon("copy"), "Copy for another machine"),
           publish, more)),
       editing ? null : h("label", { class: "check small", style: { margin: "10px 0 4px" } }, aiBox, "Use in AI reply drafts when published"),
-      h("div", { class: "small muted" }, `Updated ${shortDate(t.updated_at)}${t.edited_at ? " · edited by your team" : " · written by AI"}`),
+      h("div", { class: "small muted" }, `Updated ${shortDate(t.updated_at)}${t.edited_at ? " · edited by your team" : " · written by AI"}`,
+        t.copied_from ? [" · copied from ", h("a", { href: `/manual/${t.copied_from}`, "data-link": "" }, `${t.copied_from_product ? `${t.copied_from_product} — ` : ""}${t.copied_from_title ?? "another topic"}`)] : null),
       h("div", { style: { marginTop: "14px" } }, body),
       mediaEl,
       casesEl));
