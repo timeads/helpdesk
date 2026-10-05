@@ -161,6 +161,7 @@ function connections(s, isAdmin, inner) {
       i.gmail.connected ? [syncBtn, isAdmin ? disconnect : null]
         : isAdmin && i.gmail.configured ? h("a", { class: "btn sm primary", href: "/auth/mailbox" }, "Connect Gmail") : null, "mail"),
     row("Shopify", i.shopify.connected, false, h("div", { class: "muted" }, i.shopify.connected ? i.shopify.shop : "Add your Shopify app keys under Credentials below."), null, "bag"),
+    row("Redo labels", i.redo?.connected, false, h("div", { class: "muted" }, i.redo?.connected ? "On — Redo rates show next to the others when you buy a label" : "Optional. Add your Redo store ID and API token under Credentials below."), null, "box"),
     row("UPS", i.ups.connected, false, h("div", { class: "muted" }, i.ups.connected ? (i.ups.env === "production" ? "Live — labels are billed to your UPS account" : "Test mode — labels are not billed") : "Add your UPS keys under Credentials below."), null, "truck"),
     row("AI drafts", i.ai.connected, false, [h("div", { class: "muted" }, i.ai.connected ? `On · ${i.ai.model}` : "Optional. Add an Anthropic key under Credentials to turn on “Draft with AI”."),
       i.ai.connected && isAdmin ? suggestToggle(s) : null], null, "spark"),
@@ -171,6 +172,7 @@ const GROUPS = [
   { id: "shopify", title: "Shopify", desc: "From the Helpdesk app you created in Shopify. Use a Client ID + secret (Dev Dashboard) or an Admin API token (older custom apps)." },
   { id: "ups", title: "UPS", desc: "From your app at developer.ups.com. Keep Mode on “test” until a test label prints correctly." },
   { id: "usps", title: "EasyPost (USPS, FedEx & more)", desc: "From easypost.com → Account → API Keys. Use the Production key; postage is paid from your EasyPost wallet (fund it by ACH to avoid the card fee). USPS works right away; turn on FedEx, UPS, OnTrac, Amazon Shipping or DHL eCommerce under Carriers in EasyPost and their rates show up here automatically." },
+  { id: "redo", title: "Redo (shipping labels)", desc: "Rates and labels from the carriers connected in Redo, paid from your Redo outbound-labels balance. In Redo → Settings → Developer, copy Your Store ID and create a token with Shipping read and Shipping write. Redo rates show next to UPS and EasyPost, marked “· Redo”." },
   { id: "booking", title: "Booking app (class dates)", desc: "Lets the learn hub assistant tell visitors about upcoming class dates and open seats. Read-only: it uses the same public key as the date picker on your workshop pages." },
   { id: "stock", title: "TuftStock (restocks)", desc: "Lets the chat and the learn hub assistant answer “when is this back in stock?” from your purchase orders and shipment tracking. Read-only — no suppliers or costs are shared." },
   { id: "ai", title: "AI drafts", desc: "Optional. A key from console.anthropic.com turns on “Draft with AI” (about 1–2¢ per draft)." },

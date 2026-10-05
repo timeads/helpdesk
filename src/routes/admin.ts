@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { graph, metaConfigured } from "../lib/meta";
+import { redoConfigured, testRedo } from "../lib/redo";
+import { shipFrom } from "../lib/fulfillment";
 import { DEFAULT_RULES, getMailbox, runBackfill, type BackfillJob, type MailRules } from "../lib/gmail";
 import { shopifyConfigured } from "../lib/shopify";
 import { upsConfigured } from "../lib/ups";
@@ -343,6 +345,7 @@ admin.get("/settings", async (c) => {
       shopify: { connected: shopifyConfigured(c.env), shop: c.env.SHOPIFY_SHOP },
       ups: { connected: upsConfigured(c.env), env: c.env.UPS_ENV },
       usps: { connected: easypostConfigured(c.env) },
+      redo: { connected: redoConfigured(c.env) },
       ai: { connected: aiConfigured(c.env), model: c.env.AI_MODEL },
     },
     signature: await getSetting(c.env, "signature", ""),
@@ -461,6 +464,11 @@ admin.post("/credentials/test/:group", async (c) => {
       ]);
       await deleteSetting(c.env, "ask_classes");
       return c.json({ ok: true, message: `Connected · ${workshops.length} active class${workshops.length === 1 ? "" : "es"}, ${sessions.length} upcoming date${sessions.length === 1 ? "" : "s"}` });
+    }
+    if (group === "redo") {
+      if (!redoConfigured(env)) throw new Error("Add the Store ID and the API token.");
+      const r = await testRedo(env, await shipFrom(env));
+      return c.json({ ok: true, message: r.rates ? `Connected · ${r.rates} rate${r.rates === 1 ? "" : "s"} for a test box (${r.carriers.join(", ")})` : "Connected, but Redo returned no rates for a test box — check the carriers connected in Redo" });
     }
     if (group === "meta") {
       if (!metaConfigured(env)) throw new Error("Add the App ID and App secret.");

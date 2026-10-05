@@ -6,7 +6,7 @@ import { decrypt, deleteSetting, encrypt, getSetting, setSetting } from "./util"
 export interface CredentialField {
   key: keyof Env & string;
   label: string;
-  group: "shopify" | "ups" | "usps" | "ai" | "booking" | "stock" | "meta";
+  group: "shopify" | "ups" | "usps" | "redo" | "ai" | "booking" | "stock" | "meta";
   secret: boolean; // never sent back to the browser
   options?: string[];
   placeholder?: string;
@@ -23,6 +23,8 @@ export const CREDENTIAL_FIELDS: CredentialField[] = [
   { key: "UPS_ACCOUNT_NUMBER", label: "UPS account number", group: "ups", secret: false, placeholder: "6 characters" },
   { key: "UPS_ENV", label: "Mode", group: "ups", secret: false, options: ["test", "production"] },
   { key: "EASYPOST_API_KEY", label: "EasyPost production API key", group: "usps", secret: true, placeholder: "EZAK…", help: "EasyPost → Account → API Keys → Production" },
+  { key: "REDO_STORE_ID", label: "Store ID", group: "redo", secret: false, help: "Redo → Settings → Developer → General → Your Store ID" },
+  { key: "REDO_API_TOKEN", label: "API token", group: "redo", secret: true, help: "Same page → API tokens → Create token, with Shipping read + Shipping write" },
   { key: "BOOKING_SUPABASE_URL", label: "Project URL", group: "booking", secret: false, placeholder: "https://….supabase.co", help: "Supabase → Project settings → API (the booking app's VITE_SUPABASE_URL)" },
   { key: "BOOKING_SUPABASE_ANON_KEY", label: "Anon (public) key", group: "booking", secret: true, placeholder: "eyJ…", help: "Same page, the anon public key (VITE_SUPABASE_ANON_KEY) — read-only, the same one the date picker uses" },
   { key: "TUFTSTOCK_URL", label: "TuftStock address", group: "stock", secret: false, placeholder: "https://tuftstock-….up.railway.app", help: "The address you open TuftStock at" },
@@ -38,6 +40,7 @@ const TOKEN_CACHES: Record<CredentialField["group"], string[]> = {
   shopify: ["shopify_access"],
   ups: ["ups_access_test", "ups_access_production"],
   usps: [],
+  redo: [],
   booking: ["ask_classes"],
   stock: ["incoming_stock"],
   meta: [],

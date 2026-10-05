@@ -4,6 +4,7 @@ import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrd
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
+import { redoConfigured } from "../lib/redo";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles, type Customs } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
@@ -187,7 +188,7 @@ const VIEWS: Record<string, (o: Described) => boolean> = {
 };
 
 shipping.get("/status", async (c) =>
-  c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
+  c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), redo: redoConfigured(c.env), shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
 );
 
 /** The fulfillment queue: every open, unshipped order with its plan, plus per-view counts. */
@@ -707,7 +708,7 @@ shipping.post("/labels/:id{[0-9]+}/fulfill", async (c) => {
 
 shipping.get("/labels", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT s.id, s.carrier, s.shipment_id LIKE 'ep:%' AS easypost, s.customs IS NOT NULL AS invoice, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
+    `SELECT s.id, s.carrier, s.shipment_id LIKE 'ep:%' AS easypost, s.shipment_id LIKE 'redo:%' AS redo, s.customs IS NOT NULL AS invoice, json_array_length(s.forms) AS forms, s.order_id, s.order_name, s.service_name, s.tracking_numbers, s.cost, s.currency, s.status, s.fulfilled,
             s.label_format, s.ship_to, s.created_at, s.batch_id, s.shipping_paid, s.signature, a.name AS agent_name
      FROM shipments s LEFT JOIN agents a ON a.id = s.agent_id WHERE s.source IS NULL AND (? IS NULL OR s.order_id = ?) ORDER BY s.created_at DESC LIMIT 200`,
   ).bind(c.req.query("order") ?? null, c.req.query("order") ?? null).all<any>();
@@ -739,7 +740,7 @@ let marked = false;
 function go() {
   if (!marked) { marked = true; fetch(MARK.url, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: MARK.ids, box: MARK.box }) }).catch(() => {}); }
   document.querySelector(".guard")?.remove();
-  print();
+  (window.labelsReady || Promise.resolve()).then(() => print());
 }
 document.querySelectorAll("time[data-at]").forEach((t) => { t.textContent = new Date(t.dataset.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); });
 ${warn ? "" : "addEventListener('load', () => setTimeout(go, 300));"}
@@ -756,12 +757,26 @@ const GUARD_CSS = `.guard { font: 14px/1.4 system-ui, sans-serif; margin: 12px; 
 @media print { .guard { display: none; } }`;
 
 function labelPage(title: string, labels: { data: string; format: string }[], guard?: ReturnType<typeof printGuard>) {
-  // UPS GIF labels are landscape and get rotated onto the 4×6 page; USPS PNG labels are already 4×6 portrait
+  // UPS GIF labels are landscape and get rotated onto the 4×6 page; USPS PNG labels are already 4×6 portrait;
+  // PDF labels (Redo) are drawn page by page in the browser, then printed
   const pages = labels
-    .map((l) => (l.format === "PNG"
-      ? `<div class="page"><img class="portrait" src="data:image/png;base64,${l.data}" alt="USPS label"></div>`
-      : `<div class="page"><img class="landscape" src="data:image/gif;base64,${l.data}" alt="UPS label"></div>`))
+    .map((l) => (l.format === "PDF"
+      ? `<div class="pdf-src" data-pdf="${l.data}"></div>`
+      : l.format === "PNG"
+        ? `<div class="page"><img class="portrait" src="data:image/png;base64,${l.data}" alt="Label"></div>`
+        : `<div class="page"><img class="landscape" src="data:image/gif;base64,${l.data}" alt="UPS label"></div>`))
     .join("");
+  const pdf = labels.some((l) => l.format === "PDF")
+    ? `<script type="module">
+import { pdfToPngs } from "/js/pdf-labels.js";
+window.labelsReady = (async () => {
+  for (const el of document.querySelectorAll(".pdf-src")) {
+    const pages = await pdfToPngs(el.dataset.pdf);
+    el.replaceWith(...pages.map((p) => { const d = document.createElement("div"); d.className = "page"; d.innerHTML = '<img class="' + (p.landscape ? "landscape" : "portrait") + '" src="data:image/png;base64,' + p.png + '" alt="Label">'; return d; }));
+  }
+})();
+</script>`
+    : "";
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <style>
 @page { size: 4in 6in; margin: 0; }
@@ -776,7 +791,8 @@ ${GUARD_CSS}
 ${guard?.banner ?? ""}
 <div class="bar"><button onclick="${guard ? "go()" : "print()"}">Print</button> <span>${labels.length} label${labels.length === 1 ? "" : "s"} · 4×6 in, margins none, scale 100%</span></div>
 ${pages}
-${guard?.script ?? "<script>addEventListener('load', () => setTimeout(() => print(), 300));</script>"}
+${pdf}
+${guard?.script ?? "<script>addEventListener('load', () => (window.labelsReady || Promise.resolve()).then(() => setTimeout(() => print(), 300)));</script>"}
 </body></html>`;
 }
 
@@ -954,7 +970,8 @@ shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
     }
   }
   if (riders.length) await c.env.DB.prepare("DELETE FROM merged_orders WHERE shipment_id = ?").bind(id).run();
-  return c.json({ ok: true, carrier: s.carrier ?? (s.shipment_id.startsWith("ep:") ? "USPS" : "UPS"), refund: s.shipment_id.startsWith("ep:") ? "requested" : "voided", shopify, merged: riders.length });
+  const refunded = s.shipment_id.startsWith("ep:") || s.shipment_id.startsWith("redo:");
+  return c.json({ ok: true, carrier: s.carrier ?? (s.shipment_id.startsWith("ep:") ? "USPS" : "UPS"), refund: refunded ? "requested" : "voided", via: s.shipment_id.startsWith("redo:") ? "Redo" : s.shipment_id.startsWith("ep:") ? "EasyPost" : "UPS", shopify, merged: riders.length });
 });
 
 /** Label batches: every bulk run (and single labels) grouped for reprinting. */

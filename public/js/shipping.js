@@ -71,7 +71,7 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     const n = [];
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
-    if (!st.ups && !st.usps) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
+    if (!st.ups && !st.usps && !st.redo) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
     else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Connections when ready."));
     mount(notices, n.length ? h("div", { class: "stack", style: { marginBottom: "16px" } }, n) : null);
   }).catch(() => {});
@@ -594,10 +594,13 @@ function shipFromPhoneFix(message, done) {
  * Returns true when voided.
  */
 async function voidLabelFlow(l) {
-  const refund = !!l.easypost || (l.carrier && l.carrier !== "UPS");
+  const redo = !!l.redo;
+  const refund = redo || !!l.easypost || (l.carrier && l.carrier !== "UPS");
   const name = l.carrier || "UPS";
   const msg = [
-    refund
+    redo
+      ? `Void this ${name} label${l.order_name ? ` for ${l.order_name}` : ""}? Redo cancels it with ${name} and refunds your Redo labels balance once ${name} confirms it wasn't used.`
+      : refund
       ? `Void this ${name} label${l.order_name ? ` for ${l.order_name}` : ""}? The postage is refunded to your EasyPost wallet once ${name} confirms it wasn't used (USPS takes about 2–4 weeks; void within 30 days).`
       : `Void this UPS label${l.order_name ? ` for ${l.order_name}` : ""}? UPS cancels it and you're not charged (it must not have been scanned by UPS yet; up to 90 days).`,
     l.fulfilled ? "The order will be marked unfulfilled in Shopify again so you can ship it with a new label. (The customer isn't emailed.)" : "",
@@ -605,7 +608,7 @@ async function voidLabelFlow(l) {
   ].filter(Boolean).join("\n\n");
   if (!confirm(msg)) return false;
   const r = await api(`/shipping/labels/${l.id}/void`, { method: "POST" });
-  const parts = [refund ? `Refund requested from ${name} through EasyPost` : "Label voided with UPS — no charge"];
+  const parts = [redo ? `Refund requested through Redo` : refund ? `Refund requested from ${name} through EasyPost` : "Label voided with UPS — no charge"];
   if (r.shopify === "cancelled") parts.push("order is unfulfilled in Shopify again");
   else if (r.shopify === "not_found") parts.push("no matching Shopify fulfillment to undo");
   else if (r.shopify && r.shopify !== "skipped") parts.push(`but undoing the Shopify fulfillment failed (${r.shopify}) — cancel it in Shopify`);
@@ -1513,7 +1516,7 @@ function buildLabelForm(root, o, presets, opts) {
         (() => {
           const b = h("button", { class: "btn ghost", title: "Cancel this label so you're not charged" }, "Void label");
           b.onclick = busy(b, async () => {
-            if (!(await voidLabelFlow({ id: r.id, carrier: r.carrier, easypost: String(r.shipmentId ?? "").startsWith("ep:"), order_name: o?.name, fulfilled: !!o && !r.fulfillError }))) return;
+            if (!(await voidLabelFlow({ id: r.id, carrier: r.carrier, easypost: String(r.shipmentId ?? "").startsWith("ep:"), redo: String(r.shipmentId ?? "").startsWith("redo:"), order_name: o?.name, fulfilled: !!o && !r.fulfillError }))) return;
             if (o) o.hasLabel = false;
             labelsCard?.reload();
             openOrderPage(o ? queueApi?.find(o.id) ?? o : null, opts);

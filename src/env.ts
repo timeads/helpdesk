@@ -21,6 +21,8 @@ export interface Env {
   UPS_ACCOUNT_NUMBER?: string;
   ANTHROPIC_API_KEY?: string;
   EASYPOST_API_KEY?: string;
+  REDO_API_TOKEN?: string;
+  REDO_STORE_ID?: string;
   BOOKING_SUPABASE_URL?: string;
   BOOKING_SUPABASE_ANON_KEY?: string;
   TUFTSTOCK_URL?: string;

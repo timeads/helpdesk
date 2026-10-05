@@ -246,7 +246,12 @@ export async function printLabels({ ids, batch, box = null }, win = null) {
       if (l.format === "ZPL") jobs.push(...l.data);
       else {
         const { imageToZpl } = await import("./zpl.js");
-        for (const d of l.data) jobs.push(await imageToZpl(d, l.format, dpi));
+        for (const d of l.data) {
+          if (l.format === "PDF") {
+            const { pdfToPngs } = await import("./pdf-labels.js");
+            for (const p of await pdfToPngs(d, dpi)) jobs.push(await imageToZpl(p.png, "PNG", dpi));
+          } else jobs.push(await imageToZpl(d, l.format, dpi));
+        }
       }
     }
     let device;
