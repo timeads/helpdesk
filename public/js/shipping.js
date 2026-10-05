@@ -56,6 +56,19 @@ const redoSaving = (best, redo) => (best && redo ? Math.round((best.total - redo
 
 let shipStatus = null; // /shipping/status, for notices inside the queue
 
+/** Why an order needs (or doesn't need) a signature: the rule that asked, or a choice saved on the order. */
+function signatureReason(plan) {
+  const rule = plan?.rules?.signatureRule;
+  if (plan?.signatureFrom === "saved") return "Chosen on this order";
+  if (plan?.signatureFrom === "saved-none") return rule ? `Turned off on this order (rule “${rule}” asks for one)` : null;
+  if (plan?.signature && rule) return `Rule: ${rule}`;
+  return null;
+}
+const sigWhy = (plan) => {
+  const why = signatureReason(plan);
+  return why ? h("span", { class: "small muted", style: { fontWeight: 400 } }, why) : null;
+};
+
 const newBatchId = () => `B${new Date().toISOString().slice(2, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
 export function renderShipping(main) {
@@ -313,7 +326,8 @@ function renderQueue(root, params) {
             o.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
             o.pickup ? (o.pickupReadyAt ? h("span", { class: "badge good", title: `Marked ready ${fullTime(o.pickupReadyAt)}` }, "Ready for pickup") : h("span", { class: "badge warn plain" }, "Pickup")) : null,
             o.slipPrinted ? h("span", { class: "badge plain", title: o.slipPrintedAt ? `Packing slip printed ${fullTime(o.slipPrintedAt)}` : "Packing slip printed" }, "Slip printed") : null,
-            o.plan.signature ? h("span", { class: "badge plain" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null));
+            o.plan.signature ? h("span", { class: "badge plain", title: signatureReason(o.plan) ?? "" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null,
+            st.view === "signature" && signatureReason(o.plan) ? h("div", { class: "small muted sig-why" }, signatureReason(o.plan)) : null));
         return tr;
       })))));
     refreshQuotes(rows).then(() => {
@@ -859,7 +873,7 @@ function buildLabelForm(root, o, presets, opts) {
     }));
     // a line added to the order since goes in the first box
     for (const l of lines) if (!s.parcels.some((p) => p.alloc[l.id])) s.parcels[0].alloc[l.id] = l.qty;
-    if (draft.signature !== undefined) s.signature = draft.signature || "";
+    if (draft.signature !== undefined) s.signature = draft.signature === "none" ? "" : draft.signature || "";
     if (draft.service) s.wantCode = draft.service;
     if (draft.to) s.to = { ...s.to, ...draft.to };
   }
@@ -869,7 +883,8 @@ function buildLabelForm(root, o, presets, opts) {
   const savedEl = h("span", { class: "small muted op-saved" });
   const draftNow = () => ({
     boxes: s.parcels.map((p) => ({ presetId: p.preset ? Number(p.preset) : null, length: +p.length || 0, width: +p.width || 0, height: +p.height || 0, weight: +p.weight || null, items: { ...p.alloc } })),
-    signature: s.signature || undefined,
+    // "No signature" on an order a rule flags is remembered as "none", so it doesn't come back
+    signature: s.signature || (plan?.rules?.signature ? "none" : undefined),
     service: s.rate?.serviceCode ?? s.wantCode ?? null,
     to: s.toEdited ? s.to : null,
     customs: isIntl() && s.customs ? s.customs : null,
@@ -1369,7 +1384,7 @@ function buildLabelForm(root, o, presets, opts) {
           r.onchange = () => { s.to.residential = r.checked; resTouched = true; s.toEdited = true; quote(0); remember(); };
           return h("label", { class: "check" }, r, "Residential address");
         })(),
-        h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel))));
+        h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel, sigWhy(plan)))));
 
   const packages = h("section", { class: "card op-card" },
     h("div", { class: "op-card-head" }, h("h3", {}, o ? `${o.pickup ? "Items" : "Items & boxes"} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}` : "Packages"), packHeadEl),

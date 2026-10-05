@@ -22,6 +22,7 @@ export interface ShippingRule {
 export interface RuleResult {
   packageName: string | null;
   signature: "standard" | "adult" | null;
+  signatureRule: string | null; // the rule that asked for the signature
   service: string | null; // "cheapest" | "fastest" | UPS service code
   hold: string | null; // note, when a rule holds the order
   matched: string[];
@@ -62,7 +63,9 @@ function values(order: ShopifyOrder, field: RuleCondition["field"]): string[] | 
 export function conditionMatches(order: ShopifyOrder, c: RuleCondition): boolean {
   const actual = values(order, c.field);
   if (typeof actual === "number") {
-    const want = Number(c.value);
+    // "250", "$250", "1,000.00" all mean the number; anything else (or blank) never matches
+    const raw = String(c.value ?? "").replace(/[$,\s]/g, "");
+    const want = raw ? Number(raw) : NaN;
     if (Number.isNaN(want)) return false;
     return c.op === "eq" ? actual === want : c.op === "gt" ? actual > want : c.op === "lt" ? actual < want : false;
   }
@@ -81,7 +84,7 @@ export function conditionMatches(order: ShopifyOrder, c: RuleCondition): boolean
 
 /** First matching enabled rule wins for each kind of action. */
 export function evaluateRules(order: ShopifyOrder, rules: ShippingRule[]): RuleResult {
-  const out: RuleResult = { packageName: null, signature: null, service: null, hold: null, matched: [] };
+  const out: RuleResult = { packageName: null, signature: null, signatureRule: null, service: null, hold: null, matched: [] };
   for (const r of rules) {
     if (!r.enabled || !r.conditions.length) continue;
     if (!r.conditions.every((c) => conditionMatches(order, c))) continue;
@@ -93,6 +96,7 @@ export function evaluateRules(order: ShopifyOrder, rules: ShippingRule[]): RuleR
       }
       if (a.type === "require_signature" && !out.signature && (a.value === "standard" || a.value === "adult")) {
         out.signature = a.value;
+        out.signatureRule = r.name;
         used = true;
       }
       if (a.type === "set_service" && !out.service && a.value) {

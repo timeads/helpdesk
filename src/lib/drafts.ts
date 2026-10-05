@@ -16,7 +16,7 @@ export interface DraftBox {
 
 export interface OrderDraft {
   boxes: DraftBox[];
-  signature: Signature;
+  signature: Signature | "none"; // "none": no signature, even when a rule asks for one
   service: string | null;
   to: Address | null;
   customs?: Customs | null; // edited customs list (international): values, descriptions, HS codes
@@ -52,7 +52,7 @@ export function cleanDraft(input: any): OrderDraft | null {
     : null;
   return {
     boxes,
-    signature: input.signature === "adult" || input.signature === "standard" ? input.signature : undefined,
+    signature: input.signature === "adult" || input.signature === "standard" || input.signature === "none" ? input.signature : undefined,
     service: typeof input.service === "string" && input.service.length < 80 ? input.service : null,
     to,
     customs: cleanCustoms(input.customs) ?? null,
@@ -108,7 +108,8 @@ export function applyDraft(plan: Plan, d: OrderDraft, presets: Preset[], lineIds
     totalWeight: Math.round(boxes.reduce((n, b) => n + b.parcel.weight, 0) * 10) / 10,
     weightKnown,
     source: "saved",
-    signature: d.signature ?? plan.signature,
+    signature: d.signature === "none" ? null : d.signature ?? plan.signature,
+    signatureFrom: d.signature === "none" ? "saved-none" : d.signature ? "saved" : plan.signatureFrom,
     service: d.service ?? plan.service,
   };
 }

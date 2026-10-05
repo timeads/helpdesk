@@ -34,6 +34,8 @@ export interface Plan {
   weightKnown: boolean;
   source: "rule" | "learned" | "learned-similar" | "default" | "saved";
   signature: Signature;
+  /** Why: "rule" (rules.signatureRule says which), "saved" (picked on the order page), "saved-none" (turned off there) */
+  signatureFrom: "rule" | "saved" | "saved-none" | null;
   service: string | null;
   ruleHold: string | null;
   rules: RuleResult;
@@ -220,6 +222,7 @@ export async function planOrders(env: Env, orders: ShopifyOrder[]): Promise<Map<
       weightKnown,
       source,
       signature: r.signature,
+      signatureFrom: r.signature ? "rule" : null,
       service: r.service,
       ruleHold: r.hold,
       rules: r,
