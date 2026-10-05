@@ -51,7 +51,7 @@ const newBatchId = () => `B${new Date().toISOString().slice(2, 10).replace(/-/g,
 export function renderShipping(main) {
   const path = location.pathname;
   const params = new URLSearchParams(location.search);
-  const tab = path.startsWith("/shipping/scan") ? "scan" : path.startsWith("/shipping/batches") || params.get("tab") === "history" ? "batches" : "queue";
+  const tab = path.startsWith("/shipping/scan") ? "scan" : path.startsWith("/shipping/all") ? "all" : path.startsWith("/shipping/batches") || params.get("tab") === "history" ? "batches" : "queue";
 
   const body = h("div");
   const notices = h("div");
@@ -65,7 +65,7 @@ export function renderShipping(main) {
         h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, labels from every carrier, packing slips and the packing station.")),
         h("div", { class: "row" }, printerChip, blank)),
       h("nav", { class: "tabs-line", "aria-label": "Shipping" },
-        tabLink("queue", "/shipping", "Orders"), tabLink("scan", "/shipping/scan", "Scan & pack"), tabLink("batches", "/shipping/batches", "Label batches")))),
+        tabLink("queue", "/shipping", "To ship"), tabLink("all", "/shipping/all", "All orders"), tabLink("scan", "/shipping/scan", "Scan & pack"), tabLink("batches", "/shipping/batches", "Label batches")))),
     h("div", { class: "page-inner wide" }, notices, body)));
 
   api("/shipping/status").then((st) => {
@@ -79,6 +79,7 @@ export function renderShipping(main) {
   const cleanups = [];
   if (tab === "scan") cleanups.push(renderScan(body, { openSlideout: (o, extra = {}) => openOrderPage(o, { list: [], ...extra }) }));
   else if (tab === "batches") renderBatches(body);
+  else if (tab === "all") renderHistory(body, params);
   else cleanups.push(renderQueue(body, params));
 
   // A ticket's "Ship" button links here with ?order=
@@ -1597,6 +1598,123 @@ const sameService = (chosen, service) => {
 };
 
 // ---------------------------------------------------------------- Batches
+
+// ---------------------------------------------------------------- All orders (shipped or not)
+
+const HISTORY_FILTERS = [["all", "All"], ["to_ship", "To ship"], ["shipped", "Shipped"], ["cancelled", "Cancelled"]];
+const STATUS_TONE = { delivered: "good", shipped: "good plain", partial: "warn", unshipped: "warn plain", cancelled: "bad plain" };
+
+function renderHistory(root, params) {
+  const st = { filter: params.get("filter") || "all", q: params.get("q") || "", orders: [], next: null, seq: 0 };
+  const chips = h("div", { class: "view-chips", role: "tablist" });
+  const search = h("input", { class: "input", type: "search", placeholder: "Order #, email or name", "aria-label": "Search all orders", value: st.q });
+  const tableWrap = h("div", { class: "card table-card" }, skeletonRows(6));
+  const more = h("div", { class: "row", style: { justifyContent: "center", marginTop: "12px" } });
+  mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips,
+    h("div", { class: "search", style: { minWidth: "260px", marginLeft: "auto" } }, icon("search"), search)), tableWrap, more);
+
+  const url = () => {
+    const p = new URLSearchParams();
+    if (st.filter !== "all") p.set("filter", st.filter);
+    if (st.q) p.set("q", st.q);
+    return p;
+  };
+  async function load(append = false) {
+    const seq = ++st.seq;
+    const p = url();
+    history.replaceState(null, "", `/shipping/all${p.size ? `?${p}` : ""}`);
+    if (append && st.next) p.set("after", st.next);
+    if (!append) mount(tableWrap, skeletonRows(6));
+    try {
+      const r = await api(`/shipping/history?${p}`);
+      if (seq !== st.seq) return;
+      st.orders = append ? [...st.orders, ...r.orders] : r.orders;
+      st.next = r.next;
+      draw();
+    } catch (e) {
+      if (seq === st.seq) mount(tableWrap, h("div", { class: "empty" }, h("h2", {}, "Couldn't load orders"), h("p", {}, e.message)));
+    }
+  }
+
+  const open = async (o) => {
+    if (o.status.key !== "unshipped" && o.status.key !== "partial") return orderDetails(o);
+    try {
+      const { order } = await api(`/shipping/orders/${encodeURIComponent(o.id)}`);
+      openOrderPage(order, { list: [] });
+    } catch (e) { toast(e.message, true); }
+  };
+
+  function drawChips() {
+    mount(chips, HISTORY_FILTERS.map(([id, label]) => h("button", {
+      class: "view-chip" + (st.filter === id ? " active" : ""), role: "tab", "aria-selected": st.filter === id,
+      onclick: () => { st.filter = id; drawChips(); load(); },
+    }, label)));
+  }
+  function draw() {
+    if (!st.orders.length) {
+      mount(tableWrap, h("div", { class: "empty" }, h("h2", {}, st.q ? "No matching orders" : "No orders here"),
+        h("p", {}, st.q ? "Try the order number (e.g. 68762), the customer's email or their name." : "Try another filter.")));
+      mount(more);
+      return;
+    }
+    mount(tableWrap, h("div", { class: "tbl-wrap" }, h("table", { class: "tbl history" },
+      h("thead", {}, h("tr", {}, ["Order", "Customer", "Items", "Total", "Payment", "Status", "Tracking", "Label"].map((x) => h("th", { class: x === "Total" || x === "Items" ? "num" : null }, x)))),
+      h("tbody", {}, st.orders.map((o) => h("tr", { class: "click", tabindex: 0, onclick: () => open(o), onkeydown: (e) => { if (e.key === "Enter") open(o); } },
+        h("td", { class: "nowrap" }, h("b", {}, o.name), h("div", { class: "small muted", title: fullTime(o.createdAt) }, shortDate(o.createdAt))),
+        h("td", {}, h("div", {}, o.customer || "—"), o.place ? h("div", { class: "small muted" }, o.place) : null),
+        h("td", { class: "num" }, o.items),
+        h("td", { class: "num nowrap" }, money(o.total, o.currency)),
+        h("td", { class: "small" }, o.payment || "—"),
+        h("td", {}, h("span", { class: `badge ${STATUS_TONE[o.status.key] ?? "plain"}` }, o.status.label)),
+        h("td", { class: "small" }, o.tracking.length ? o.tracking.map((t) => h("div", { class: "nowrap" },
+          t.url ? h("a", { href: t.url, target: "_blank", rel: "noopener", onclick: (e) => e.stopPropagation() }, `${t.company ? `${t.company} ` : ""}${t.number}`) : `${t.company ?? ""} ${t.number}`)) : h("span", { class: "muted" }, "—")),
+        h("td", { class: "small" }, o.label
+          ? [h("div", {}, o.label.service, o.label.cost != null ? h("span", { class: "muted" }, ` · ${money(o.label.cost, "USD")}`) : null),
+             h("div", { class: "muted" }, o.label.shippedWith ? `Shipped with ${o.label.shippedWith}` : [o.label.by, shortDate(o.label.createdAt)].filter(Boolean).join(" · "))]
+          : h("span", { class: "muted" }, o.tracking.length ? "Bought elsewhere" : "—")),
+      ))))));
+    const btn = h("button", { class: "btn" }, "Load more");
+    btn.onclick = busy(btn, () => load(true));
+    mount(more, st.next ? btn : h("span", { class: "small muted" }, `${st.orders.length} order${st.orders.length === 1 ? "" : "s"}`));
+  }
+  let t;
+  search.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => { st.q = search.value.trim(); load(); }, 300);
+  });
+  drawChips();
+  load();
+}
+
+/** A shipped or cancelled order, read-only: what was in it, each shipment's tracking, and labels bought here. */
+function orderDetails(o) {
+  const thumb = (src) => (src ? h("img", { class: "od-img", src, alt: "", loading: "lazy" }) : h("span", { class: "od-img" }));
+  const body = h("div", { class: "stack od" },
+    h("div", { class: "row", style: { gap: "8px" } },
+      h("span", { class: `badge ${STATUS_TONE[o.status.key] ?? "plain"}` }, o.status.label),
+      h("span", { class: "small muted" }, `Placed ${fullTime(o.createdAt)} · ${money(o.total, o.currency)} · ${o.payment || "—"}`)),
+    h("div", { class: "od-who" },
+      h("b", {}, o.customer || "—"),
+      o.email ? h("div", { class: "small muted" }, o.email) : null,
+      o.place ? h("div", { class: "small muted" }, o.place) : null),
+    h("div", {}, h("h3", { class: "merge-h" }, `Items · ${o.items}`),
+      h("div", { class: "od-lines" }, o.lines.map((l) => h("div", { class: "od-line" }, thumb(l.image),
+        h("div", { style: { minWidth: 0 } }, h("div", {}, l.title), l.variant ? h("div", { class: "small muted" }, l.variant) : null),
+        h("b", { class: "nowrap" }, `× ${l.qty}`))))),
+    o.shipments.length ? h("div", {}, h("h3", { class: "merge-h" }, o.shipments.length > 1 ? `${o.shipments.length} shipments` : "Shipment"),
+      h("div", { class: "od-lines" }, o.shipments.map((f) => h("div", { class: "od-line" },
+        h("span", { class: "od-ico" }, icon("truck")),
+        h("div", { style: { minWidth: 0 } },
+          h("div", {}, f.status || "Shipped", h("span", { class: "small muted" }, ` · ${shortDate(f.at)}`)),
+          f.tracking.length ? h("div", { class: "small" }, f.tracking.map((t, i) => [i ? ", " : "",
+            t.url ? h("a", { href: t.url, target: "_blank", rel: "noopener" }, `${t.company ? `${t.company} ` : ""}${t.number}`) : `${t.company ?? ""} ${t.number}`])) : h("div", { class: "small muted" }, "No tracking"))))))
+      : null,
+    o.label?.shippedWith ? h("div", { class: "notice" }, `Shipped in one box with ${o.label.shippedWith} — that order holds the label.`) : null,
+    orderLabelsCard({ id: o.id }),
+    h("div", { class: "row", style: { justifyContent: "flex-end" } },
+      o.adminUrl ? h("a", { class: "btn", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Open in Shopify", icon("ext")) : null));
+  modal(o.name, body, { width: 640 });
+}
 
 async function renderBatches(root) {
   const importEl = h("div");

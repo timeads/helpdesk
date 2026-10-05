@@ -276,13 +276,38 @@ export async function queueOrders(env: Env, max = 60) {
 /** Orders for the shipping screen: open & unshipped by default, or a search by order number / name / email. */
 export async function searchOrders(env: Env, search: string) {
   const s = search.trim();
-  let query = OPEN_TO_SHIP;
-  if (s) {
-    if (/^#?[\w-]*\d[\w-]*$/.test(s) && !s.includes("@")) query = `name:${quoteSearch(s.startsWith("#") ? s : "#" + s)}`;
-    else if (s.includes("@")) query = `email:${quoteSearch(s)}`;
-    else query = s.replace(/["\\]/g, "");
+  return enrichVariants(env, await pagedOrders(env, s ? searchQuery(s) : OPEN_TO_SHIP, s ? 20 : 60, !s));
+}
+
+/** Order number ("68762", "#68762-TG"), email, or free text (name) as a Shopify order search. */
+export function searchQuery(s: string) {
+  if (/^#?[\w-]*\d[\w-]*$/.test(s) && !s.includes("@")) return `name:${quoteSearch(s.startsWith("#") ? s : "#" + s)}`;
+  if (s.includes("@")) return `email:${quoteSearch(s)}`;
+  return s.replace(/["\\]/g, "");
+}
+
+/** One page of every order (any status), newest first, for the order history; `next` continues it. */
+export async function orderHistoryPage(env: Env, query: string, after: string | null, size = 25) {
+  const out: ShopifyOrder[] = [];
+  let cursor = after;
+  let more = true;
+  while (out.length < size && more) {
+    const data: { orders: { nodes: ShopifyOrder[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await withOrderFields(20, (fields) =>
+      shopify(
+        env,
+        `query History($q: String, $after: String, $n: Int!) {
+          orders(first: $n, after: $after, query: $q, sortKey: CREATED_AT, reverse: true) {
+            nodes { ${fields} } pageInfo { hasNextPage endCursor }
+          }
+        }`,
+        { q: query || null, after: cursor, n: Math.min(PAGE, size - out.length) },
+      ),
+    );
+    out.push(...data.orders.nodes.map((o) => decorate(env, o)));
+    more = data.orders.pageInfo.hasNextPage;
+    cursor = data.orders.pageInfo.endCursor;
   }
-  return enrichVariants(env, await pagedOrders(env, query, s ? 20 : 60, !s));
+  return { orders: out, next: more ? cursor : null };
 }
 
 export async function getOrder(env: Env, id: string) {

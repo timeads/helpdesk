@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "../env";
-import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrderByName, getOrder, ordersByIds, queueOrders, searchOrders, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
+import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrderByName, getOrder, ordersByIds, queueOrders, orderHistoryPage, searchOrders, searchQuery, shopifyConfigured, type ShopifyOrder } from "../lib/shopify";
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
@@ -15,7 +15,8 @@ import {
 import { code128Svg } from "../lib/code128";
 import { requireAdmin } from "../lib/auth";
 import { HttpError, base64UrlDecodeBytes, getSetting, setSetting } from "../lib/util";
-import { demoOrders } from "../lib/demo";
+import { demoAllOrders, demoOrders } from "../lib/demo";
+import { HISTORY_FILTERS, historyRow, shipStatus, type LabelInfo } from "../lib/history";
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
@@ -201,9 +202,47 @@ shipping.get("/orders", async (c) => {
   return c.json({ orders: await describe(c.env, orders) });
 });
 
+/** Every order, shipped or not, newest first: a page at a time, with a status filter and search. */
+shipping.get("/history", async (c) => {
+  const filter = HISTORY_FILTERS[c.req.query("filter") ?? "all"] ?? "";
+  const q = (c.req.query("q") ?? "").trim().slice(0, 100);
+  const query = [filter, q ? searchQuery(q) : ""].filter(Boolean).map((x) => `(${x})`).join(" AND ");
+  let page: { orders: ShopifyOrder[]; next: string | null };
+  if (demo(c.env)) {
+    const key = c.req.query("filter") ?? "all";
+    const all = demoAllOrders().filter((o) => {
+      const s = shipStatus(o).key;
+      const match = key === "to_ship" ? s === "unshipped" || s === "partial" : key === "shipped" ? s === "shipped" || s === "delivered" : key === "cancelled" ? s === "cancelled" : true;
+      const text = `${o.name} ${o.email ?? ""} ${o.shippingAddress?.name ?? ""}`.toLowerCase();
+      return match && (!q || text.includes(q.toLowerCase().replace(/^#/, "")));
+    });
+    page = { orders: all, next: null };
+  } else {
+    page = await orderHistoryPage(c.env, query, c.req.query("after") || null);
+  }
+  const ids = page.orders.map((o) => o.id);
+  const labels = new Map<string, LabelInfo>();
+  if (ids.length) {
+    const marks = ids.map(() => "?").join(",");
+    const { results } = await c.env.DB.prepare(
+      `SELECT x.order_id, s.id, s.carrier, s.service_name, s.cost, s.created_at, s.source, a.name AS agent, x.shipped_with FROM (
+         SELECT order_id, id AS sid, NULL AS shipped_with FROM shipments WHERE status = 'purchased' AND order_id IN (${marks})
+         UNION ALL
+         SELECT m.order_id, m.shipment_id, s2.order_name FROM merged_orders m JOIN shipments s2 ON s2.id = m.shipment_id WHERE s2.status = 'purchased' AND m.order_id IN (${marks})
+       ) x JOIN shipments s ON s.id = x.sid LEFT JOIN agents a ON a.id = s.agent_id ORDER BY s.created_at`,
+    ).bind(...ids, ...ids).all<{ order_id: string; id: number; carrier: string; service_name: string; cost: number | null; created_at: string; source: string | null; agent: string | null; shipped_with: string | null }>();
+    // The latest label wins; a merged order shows the label it rode on (its cost belongs to the other order)
+    for (const r of results) labels.set(r.order_id, {
+      id: r.id, carrier: r.carrier, service: r.service_name, cost: r.shipped_with ? null : r.cost, createdAt: r.created_at,
+      by: r.source === "redo" ? "Redo" : r.agent, shippedWith: r.shipped_with,
+    });
+  }
+  return c.json({ orders: page.orders.map((o) => historyRow(o, labels.get(o.id) ?? null)), next: page.next });
+});
+
 shipping.get("/orders/:id", async (c) => {
   const id = decodeURIComponent(c.req.param("id"));
-  const order = demo(c.env) ? demoOrders().find((o) => o.id === id) : await getOrder(c.env, id);
+  const order = demo(c.env) ? demoAllOrders().find((o) => o.id === id) : await getOrder(c.env, id);
   if (!order) throw new HttpError(404, "Order not found");
   const [d] = await describe(c.env, [order]);
   return c.json({ order: d });

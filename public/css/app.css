@@ -1382,3 +1382,12 @@ a.view-chip { text-decoration: none; }
 .merge-rates { display: grid; gap: 6px; }
 .merge-rate { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .merge-rate:has(input:checked) { border-color: var(--ochre); background: var(--select); }
+
+/* Shipping → All orders */
+.tbl.history td a { color: var(--ochre-text); text-decoration: underline; }
+.od-who { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.od-lines { display: grid; gap: 6px; }
+.od-line { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.od-line > div { flex: 1; }
+.od-img, .od-ico { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: var(--select); flex: none; display: grid; place-items: center; color: var(--ochre); }
+.od .op-card { margin: 0; }

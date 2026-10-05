@@ -80,6 +80,13 @@ export function demoProfile(email: string) {
   };
 }
 
+/** Every demo order, shipped or not, newest first (order history). */
+export function demoAllOrders(): ShopifyOrder[] {
+  return Object.entries(people())
+    .flatMap(([email, p]) => p.orders.map((o) => ({ ...o, email })))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 export function demoOrders(): ShopifyOrder[] {
   return Object.entries(people())
     .flatMap(([email, p]) => p.orders.map((o) => ({ ...o, email })))
