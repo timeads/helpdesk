@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buyRedo, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, sniffLabel, voidRedo } from "../src/lib/redo";
+import { buyRedo, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, redoSignatureWatch, sniffLabel, voidRedo } from "../src/lib/redo";
+import { testD1 } from "./helpers/d1";
 import { getAllRates, purchase, voidLabel } from "../src/lib/carriers";
 
 const env: any = { REDO_API_TOKEN: "tok", REDO_STORE_ID: "6883aef0ba0eed4c392301a2" };
@@ -135,5 +136,25 @@ describe("Redo labels", () => {
       "ShipmentOptionsInput.signatureConfirmation (SignatureConfirmation)",
       "SignatureConfirmation.(values): NONE, SIGNATURE, ADULT_SIGNATURE",
     ]);
+  });
+
+  it("checks Redo daily for signature support and remembers when it showed up", async () => {
+    const db = { ...env, DB: testD1() };
+    let hasSignature = false;
+    let schemaCalls = 0;
+    answer = (q) => {
+      if (q.includes("__schema")) { schemaCalls++; return { data: { __schema: { queryType: { fields: [] }, mutationType: { fields: [{ name: "purchaseCarrierShipment", description: null, args: [{ name: "input", description: null, type: { kind: "INPUT_OBJECT", name: "PurchaseCarrierShipmentInput", ofType: null } }] }] } } } }; }
+      return { data: { t0: { name: "PurchaseCarrierShipmentInput", kind: "INPUT_OBJECT", description: null, enumValues: null, inputFields: [
+        { name: "service", description: null, type: { kind: "SCALAR", name: "String", ofType: null } },
+        ...(hasSignature ? [{ name: "signatureConfirmation", description: null, type: { kind: "SCALAR", name: "String", ofType: null } }] : []),
+      ] } } };
+    };
+    const t0 = Date.parse("2026-10-06T12:00:00Z");
+    expect(await redoSignatureWatch(db, t0)).toMatchObject({ found: [], foundAt: null, error: null }); // "service" alone isn't a match
+    hasSignature = true;
+    expect((await redoSignatureWatch(db, t0 + 3600_000))!.found).toEqual([]); // already checked today
+    expect(schemaCalls).toBe(1);
+    expect(await redoSignatureWatch(db, t0 + 24 * 3600_000)).toMatchObject({ found: ["PurchaseCarrierShipmentInput.signatureConfirmation (String)"], foundAt: "2026-10-07T12:00:00.000Z" });
+    expect(await redoSignatureWatch({ DB: db.DB } as any, t0 + 48 * 3600_000)).toBeNull(); // Redo not connected: nothing to check
   });
 });

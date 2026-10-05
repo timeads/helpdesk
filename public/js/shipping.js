@@ -9,6 +9,7 @@ const VIEWS = [
   ["ready", "Ready to ship"],
   ["pickup", "In-store pickup"],
   ["priority", "Priority"],
+  ["signature", "Needs signature"],
   ["payment_pending", "Payment pending"],
   ["on_hold", "On hold"],
   ["international", "International"],
@@ -21,6 +22,7 @@ const VIEW_FILTERS = {
   payment_pending: (o) => o.paymentPending && !o.hasLabel,
   on_hold: (o) => !!o.hold && !o.hasLabel,
   international: (o) => o.international && !o.hasLabel && !o.pickup,
+  signature: (o) => !o.hold && !o.paymentPending && !o.hasLabel && !o.pickup && !!o.plan.signature,
   all: () => true,
 };
 const POLICIES = [
@@ -46,6 +48,14 @@ const ago = (iso) => {
   const r = relTime(iso);
   return r === "now" ? "just now" : /\d[mhd]$/.test(r) ? `${r} ago` : r;
 };
+// Signature orders vs Redo: Redo can't add a signature through the app yet, so its price is shown for comparison.
+// When it's at least this much cheaper, it's worth buying that label on Redo's own site (where a signature can be added).
+const REDO_SAVE_MIN = 3;
+const REDO_SITE = "https://app.getredo.com";
+const redoSaving = (best, redo) => (best && redo ? Math.round((best.total - redo.total) * 100) / 100 : null);
+
+let shipStatus = null; // /shipping/status, for notices inside the queue
+
 const newBatchId = () => `B${new Date().toISOString().slice(2, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
 export function renderShipping(main) {
@@ -69,7 +79,9 @@ export function renderShipping(main) {
     h("div", { class: "page-inner wide" }, notices, body)));
 
   api("/shipping/status").then((st) => {
+    shipStatus = st;
     const n = [];
+    if (st.redoSignature?.found?.length) n.push(h("div", { class: "notice info" }, h("b", {}, "Redo labels can now require a signature. "), "Redo's API started offering it on ", new Date(st.redoSignature.foundAt).toLocaleDateString(), " (", st.redoSignature.found.join(", "), "). Ask Claude to wire it in so signature orders can use Redo rates."));
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
     if (!st.ups && !st.usps && !st.redo) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
     else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Connections when ready."));
@@ -135,8 +147,8 @@ function loadQuotes(orders, onEach) {
       const key = quoteKey(o);
       quoteCache.set(key, { loading: true });
       try {
-        const { rates } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: o.plan.parcels ?? [o.plan.parcel], signature: o.plan.signature || undefined, customs: o.international ? await customsFor(o) : undefined } });
-        quoteCache.set(key, { rates });
+        const { rates, redo } = await api("/shipping/rates", { method: "POST", body: { to: addressFromOrder(o), parcels: o.plan.parcels ?? [o.plan.parcel], signature: o.plan.signature || undefined, customs: o.international ? await customsFor(o) : undefined } });
+        quoteCache.set(key, { rates, redo });
       } catch (e) {
         quoteCache.set(key, { error: e.message });
       }
@@ -210,13 +222,14 @@ function renderQueue(root, params) {
   const bulk = h("div", { class: "bulk-bar card", hidden: true });
   const progress = h("div");
   const mergeEl = h("div", { class: "merge-sugs" });
+  const sigEl = h("div");
   const tableWrap = h("div", { class: "card table-card" }, skeletonRows(5));
   const updated = h("span", { class: "small muted", style: { whiteSpace: "nowrap" } });
   const refresh = h("button", { class: "btn sm", title: "Get the latest orders from Shopify (also happens every few minutes)" }, icon("refresh"), "Refresh");
   refresh.onclick = busy(refresh, async () => { await load(); toast("Up to date with Shopify"); });
   mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips,
     h("div", { class: "row", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
-    bulk, progress, mergeEl, tableWrap);
+    bulk, progress, sigEl, mergeEl, tableWrap);
 
   const load = async () => {
     try {
@@ -244,7 +257,14 @@ function renderQueue(root, params) {
     }, 300);
   });
 
-  const visible = () => (st.searchResults ?? st.orders.filter(VIEW_FILTERS[st.view]));
+  const savingOf = (o) => {
+    const q = quoteCache.get(quoteKey(o));
+    return q?.rates ? redoSaving(pickRate(q.rates, st.policy, o.plan), q.redo) ?? -Infinity : -Infinity;
+  };
+  const visible = () => {
+    const rows = st.searchResults ?? st.orders.filter(VIEW_FILTERS[st.view]);
+    return st.view === "signature" && st.redoSort && !st.searchResults ? [...rows].sort((a, b) => savingOf(b) - savingOf(a)) : rows;
+  };
 
   function draw() {
     mount(chips, VIEWS.map(([id, label]) => h("button", {
@@ -255,6 +275,7 @@ function renderQueue(root, params) {
     for (const id of [...st.selected]) if (!rows.some((o) => o.id === id)) st.selected.delete(id);
     drawBulk(rows);
     drawMerges();
+    drawSigBar();
     if (!rows.length) {
       mount(tableWrap, h("div", { class: "empty" }, h("h2", {}, st.searchResults ? "No matching orders" : st.view === "ready" ? "Nothing waiting to ship" : "Nothing here"),
         h("p", {}, st.searchResults ? "Try the order number (e.g. 68762), the customer's email or their name." : "Orders appear here as they come in from Shopify.")));
@@ -295,7 +316,12 @@ function renderQueue(root, params) {
             o.plan.signature ? h("span", { class: "badge plain" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null));
         return tr;
       })))));
-    refreshQuotes(rows);
+    refreshQuotes(rows).then(() => {
+      // Sorted by Redo savings: put the rows in order once every quote is in
+      if (st.view !== "signature" || !st.redoSort) return;
+      const now = visible().map((o) => o.id).join();
+      if (now !== rows.map((o) => o.id).join()) draw();
+    });
     refreshAddresses(rows);
   }
 
@@ -318,8 +344,12 @@ function renderQueue(root, params) {
     if (!r) return mount(td, h("span", { class: "small muted" }, "Service not offered"));
     const m = o.shippingPaid - r.total;
     td.title = q.rates.map((x) => `${x.serviceName}: ${money(x.total, "USD")} → ${marginText(o.shippingPaid - x.total)}`).join("\n");
+    const save = o.plan.signature ? redoSaving(r, q.redo) : null;
     mount(td, h("div", { class: "q-line" }, h("span", { class: "small" }, r.serviceName.replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority")), h("b", {}, money(r.total, "USD"))),
-      h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`));
+      h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`),
+      q.redo && o.plan.signature ? h("div", { class: "redo-line small", title: `${q.redo.serviceName} on Redo, without a signature` },
+        `Redo ${money(q.redo.total, "USD")}`,
+        save >= REDO_SAVE_MIN ? h("span", { class: "badge warn", style: { marginLeft: "6px" } }, `save ${money(save, "USD")}`) : h("span", { class: "muted" }, save > 0 ? ` (−${money(save, "USD")})` : " (not cheaper)")) : null);
   }
   const refreshQuotes = (rows) => loadQuotes(rows, (o) => { fillQuote(o); if (st.selected.has(o.id)) drawBulk(visible()); });
 
@@ -342,6 +372,22 @@ function renderQueue(root, params) {
     mount(el, h("span", { class: `addr-pill ${tone}` }, icon(ic), text));
   }
   const refreshAddresses = (rows) => loadAddressChecks(rows, (o) => fillAddr(o));
+
+  // ---- Needs signature: what Redo would charge without one, to decide where to buy the label
+  function drawSigBar() {
+    if (st.view !== "signature" || st.searchResults) return mount(sigEl);
+    const sort = h("button", { class: "btn sm" + (st.redoSort ? " primary" : "") }, icon("down"), st.redoSort ? "Sorted by Redo savings" : "Sort by Redo savings");
+    sort.onclick = () => { st.redoSort = !st.redoSort; draw(); };
+    const w = shipStatus?.redoSignature;
+    mount(sigEl, h("div", { class: "card sig-bar" },
+      h("div", { style: { minWidth: 0, flex: "1 1 320px" } },
+        h("b", {}, "Orders that need a signature"),
+        h("div", { class: "small muted" }, shipStatus && !shipStatus.redo
+          ? "Connect Redo in Settings → Connections to compare its prices here."
+          : `Redo can't add a signature through the app yet, so its price without one is shown under each quote. When it's ${money(REDO_SAVE_MIN, "USD")}+ cheaper (“save”), buy that label on Redo's site and add the signature there.`),
+        w ? h("div", { class: "small muted" }, w.found?.length ? "Redo now supports signatures — see the notice above." : `Checked Redo's API for signature support ${relTime(w.checkedAt)} ago — not yet (checked daily).`) : null),
+      h("div", { class: "row", style: { gap: "6px" } }, sort, h("a", { class: "btn sm", href: REDO_SITE, target: "_blank", rel: "noopener" }, "Open Redo", icon("ext")))));
+  }
 
   // ---- Ship together: orders to the same person and address (suggested, or picked by hand)
   function drawMerges() {
@@ -993,9 +1039,10 @@ function buildLabelForm(root, o, presets, opts) {
     const my = ++seq;
     if (!s.rates.length) mount(ratesEl, h("div", { class: "rates-card" }, h("div", { class: "row small muted" }, spinner(), "Getting rates…")));
     try {
-      const { rates } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels.map(cleanParcel), signature: s.signature || undefined, customs: isIntl() ? s.customs : undefined } });
+      const { rates, redo } = await api("/shipping/rates", { method: "POST", body: { to: s.to, parcels: s.parcels.map(cleanParcel), signature: s.signature || undefined, customs: isIntl() ? s.customs : undefined } });
       if (my !== seq) return;
       s.rates = rates;
+      s.redoCompare = redo ?? null;
       const want = s.wantCode ?? plan?.service;
       const fastest = [...rates].filter((r) => r.days).sort((x, y) => x.days - y.days || x.total - y.total)[0];
       s.rate = (want === "fastest" ? fastest : rates.find((r) => r.serviceCode === want)) ?? rates[0] ?? null;
@@ -1465,6 +1512,14 @@ function buildLabelForm(root, o, presets, opts) {
         h("div", { class: "row", style: { gap: "8px" } },
           paid !== null ? h("span", { class: "small muted" }, `Margin = ${money(paid, "USD")} paid − label`) : null,
           h("button", { class: "btn sm ghost icon-only", title: "Refresh rates", "aria-label": "Refresh rates", onclick: () => quote(0) }, icon("refresh")))),
+      s.signature && s.redoCompare ? (() => {
+        const save = redoSaving({ total: cheapest }, s.redoCompare);
+        return h("div", { class: "notice redo-compare" + (save >= REDO_SAVE_MIN ? " info" : ""), style: { marginBottom: "10px" } },
+          h("b", {}, `Redo: ${money(s.redoCompare.total, "USD")}`), ` for ${s.redoCompare.serviceName.replace(/ · Redo$/, "")} without a signature — `,
+          save >= REDO_SAVE_MIN
+            ? [`${money(save, "USD")} less than the cheapest here. To keep the signature, buy this label on `, h("a", { href: REDO_SITE, target: "_blank", rel: "noopener" }, "Redo's site"), " and add it there."]
+            : save > 0 ? `only ${money(save, "USD")} less — buying here keeps the signature.` : "no cheaper than buying here.");
+      })() : null,
       h("div", { class: "rates", role: "radiogroup" }, s.rates.map((r) => {
         const margin = paid !== null ? paid - r.total : null;
         return h("div", {

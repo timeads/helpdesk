@@ -21,6 +21,7 @@ import { sweepChats } from "./lib/chat";
 import { dailyRefresh } from "./lib/site-knowledge";
 import { autoMergeTick } from "./lib/kb-merge";
 import { suggestTick } from "./lib/suggest";
+import { redoSignatureWatch } from "./lib/redo";
 
 const app = new Hono<AppEnv>();
 
@@ -93,6 +94,7 @@ export default {
         sweepChats(merged).catch((e) => console.error("Chat sweep failed", e)),
         dailyRefresh(merged).catch((e) => console.error("Website knowledge refresh failed", e)),
         autoMergeTick(merged).catch((e) => console.error("Knowledge base auto-merge failed", e)),
+        redoSignatureWatch(merged).catch((e) => console.error("Redo signature check failed", e)), // once a day
       ])
         .then(() => suggestTick(merged).catch((e) => console.error("Suggested replies failed", e))) // after mail sync, so new emails are in
         .then(() => runBackfill(merged).catch((e) => console.error("Backfill failed", e))),

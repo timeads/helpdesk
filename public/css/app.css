@@ -1467,3 +1467,5 @@ a.view-chip { text-decoration: none; }
 .schema-type ul { margin: 4px 0 0; padding-left: 18px; }
 .schema-type li { margin: 2px 0; }
 .schema-report code { font-size: 12px; }
+.sig-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px; border-left: 3px solid var(--ochre); }
+.redo-line { margin-top: 2px; white-space: nowrap; }

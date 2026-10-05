@@ -4,7 +4,7 @@ import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrd
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
-import { redoConfigured } from "../lib/redo";
+import { getRedoRates, redoConfigured, type SignatureWatch } from "../lib/redo";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles, type Customs } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
@@ -184,11 +184,13 @@ const VIEWS: Record<string, (o: Described) => boolean> = {
   payment_pending: (o) => o.paymentPending && !o.hasLabel,
   on_hold: (o) => !!o.hold && !o.hasLabel,
   international: (o) => o.international && !o.hasLabel && !o.pickup,
+  signature: (o) => !o.hold && !o.paymentPending && !o.hasLabel && !o.pickup && !!o.plan.signature,
   all: () => true,
 };
 
 shipping.get("/status", async (c) =>
-  c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), redo: redoConfigured(c.env), shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
+  c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), redo: redoConfigured(c.env),
+    redoSignature: redoConfigured(c.env) ? await getSetting<SignatureWatch | null>(c.env, "redo_signature_watch", null) : null, shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
 );
 
 /** The fulfillment queue: every open, unshipped order with its plan, plus per-view counts. */
@@ -476,8 +478,18 @@ shipping.post("/rates", async (c) => {
     ];
     return c.json({ rates: rates.sort((a, b) => a.total - b.total) });
   }
-  const rates = await getRates(c.env, await shipFrom(c.env), validAddress(body.to), validParcels(body.parcels), validSignature(body.signature), customs);
-  return c.json({ rates });
+  const from = await shipFrom(c.env);
+  const to = validAddress(body.to);
+  const parcels = validParcels(body.parcels);
+  const signature = validSignature(body.signature);
+  // Orders that need a signature can't use Redo here; its best price without one is shown for comparison
+  const [rates, redo] = await Promise.all([
+    getRates(c.env, from, to, parcels, signature, customs),
+    signature && redoConfigured(c.env)
+      ? getRedoRates(c.env, from, to, parcels, undefined, customs).then((r) => r.sort((a, b) => a.total - b.total)[0] ?? null).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  return c.json({ rates, redo: redo ? { serviceName: redo.serviceName, total: redo.total, days: redo.days } : null });
 });
 
 /** Buy a label for one order (or none) with the box and service chosen in the slideout. */

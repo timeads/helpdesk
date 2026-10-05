@@ -321,3 +321,24 @@ export async function redoSchema(env: Env, look = /signat|confirm|adult|insur|op
   const matches = types.flatMap((t) => t.fields.filter((f) => look.test(`${f.name} ${f.description ?? ""} ${(f.values ?? []).join(" ")}`)).map((f) => `${t.name}.${f.name}${f.values ? `: ${f.values.join(", ")}` : ` (${f.type})`}`));
   return { operations: ops.map((o) => ({ name: o.name, description: o.description, args: o.args.map((a) => ({ name: a.name, type: typeName(a.type), description: a.description })) })), types, matches };
 }
+
+// ---------------------------------------------------------------- Watching for signature support
+
+export interface SignatureWatch { checkedAt: string; found: string[]; foundAt: string | null; error: string | null }
+
+/** Once a day: does Redo's label API take a signature option yet? (Redo has it in their developer queue.) */
+export async function redoSignatureWatch(env: Env, now = Date.now()): Promise<SignatureWatch | null> {
+  if (!redoConfigured(env)) return null;
+  const { getSetting, setSetting } = await import("./util");
+  const prev = await getSetting<SignatureWatch | null>(env, "redo_signature_watch", null);
+  if (prev && now - Date.parse(prev.checkedAt) < 23 * 3600_000) return prev;
+  let next: SignatureWatch;
+  try {
+    const r = await redoSchema(env, /signat|adult/i);
+    next = { checkedAt: new Date(now).toISOString(), found: r.matches, foundAt: r.matches.length ? prev?.foundAt ?? new Date(now).toISOString() : null, error: null };
+  } catch (e) {
+    next = { ...(prev ?? { found: [], foundAt: null }), checkedAt: new Date(now).toISOString(), error: (e as Error).message.slice(0, 200) };
+  }
+  await setSetting(env, "redo_signature_watch", next);
+  return next;
+}
