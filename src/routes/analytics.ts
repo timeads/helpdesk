@@ -1,7 +1,15 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { requireAdmin } from "../lib/auth";
+import { usageReport } from "../lib/usage";
 
 const analytics = new Hono<AppEnv>();
+
+/** What the AI features cost: today, this month, the last 30 days, and by feature and model. */
+analytics.get("/ai-usage", async (c) => {
+  requireAdmin(c);
+  return c.json(await usageReport(c.env));
+});
 
 const median = (xs: number[]) => {
   if (!xs.length) return null;

@@ -35,17 +35,30 @@
 :host { display: block; font: inherit; color: inherit; text-align: left; }
 [hidden] { display: none !important; }
 * { box-sizing: border-box; }
-.box { border: 1px solid rgba(0,0,0,.14); border-radius: 14px; padding: 16px; background: rgba(255,255,255,.6); }
-textarea, select { font: inherit; color: #222; background: #fff; border: 1px solid rgba(0,0,0,.2); border-radius: 10px; padding: 12px 14px; width: 100%; }
-textarea { resize: vertical; min-height: 84px; font-size: 16px; line-height: 1.45; }
-textarea:focus, select:focus, button:focus-visible, a:focus-visible { outline: 3px solid ${color}; outline-offset: 2px; }
-.row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
-select { width: auto; flex: 1 1 200px; padding: 10px 12px; font-size: 15px; }
-.go { font: inherit; font-weight: 700; background: ${color}; color: #fff; border: 0; border-radius: 999px; padding: 11px 22px; cursor: pointer; }
+.box { position: relative; border: 1px solid rgba(0,0,0,.1); border-top: 4px solid ${accent}; border-radius: 16px; padding: 22px 24px 20px; background: #fff; color: #222; box-shadow: 0 8px 28px rgba(0,0,0,.06); }
+@media (max-width: 560px) { .box { padding: 18px 16px; } }
+.eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #1a1a1a; background: color-mix(in srgb, ${accent} 20%, #fff); border-radius: 999px; padding: 4px 10px; }
+.eyebrow svg { width: 14px; height: 14px; }
+.title { font-size: 1.3em; font-weight: 700; line-height: 1.25; margin: 10px 0 4px; color: #1a1a1a; }
+.help { font-size: .95em; color: #555; margin: 10px 0 14px; line-height: 1.45; }
+textarea, select { font: inherit; color: #222; background: #fff; border: 1.5px solid rgba(0,0,0,.18); border-radius: 12px; padding: 14px 16px; width: 100%; }
+textarea { resize: vertical; min-height: 96px; font-size: 17px; line-height: 1.45; }
+textarea::placeholder { color: #8a8a8a; }
+textarea:focus, select:focus { border-color: ${color}; }
+textarea:focus, select:focus, button:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, ${accent} 45%, transparent); outline-offset: 1px; }
+.row { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 4px; flex: 0 1 300px; min-width: 200px; }
+.field span { font-size: 12.5px; font-weight: 600; color: #555; }
+select { padding: 10px 12px; font-size: 15px; }
+.go { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 16px; font-weight: 700; background: ${color}; color: #fff; border: 0; border-radius: 999px; padding: 12px 26px; cursor: pointer; }
+.go svg { width: 16px; height: 16px; }
 .go:disabled { opacity: .55; cursor: default; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.chip { font: inherit; font-size: 14px; background: transparent; color: inherit; border: 1px solid rgba(0,0,0,.2); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
-.chip:hover { border-color: ${color}; }
+@media (max-width: 560px) { .field { flex: 1 1 100%; } .go { width: 100%; justify-content: center; } }
+.popular { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(0,0,0,.08); }
+.popular-label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #777; margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: inherit; font-size: 14px; background: color-mix(in srgb, ${accent} 12%, #fff); color: #1a1a1a; border: 1px solid transparent; border-radius: 999px; padding: 7px 14px; cursor: pointer; }
+.chip:hover { border-color: ${accent}; background: color-mix(in srgb, ${accent} 20%, #fff); }
 .hp { position: absolute; left: -9999px; width: 1px; height: 1px; }
 .err { color: #b42318; margin-top: 10px; font-size: 15px; }
 .out { margin-top: 18px; }
@@ -99,14 +112,22 @@ ol.steps b { color: #1a1a1a; }
     root.append(el("style", {}, CSS));
 
     const q = el("textarea", { "aria-label": "Describe your problem or ask a question", maxlength: "800", placeholder });
-    const machine = el("select", { "aria-label": "Your machine (optional)" }, el("option", { value: "" }, "Your machine (optional)"));
+    const machine = el("select", {}, el("option", { value: "" }, "Choose or skip"));
     const hp = el("input", { class: "hp", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
     const go = el("button", { class: "go", type: "submit" }, "Ask");
     const err = el("div", { class: "err", role: "alert" });
     const out = el("div", { class: "out", "aria-live": "polite" });
     const examples = ["My machine keeps skipping stitches", "Which machine should I buy?", "When is the next class?", "How do I finish the back of a rug?"];
-    const chips = el("div", { class: "chips" }, examples.map((t) => el("button", { type: "button", class: "chip", onclick: () => { q.value = t; ask(); } }, t)));
-    const form = el("form", { class: "box" }, q, el("div", { class: "row" }, machine, go), hp, chips, err);
+    const chips = el("div", { class: "popular" }, el("div", { class: "popular-label" }, "Popular questions"),
+      el("div", { class: "chips" }, examples.map((t) => el("button", { type: "button", class: "chip", onclick: () => { q.value = t; ask(); } }, t))));
+    const sparkle = () => { const n = document.createElementNS("http://www.w3.org/2000/svg", "svg"); n.setAttribute("viewBox", "0 0 24 24"); n.setAttribute("aria-hidden", "true"); n.innerHTML = '<path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z" fill="currentColor"/>'; return n; };
+    go.prepend(sparkle());
+    const form = el("form", { class: "box" },
+      el("span", { class: "eyebrow" }, sparkle(), "Ask us anything"),
+      el("p", { class: "help" }, "Describe a problem or ask a question — about your machine, what to buy, or our classes. We'll answer from our guides and link the ones to read."),
+      q,
+      el("div", { class: "row" }, el("label", { class: "field" }, el("span", {}, "Your machine (optional)"), machine), go),
+      hp, chips, err);
     root.append(form, out);
 
     try { q.value = new URL(location.href).searchParams.get("q") || ""; } catch { /* old browsers */ } // links from the old search

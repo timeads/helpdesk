@@ -85,6 +85,73 @@ function weeklyChart(rows) {
     rows.length ? chart : h("p", { class: "muted" }, "No labels in this period."), table);
 }
 
+/** AI usage: what the AI features cost (priced from each response's token counts). */
+function aiUsageCard(u) {
+  const cents = (n) => (n > 0 && n < 0.995 ? `${(n * 100).toFixed(n < 0.1 ? 1 : 0)}¢` : usd(n));
+  const W = 720, H = 200, P = { l: 52, r: 12, t: 12, b: 28 };
+  const max = Math.max(0.01, ...u.days.map((d) => d.cost));
+  const step = niceStep(max);
+  const top = Math.ceil(max / step) * step;
+  const y = (v) => P.t + (H - P.t - P.b) * (1 - v / top);
+  const band = (W - P.l - P.r) / u.days.length;
+  const bw = Math.min(16, band - 4);
+  const tip = h("div", { class: "chart-tip", hidden: true });
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img", "aria-label": "AI cost per day, last 30 days" });
+  for (let v = 0; v <= top + 1e-9; v += step) {
+    svg.append(s("line", { x1: P.l, x2: W - P.r, y1: y(v), y2: y(v), class: "grid" }), s("text", { x: P.l - 8, y: y(v) + 4, class: "axis", "text-anchor": "end" }, cents(v)));
+  }
+  u.days.forEach((d, i) => {
+    const x = P.l + band * i + (band - bw) / 2;
+    const hgt = Math.max(0, y(0) - y(d.cost));
+    const rad = Math.min(4, hgt / 2, bw / 2);
+    if (hgt > 0) svg.append(s("path", { class: "s1", d: `M${x},${y(0)} V${y(d.cost) + rad} Q${x},${y(d.cost)} ${x + rad},${y(d.cost)} H${x + bw - rad} Q${x + bw},${y(d.cost)} ${x + bw},${y(d.cost) + rad} V${y(0)} Z` }));
+    const label = new Date(d.day + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (i % 5 === 0 || i === u.days.length - 1) svg.append(s("text", { x: P.l + band * i + band / 2, y: H - 8, class: "axis", "text-anchor": "middle" }, label));
+    const hit = s("rect", { x: P.l + band * i, y: P.t, width: band, height: H - P.t - P.b, class: "hit", tabindex: 0 });
+    const show = () => {
+      tip.hidden = false;
+      mount(tip, h("b", {}, label), h("div", {}, h("i", { class: "sw s1" }), `AI cost ${cents(d.cost)}`));
+      const box = svg.getBoundingClientRect();
+      const cx = ((P.l + band * i + band / 2) / W) * box.width;
+      tip.style.left = `${Math.min(box.width - 190, Math.max(0, cx - 95))}px`;
+      tip.style.top = "0px";
+    };
+    hit.addEventListener("mouseenter", show);
+    hit.addEventListener("focus", show);
+    hit.addEventListener("mouseleave", () => (tip.hidden = true));
+    hit.addEventListener("blur", () => (tip.hidden = true));
+    svg.append(hit);
+  });
+  svg.append(s("line", { x1: P.l, x2: W - P.r, y1: y(0), y2: y(0), class: "base" }));
+  const chart = h("div", { class: "chart-wrap" }, svg, tip);
+  const table = h("table", { class: "tbl", hidden: true },
+    h("thead", {}, h("tr", {}, h("th", {}, "Day"), h("th", {}, "AI cost"))),
+    h("tbody", {}, u.days.map((d) => h("tr", {}, h("td", {}, d.day), h("td", { class: "num" }, cents(d.cost))))));
+  const toggle = h("button", { class: "btn sm ghost" }, "Show table");
+  toggle.onclick = () => { table.hidden = !table.hidden; chart.hidden = !table.hidden; toggle.textContent = table.hidden ? "Show table" : "Show chart"; };
+  const fmax = Math.max(1e-9, ...u.features.map((f) => f.cost));
+  const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
+  return [
+    h("div", { class: "kpis" },
+      tile("AI today", cents(u.today), "so far today (UTC)"),
+      tile("AI this month", cents(u.month), `${u.monthCalls.toLocaleString()} calls · ${tokens(u.monthTokens)} tokens`),
+      tile("Projected month", cents(u.projected), "at this month's pace"),
+      tile("Last month", cents(u.prevMonth), "for comparison")),
+    h("div", { class: "grid2 analytics-2" },
+      h("section", { class: "card" },
+        h("div", { class: "row", style: { justifyContent: "space-between" } }, h("h2", {}, "AI cost per day"), toggle),
+        u.days.some((d) => d.cost > 0) ? chart : h("p", { class: "muted" }, "No AI use recorded yet — it starts counting from this update."), table),
+      h("section", { class: "card" }, h("h2", {}, "This month by feature"),
+        u.features.length ? h("div", { class: "hbars" }, u.features.map((f) => h("div", { class: "hbar-row ai", title: `${f.name}: ${cents(f.cost)} · ${f.calls} calls · ${tokens(f.tokens)} tokens` },
+          h("div", { class: "hbar-label" }, f.name),
+          h("div", { class: "hbar-track" }, h("i", { style: { width: `${(f.cost / fmax) * 100}%` } })),
+          h("div", { class: "num small" }, `${f.calls} call${f.calls === 1 ? "" : "s"}`),
+          h("div", { class: "num" }, cents(f.cost))))) : h("p", { class: "muted" }, "Nothing yet this month."),
+        u.models.length ? h("p", { class: "small muted", style: { marginTop: "12px" } }, "Models: ", u.models.map((m) => `${m.name} ${cents(m.cost)}`).join(" · ")) : null,
+        h("p", { class: "small muted" }, "Estimated from each response's token counts at Anthropic's list prices; your Anthropic bill is the final word."))),
+  ];
+}
+
 function niceStep(max) {
   const raw = max / 4;
   const pow = 10 ** Math.floor(Math.log10(raw));
@@ -158,6 +225,7 @@ export function renderAnalytics(main) {
     const c = a.shipping.current;
     const p = a.shipping.previous;
     const sp = a.support;
+    const aiEl = h("div", { class: "stack", style: { gap: "16px" } });
     mount(body,
       h("div", { class: "kpis" },
         tile("Shipping margin", h("span", { class: c.margin >= 0 ? "pos" : "neg" }, `${c.margin >= 0 ? "+" : "−"}${usd(Math.abs(c.margin))}`), "collected − label spend", delta(c.margin, p.margin, { fmt: usd })),
@@ -194,7 +262,9 @@ export function renderAnalytics(main) {
         tile("Replies per ticket", sp.avgTouches == null ? "—" : sp.avgTouches.toFixed(1), "average for resolved tickets"),
         tile("One-touch", sp.oneTouchRate == null ? "—" : `${Math.round(sp.oneTouchRate * 100)}%`, "resolved with a single reply")),
       h("div", { class: "grid2 analytics-2" }, heatmapCard(sp.heatmap), teamCard(sp.team)),
+      aiEl,
     );
+    api("/analytics/ai-usage").then((u) => mount(aiEl, h("h2", { class: "analytics-h" }, "AI usage"), aiUsageCard(u))).catch(() => mount(aiEl));
   };
   load().catch((e) => toast(e.message, true));
   return () => {};

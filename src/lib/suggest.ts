@@ -100,7 +100,7 @@ export async function suggestReplies(env: Env, ticketId: number, agentName = "th
     const { results: notes } = await env.DB.prepare("SELECT body FROM notes WHERE ticket_id = ? ORDER BY created_at").bind(ticketId).all<{ body: string }>();
     const recent = msgs.slice(-6);
     const about = `${t.subject}\n${recent.map((m) => `${m.direction === "in" ? "Customer" : "Us"}: ${m.body_text.slice(0, 1500)}`).join("\n")}`.slice(-5000);
-    const [pick, { orders, customerName }] = await Promise.all([pickSources(env, "", about, "").catch(() => null), ordersFor(env, t.customer_email)]);
+    const [pick, { orders, customerName }] = await Promise.all([pickSources(env, "", about, "", "Suggested replies").catch(() => null), ordersFor(env, t.customer_email)]);
     const wantProducts = !!pick && ["buy", "stock", "general"].includes(pick.kind);
     const products = wantProducts || asksAboutStock(about) ? await askProducts(env).catch(() => [] as Product[]) : [];
     const stock = pick?.kind === "stock" || asksAboutStock(about)
@@ -117,7 +117,7 @@ export async function suggestReplies(env: Env, ticketId: number, agentName = "th
       `<conversation subject="${t.subject.replace(/"/g, "'")}">\n${thread}\n</conversation>`,
       "Write the reply options for the customer's latest email.",
     ].filter(Boolean).join("\n\n");
-    const out = await ask<{ options: { label: string; body: string; article_ids: string[]; product_handles: string[] }[] }>(env, [{ type: "text", text }], SCHEMA, "low", 6000, SYSTEM);
+    const out = await ask<{ options: { label: string; body: string; article_ids: string[]; product_handles: string[] }[] }>(env, [{ type: "text", text }], SCHEMA, "low", 6000, SYSTEM, "Suggested replies");
     const options = (out.options ?? []).slice(0, 3).map((o) => {
       const links = linksBlock(o.article_ids ?? [], o.product_handles ?? [], pick?.chosen ?? [], products);
       return { label: String(o.label).trim().slice(0, 40) || "Reply", body: `${String(o.body).trim()}${links ? `\n\n${links}` : ""}`.slice(0, 8000) };

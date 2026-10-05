@@ -4,6 +4,7 @@ import { asksAboutStock, incomingStock, stockText } from "./stock";
 import type { Env } from "../env";
 import { HttpError, sniffImageType } from "./util";
 import { manualKnowledge } from "./manual";
+import { recordUsage } from "./usage";
 import { kbForAI } from "./kb";
 
 export const aiConfigured = (env: Env) => !!env.ANTHROPIC_API_KEY;
@@ -63,6 +64,7 @@ export async function draftReply(env: Env, input: DraftInput): Promise<string> {
             fallbacks: "default" as const,
           }),
     });
+    await recordUsage(env, "Reply drafts", response.model, response.usage);
     if (response.stop_reason === "refusal") throw new HttpError(422, "The AI declined to draft this one — please write it manually.");
     const text = response.content
       .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
@@ -127,6 +129,7 @@ export async function ticketInsights(env: Env, subject: string, thread: DraftInp
       messages: [{ role: "user", content: `<conversation subject="${subject.replace(/"/g, "'")}">\n${convo.slice(0, 30000)}\n</conversation>` }],
       output_config: { format: { type: "json_schema", schema: INSIGHTS_SCHEMA }, ...(model.startsWith("claude-haiku") ? {} : { effort: "low" as const }) },
     });
+    await recordUsage(env, "Ticket insights", response.model, response.usage);
     if (response.stop_reason === "refusal") throw new HttpError(422, "The AI declined to summarise this ticket.");
     const text = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
     return JSON.parse(text) as Insights;
@@ -212,7 +215,7 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const about = input.transcript.slice(-6).map((m) => `${m.from === "visitor" ? "Customer" : "Us"}: ${m.text}`).join("\n").slice(-4000);
   // Same source picking as the learn hub's Ask box; the old keyword match is the fallback
-  const pick = await pickSources(env, "", about, "").catch(() => null);
+  const pick = await pickSources(env, "", about, "", "Website chat").catch(() => null);
   const wantProducts = !!pick && (pick.kind === "buy" || pick.kind === "stock" || pick.kind === "general");
   const [knowledge, macros, articles, products] = await Promise.all([
     knowledgeText(env),
@@ -254,6 +257,7 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
       output_config: { format: { type: "json_schema", schema: CHAT_SCHEMA }, ...(isHaiku ? {} : { effort: "low" as const }) },
       ...(isHaiku ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
     });
+    await recordUsage(env, "Website chat", response.model, response.usage);
     if (response.stop_reason === "refusal") return { reply: "Let me get a teammate to help with this one.", handoff: true, reason: "The AI declined to answer" };
     const out = response.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text").map((b) => b.text).join("");
     const parsed = JSON.parse(out) as ChatAnswer & { article_ids?: string[]; products?: { handle: string; why: string }[] };

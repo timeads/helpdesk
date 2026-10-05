@@ -48,7 +48,7 @@ function finishBody(written: string, sources: string[]): string {
 
 async function write(env: Env, prompt: string, material: string): Promise<Written> {
   const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: material }, { type: "text", text: prompt }];
-  const r = await ask<Written>(env, content, ARTICLE_SCHEMA, "medium", 16000, EDITOR_SYSTEM);
+  const r = await ask<Written>(env, content, ARTICLE_SCHEMA, "medium", 16000, EDITOR_SYSTEM, "Knowledge base merges");
   if (!textOf(r.body_html ?? "")) throw new HttpError(502, "The AI returned an empty article");
   return r;
 }
@@ -88,7 +88,7 @@ export async function findDuplicates(env: Env): Promise<DuplicateGroup[]> {
     env,
     [{ type: "text", text: `<articles>\n${index}\n</articles>` },
       { type: "text", text: "Group the articles that are duplicates or near-duplicates — the same question or subject, where one good article would serve customers better than several. Don't group articles that are merely related (e.g. two different machines, or setup vs. troubleshooting). Leave everything else out." }],
-    GROUPS_SCHEMA, "medium", 8000, EDITOR_SYSTEM,
+    GROUPS_SCHEMA, "medium", 8000, EDITOR_SYSTEM, "Knowledge base merges",
   );
   const ids = new Set(all.map((a) => a.id));
   const used = new Set<string>();
@@ -188,7 +188,7 @@ export async function integrateSuggestions(env: Env, agentId: number | null, art
       env,
       [{ type: "text", text: `<articles>\n${index}\n</articles>\n\n<suggestions>\n${loose.map((s) => `[${s.id}] ${s.title}: ${textOf(s.content_html).slice(0, 600)}`).join("\n")}\n</suggestions>` },
         { type: "text", text: "For each suggestion, pick the existing article whose subject it belongs in, or give a new article title when none fits." }],
-      ROUTE_SCHEMA, "low", 3000, EDITOR_SYSTEM,
+      ROUTE_SCHEMA, "low", 3000, EDITOR_SYSTEM, "Knowledge base merges",
     );
     const newGroups = new Map<string, { title: string; topic: string | null; ids: number[]; html: string[] }>();
     for (const s of loose) {

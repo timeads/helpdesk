@@ -228,7 +228,7 @@ export async function kbScanBatch(env: Env, size = 6) {
     { type: "text", text: "Suggest additions or corrections to the knowledge base from these conversations. Prefer adding to an existing article; suggest a new article only for a subject none covers. Combine conversations that teach the same thing into one suggestion." },
   ];
   const r = await ask<{ suggestions: { article_id: string; topic_id: string; title: string; content_html: string; reason: string; ticket_ids: number[] }[] }>(
-    env, content, SUGGEST_SCHEMA, "low", 6000, KB_SYSTEM,
+    env, content, SUGGEST_SCHEMA, "low", 6000, KB_SYSTEM, "Knowledge base updates",
   );
   const known = new Set(articles.map((a) => a.id));
   const topicIds = new Set(topics.map((t) => t.id));

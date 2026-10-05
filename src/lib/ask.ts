@@ -205,14 +205,14 @@ const norm = (q: string, machine: string) => `${machine}|${q.toLowerCase().repla
 
 /** Answers one question. Returns what the visitor sees plus the source ids used (for the log). */
 /** Step 1 (shared with the website chat): what kind of question it is, and the sources most likely to answer it. */
-export async function pickSources(env: Env, origin: string, question: string, machine: string): Promise<{ kind: AskAnswer["kind"]; chosen: Source[] }> {
+export async function pickSources(env: Env, origin: string, question: string, machine: string, feature = "Help & Guides"): Promise<{ kind: AskAnswer["kind"]; chosen: Source[] }> {
   const sources = await askSources(env, origin);
   const catalog = sources.map((s) => `${s.id} [${s.kind}] ${s.title} — ${s.blurb}`).join("\n").slice(0, 120_000);
   const who = machine ? `Their machine: ${machine}.` : "Their machine: not given.";
   const pick = await ask<{ kind: AskAnswer["kind"]; source_ids: string[] }>(env, [{
     type: "text",
     text: `<sources>\n${catalog}\n</sources>\n\n<question>${question}</question>\n${who}\n\nClassify the question and pick the sources that would answer it.`,
-  }], PICK_SCHEMA, "low", 1500, SYSTEM);
+  }], PICK_SCHEMA, "low", 1500, SYSTEM, feature);
   const byId = new Map(sources.map((s) => [s.id, s]));
   return { kind: pick.kind, chosen: [...new Set(pick.source_ids)].map((id) => byId.get(id)).filter((s): s is Source => !!s).slice(0, 6) };
 }
@@ -245,7 +245,7 @@ export async function answerQuestion(env: Env, origin: string, question: string,
     ANSWER_RULES,
   ].filter(Boolean);
   const out = await ask<{ answer: string; steps: { text: string; source_ids: string[] }[]; cite_ids: string[]; products: { handle: string; why: string }[]; classes: { title: string; why: string }[]; ask_back: string; handoff: boolean }>(
-    env, [{ type: "text", text: parts.join("\n\n") }], ANSWER_SCHEMA, "low", 3000, SYSTEM);
+    env, [{ type: "text", text: parts.join("\n\n") }], ANSWER_SCHEMA, "low", 3000, SYSTEM, "Help & Guides");
   return { answer: shapeAnswer(kind, out, chosen, products, classes), used: chosen.map((s) => s.id) };
 }
 

@@ -4,6 +4,7 @@
 // also feed AI reply drafts.
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
+import { recordUsage } from "./usage";
 import { HttpError, sniffImageType } from "./util";
 import { getAttachment } from "./gmail";
 
@@ -113,7 +114,7 @@ function client(env: Env) {
   return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 }
 
-export async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], schema: Record<string, unknown>, effort: "low" | "medium", maxTokens: number, system = SYSTEM): Promise<T> {
+export async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], schema: Record<string, unknown>, effort: "low" | "medium", maxTokens: number, system = SYSTEM, feature = "Repair manual"): Promise<T> {
   const model = env.AI_MODEL || "claude-opus-5-5";
   try {
     const r = await client(env).messages.create({
@@ -123,6 +124,7 @@ export async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], s
       messages: [{ role: "user", content }],
       output_config: { format: { type: "json_schema", schema }, ...(model.startsWith("claude-haiku") ? {} : { effort }) },
     });
+    await recordUsage(env, feature, r.model, r.usage);
     if (r.stop_reason === "refusal") throw new HttpError(422, "The AI declined to process these conversations");
     if (r.stop_reason === "max_tokens") throw new HttpError(502, "The AI ran out of room — try again");
     const text = r.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
