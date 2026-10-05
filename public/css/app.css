@@ -1463,3 +1463,7 @@ a.view-chip { text-decoration: none; }
 .folder-chip svg { width: 12px; height: 12px; margin-right: 3px; }
 .folder-row { flex-wrap: nowrap; gap: 8px; }
 .folder-row > svg { color: var(--text-3); flex: none; }
+.schema-report { max-height: 70vh; overflow: auto; }
+.schema-type ul { margin: 4px 0 0; padding-left: 18px; }
+.schema-type li { margin: 2px 0; }
+.schema-report code { font-size: 12px; }

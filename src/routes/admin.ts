@@ -3,7 +3,7 @@ import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { createFolder, deleteFolder, listFolders, renameFolder } from "../lib/folders";
 import { graph, metaConfigured } from "../lib/meta";
-import { redoConfigured, testRedo } from "../lib/redo";
+import { redoConfigured, redoSchema, testRedo } from "../lib/redo";
 import { shipFrom } from "../lib/fulfillment";
 import { DEFAULT_RULES, getMailbox, runBackfill, type BackfillJob, type MailRules } from "../lib/gmail";
 import { shopifyConfigured } from "../lib/shopify";
@@ -441,6 +441,17 @@ admin.put("/credentials", async (c) => {
 });
 
 /** Checks the saved credentials for one service with a harmless read-only call. */
+/** What Redo's shipping API accepts (its own description of itself), to find options like signature confirmation. */
+admin.get("/credentials/redo/schema", async (c) => {
+  requireAdmin(c);
+  if (!redoConfigured(c.env)) throw new HttpError(409, "Add the Redo store ID and API token first");
+  try {
+    return c.json(await redoSchema(c.env));
+  } catch (e) {
+    throw new HttpError(502, /introspection|not allowed|disabled/i.test((e as Error).message) ? "Redo doesn't let its API describe itself — ask Redo support whether labels can require a signature" : (e as Error).message);
+  }
+});
+
 admin.post("/credentials/test/:group", async (c) => {
   requireAdmin(c);
   const env = await withCredentials(c.env.RAW_ENV ?? c.env);

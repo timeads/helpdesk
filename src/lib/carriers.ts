@@ -13,7 +13,9 @@ export async function getAllRates(env: Env, from: Address, to: Address, parcels:
   const jobs: Promise<Rate[]>[] = [];
   if (upsConfigured(env)) jobs.push(getUpsRates(env, from, to, parcels, signature, customs).then((r) => r.map((x) => ({ ...x, carrier: "UPS" }))));
   if (easypostConfigured(env)) jobs.push(getEasypostRates(env, from, to, parcels, signature, customs));
-  if (redoConfigured(env)) jobs.push(getRedoRates(env, from, to, parcels, signature, customs));
+  // Redo labels can't require a signature yet: leave Redo out when the order needs one
+  if (redoConfigured(env) && !signature) jobs.push(getRedoRates(env, from, to, parcels, signature, customs));
+  if (!jobs.length && redoConfigured(env)) throw new HttpError(409, "Redo labels can't require a signature yet — set Delivery signature to “No signature” to see Redo rates");
   if (!jobs.length) throw new HttpError(409, "Connect UPS, EasyPost or Redo in Settings → Connections to get rates");
   const settled = await Promise.allSettled(jobs);
   const rates = settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));

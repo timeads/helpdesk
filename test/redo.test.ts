@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buyRedo, getRedoRates, literal, parseRedoCode, redoServiceName, sniffLabel, voidRedo } from "../src/lib/redo";
+import { buyRedo, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, sniffLabel, voidRedo } from "../src/lib/redo";
 import { getAllRates, purchase, voidLabel } from "../src/lib/carriers";
 
 const env: any = { REDO_API_TOKEN: "tok", REDO_STORE_ID: "6883aef0ba0eed4c392301a2" };
@@ -107,5 +107,30 @@ describe("Redo labels", () => {
     expect(r).toMatchObject({ carrier: "USPS", shipmentId: "redo:sh_9", format: "PDF", cost: 8.15 });
     await expect(voidLabel(env, "redo:sh_9")).rejects.toThrow(/refused to cancel/);
     expect(sniffLabel(new TextEncoder().encode("^XA^FO50,50^XZ"))).toBe("ZPL");
+  });
+
+  it("reads what Redo's API accepts and points out signature options", async () => {
+    const ref = (name: string, kind = "INPUT_OBJECT") => ({ kind: "NON_NULL", name: null, ofType: { kind, name, ofType: null } });
+    answer = (q) => {
+      if (q.includes("__schema")) return { data: { __schema: { queryType: { fields: [] }, mutationType: { fields: [
+        { name: "getShippingLabelQuotes", description: "Quote", args: [{ name: "input", description: null, type: ref("ShipmentRequestInput") }] },
+        { name: "createReturn", description: "not shipping", args: [] },
+      ] } } } };
+      const types: Record<string, any> = {
+        ShipmentRequestInput: { name: "ShipmentRequestInput", kind: "INPUT_OBJECT", description: null, inputFields: [{ name: "options", description: "Extra services", type: { kind: "INPUT_OBJECT", name: "ShipmentOptionsInput", ofType: null } }], enumValues: null },
+        ShipmentOptionsInput: { name: "ShipmentOptionsInput", kind: "INPUT_OBJECT", description: null, inputFields: [{ name: "signatureConfirmation", description: "Require a signature", type: { kind: "ENUM", name: "SignatureConfirmation", ofType: null } }], enumValues: null },
+        SignatureConfirmation: { name: "SignatureConfirmation", kind: "ENUM", description: null, inputFields: null, enumValues: [{ name: "NONE" }, { name: "SIGNATURE" }, { name: "ADULT_SIGNATURE" }] },
+      };
+      const names = [...q.matchAll(/__type\(name: "(\w+)"\)/g)].map((m) => m[1]);
+      return { data: Object.fromEntries(names.map((n, i) => [`t${i}`, types[n] ?? null])) };
+    };
+    const r = await redoSchema(env);
+    expect(r.operations.map((o) => o.name)).toEqual(["getShippingLabelQuotes"]);
+    expect(r.types.map((t) => t.name)).toEqual(["ShipmentRequestInput", "ShipmentOptionsInput", "SignatureConfirmation"]);
+    expect(r.matches).toEqual([
+      "ShipmentRequestInput.options (ShipmentOptionsInput)",
+      "ShipmentOptionsInput.signatureConfirmation (SignatureConfirmation)",
+      "SignatureConfirmation.(values): NONE, SIGNATURE, ADULT_SIGNATURE",
+    ]);
   });
 });

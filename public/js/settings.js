@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { state, applyTheme, refreshViews } from "./app.js";
-import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
+import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput, modal } from "./ui.js";
 import { printSettings, resetZebra, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
 import { slipCard } from "./settings-slip.js";
 import { chatCard } from "./settings-chat.js";
@@ -224,11 +224,25 @@ function credentials(fields, inner) {
       result.replaceChildren(h("span", { class: "badge " + (r.ok ? "good" : "bad"), style: { height: "auto", whiteSpace: "normal", padding: "3px 9px" } }, r.message));
     };
     test.onclick = busy(test, runTest);
+    // Redo: list what its shipping API accepts (signature confirmation and other options)
+    const explore = g.id === "redo" ? h("button", { class: "btn ghost", type: "button" }, "What can Redo labels do?") : null;
+    if (explore) explore.onclick = busy(explore, async () => {
+      const r = await api("/credentials/redo/schema");
+      const block = (title, fields) => h("div", { class: "schema-type" }, h("b", {}, title),
+        h("ul", {}, fields.map((f) => h("li", {}, h("code", {}, f.name), " ", h("span", { class: "muted" }, f.values ? f.values.join(", ") : f.type), f.description ? h("div", { class: "small muted" }, f.description) : null))));
+      modal("Redo shipping API", h("div", { class: "stack schema-report" },
+        h("div", { class: r.matches.length ? "notice info" : "notice" }, r.matches.length
+          ? [h("b", {}, "Options that look relevant (signature, delivery, insurance…):"), h("ul", {}, r.matches.map((m) => h("li", {}, h("code", {}, m))))]
+          : "Nothing about signatures, delivery confirmation or insurance in what Redo's API accepts."),
+        h("p", { class: "small muted", style: { margin: 0 } }, "Read straight from Redo's API with your token — nothing was bought or changed. Screenshot this and send it over if you want an option wired in."),
+        r.operations.map((o) => block(`${o.name}(…)`, o.args)),
+        r.types.map((t) => block(t.name, t.fields))), { width: 720 });
+    });
     return h("div", { class: "macro-row" },
       h("h3", { class: "section", style: { margin: 0 } }, g.title),
       h("p", { class: "muted small", style: { margin: 0, fontFamily: "var(--read)" } }, g.desc),
       h("div", { class: "grid2 cred-grid" }, rows),
-      h("div", { class: "row" }, save, test, result));
+      h("div", { class: "row" }, save, test, explore, result));
   });
   return card("Credentials", "Paste the keys for each service here. They're encrypted before they're stored, and saved secrets are never shown again — only their last four characters.", ...sections);
 }
