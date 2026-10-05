@@ -151,6 +151,9 @@ export function aiError(e: unknown): unknown {
   return new HttpError(502, `AI error: ${msg}`);
 }
 
+/** AI spend on reading the old support email into the manual: shown on its own, not in the monthly estimate. */
+export const BACKLOG_FEATURE = "Repair manual backlog";
+
 interface Classified {
   tickets: { ticket_id: number; is_repair: boolean; topic: string; case_summary: string; outcome: string; media: { ref: string; caption: string }[] }[];
   new_topics: { key: string; title: string; product: string }[];
@@ -160,6 +163,9 @@ interface Classified {
 export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
   const { results: batch } = await env.DB.prepare(candidateSql(false)).bind(...likeParams(), Math.max(1, Math.min(6, size))).all<TicketRow>();
   if (!batch.length) return { read: 0, repairs: 0, topics: [], remaining: 0 };
+  // Reading old conversations is the one-time backlog; new repairs (the last 45 days) are everyday use
+  const newest = Math.max(...batch.map((t) => Date.parse(t.closed_at ?? t.created_at) || 0));
+  const feature = Date.now() - newest > 45 * 86400_000 ? BACKLOG_FEATURE : "Repair manual";
   const { results: topics } = await env.DB.prepare("SELECT id, title, product, summary FROM manual_topics ORDER BY updated_at DESC LIMIT 300")
     .all<{ id: number; title: string; product: string; summary: string }>();
 
@@ -212,7 +218,7 @@ export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
     text: `For each conversation above, decide whether it's a repair (diagnosing or fixing a product problem). For repairs, file it under the existing topic for the same problem on the same product, or a new topic. Several conversations can share a new topic. Pick attachments that would help someone fix the same problem.`,
   });
 
-  const c = await ask<Classified>(env, content, CLASSIFY_SCHEMA, "low", 12000);
+  const c = await ask<Classified>(env, content, CLASSIFY_SCHEMA, "low", 12000, SYSTEM, feature);
 
   // ---- Create new topics, then rewrite every topic that got new cases
   const keyToId = new Map<string, number>();
@@ -254,7 +260,7 @@ export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
 ## Notes
 Keep it practical and specific to the product. Merge duplicate advice. Don't mention customers by name.`,
       ].filter(Boolean).join("\n\n"),
-    }], WRITE_SCHEMA, "medium", 16000);
+    }], WRITE_SCHEMA, "medium", 16000, SYSTEM, feature);
     await env.DB.prepare("UPDATE manual_topics SET title = ?, product = ?, summary = ?, body = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?")
       .bind(w.title.slice(0, 160) || cur.title, w.product.slice(0, 120), w.summary.slice(0, 500), w.body.slice(0, 40000), id).run();
     return { id, title: w.title || cur.title, isNew: created.has(id) };

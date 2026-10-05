@@ -32,3 +32,30 @@ describe("AI usage tracking", () => {
     expect(r.features.map((f) => f.name)).toEqual(["Website chat", "Suggested replies"]);
   });
 });
+
+describe("monthly estimate", () => {
+  it("keeps the one-time backlog out of it, and adds 1–3 new repair emails a month", async () => {
+    const now = new Date("2026-10-20T12:00:00Z");
+    const add = (day: string, feature: string, input: number, output: number) =>
+      env.DB.raw.prepare("INSERT INTO ai_usage (day, feature, model, calls, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?, ?, 'claude-opus-5-5', 1, ?, ?, 0, 0)").run(day, feature, input, output);
+    // Backlog: $40 over two days early in the month (and $10 last month)
+    add("2026-09-28", "Repair manual backlog", 2_500_000, 0);
+    add("2026-10-02", "Repair manual backlog", 5_000_000, 500_000);
+    add("2026-10-03", "Repair manual backlog", 2_500_000, 0);
+    // Everyday: $0.10 a day for the last 14 days
+    for (let d = 7; d <= 20; d++) add(`2026-10-${String(d).padStart(2, "0")}`, "Website chat", 25_000, 0);
+    for (let i = 0; i < 100; i++) env.DB.raw.prepare("INSERT INTO manual_scanned (ticket_id, result) VALUES (?, 'repair')").run(1000 + i);
+    const r = await usageReport(env, now);
+    expect(r.backlog).toMatchObject({ conversations: 100, first: "2026-09-28", last: "2026-10-03", calls: 3 });
+    expect(r.backlog.cost).toBeCloseTo(10 + 30 + 10);
+    expect(r.backlog.perConversation).toBeCloseTo(0.5);
+    expect(r.backlog.month).toBeCloseTo(40);
+    expect(r.everyday.daily).toBeCloseTo(0.1);
+    expect(r.everyday.basisDays).toBe(14);
+    expect(r.month).toBeCloseTo(40 + 1.4);
+    expect(r.projected).toBeCloseTo(40 + 1.4 + 0.1 * 11); // the backlog isn't expected to repeat
+    expect(r.everyday.typical.low).toBeCloseTo(3 + 0.5);
+    expect(r.everyday.typical.high).toBeCloseTo(3 + 1.5);
+    expect(r.features.find((f) => f.name === "Repair manual backlog")!.oneTime).toBe(true);
+  });
+});

@@ -41,6 +41,11 @@ export async function recordUsage(env: Env, feature: string, model: string | und
   }
 }
 
+/** Features that are one-time work, reported on their own and left out of the monthly estimate. */
+export const ONE_TIME = ["Repair manual backlog"];
+/** New repair emails expected each month (they're read into the manual as they come in). */
+export const REPAIRS_PER_MONTH = { low: 1, high: 3 };
+
 /** Spend for the dashboard: today, this month, last 30 days by day, and this month by feature and model. */
 export async function usageReport(env: Env, now = new Date()) {
   const today = now.toISOString().slice(0, 10);
@@ -73,15 +78,42 @@ export async function usageReport(env: Env, now = new Date()) {
   }
   const dayOfMonth = now.getUTCDate();
   const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+
+  // ---- One-time work (reading the old support email into the repair manual), kept out of the estimate
+  const backlogRow = await env.DB.prepare(
+    `SELECT model, SUM(calls) AS calls, SUM(input_tokens) AS i, SUM(output_tokens) AS o, SUM(cache_read_tokens) AS cr, SUM(cache_write_tokens) AS cw,
+            MIN(day) AS first, MAX(day) AS last FROM ai_usage WHERE feature IN (${ONE_TIME.map(() => "?").join(",")}) GROUP BY model`,
+  ).bind(...ONE_TIME).all<{ model: string; calls: number; i: number; o: number; cr: number; cw: number; first: string; last: string }>();
+  const backlogCost = backlogRow.results.reduce((n, r) => n + costOf(r.model, { input: r.i, output: r.o, cacheRead: r.cr, cacheWrite: r.cw }), 0);
+  const read = await env.DB.prepare("SELECT COUNT(*) AS n FROM manual_scanned").first<{ n: number }>().catch(() => null);
+  const conversations = read?.n ?? 0;
+  const perConversation = conversations ? backlogCost / conversations : null;
+  const backlogMonth = results.filter((r) => ONE_TIME.includes(r.feature) && r.day >= monthStart).reduce((n, r) => n + cost(r), 0);
+
+  // ---- Everyday use: the daily rate over the last 14 days (or since tracking began), without the one-time work
+  const first = await env.DB.prepare("SELECT MIN(day) AS d FROM ai_usage").first<{ d: string | null }>();
+  const windowStart = new Date(now.getTime() - 13 * 86400_000).toISOString().slice(0, 10);
+  const basisFrom = first?.d && first.d > windowStart ? first.d : windowStart;
+  const basisDays = Math.max(1, Math.round((Date.parse(today) - Date.parse(basisFrom)) / 86400_000) + 1);
+  const everyday = results.filter((r) => !ONE_TIME.includes(r.feature) && r.day >= basisFrom && r.day <= today).reduce((n, r) => n + cost(r), 0);
+  const daily = everyday / basisDays;
+  // A few new repair emails a month (1–3) still get read into the manual
+  const repairs = perConversation === null ? null : { low: perConversation * REPAIRS_PER_MONTH.low, high: perConversation * REPAIRS_PER_MONTH.high };
+  const typical = { low: daily * 30 + (repairs?.low ?? 0), high: daily * 30 + (repairs?.high ?? 0) };
+
   return {
     today: todayCost,
     month,
-    projected: dayOfMonth ? (month / dayOfMonth) * daysInMonth : month,
+    // This month: what's been spent, plus everyday use for the days left (one-time work isn't expected to repeat)
+    projected: month + daily * Math.max(0, daysInMonth - dayOfMonth),
+    everyday: { daily, basisDays, typical, repairs, perMonthRepairs: REPAIRS_PER_MONTH },
+    backlog: { cost: backlogCost, calls: backlogRow.results.reduce((n, r) => n + r.calls, 0), conversations, perConversation, month: backlogMonth,
+      first: backlogRow.results.reduce<string | null>((m, r) => (!m || r.first < m ? r.first : m), null), last: backlogRow.results.reduce<string | null>((m, r) => (!m || r.last > m ? r.last : m), null) },
     prevMonth,
     monthCalls,
     monthTokens,
     days: [...byDay].map(([day, cost]) => ({ day, cost })),
-    features: [...features].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.cost - a.cost),
+    features: [...features].map(([name, v]) => ({ name, ...v, oneTime: ONE_TIME.includes(name) })).sort((a, b) => b.cost - a.cost),
     models: [...models].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.cost - a.cost),
   };
 }

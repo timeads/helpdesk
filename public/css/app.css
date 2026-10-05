@@ -1470,3 +1470,5 @@ a.view-chip { text-decoration: none; }
 .sig-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px; border-left: 3px solid var(--ochre); }
 .redo-line { margin-top: 2px; white-space: nowrap; }
 .sig-why { flex-basis: 100%; white-space: normal; }
+.kpis.ai-kpis, .kpis.compact { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.backlog-card .kpis { margin-top: 10px; }
