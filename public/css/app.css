@@ -1377,11 +1377,7 @@ a.view-chip { text-decoration: none; }
 .merge-ico { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--select); color: var(--ochre); flex: none; }
 .merge-text { min-width: 0; flex: 1 1 260px; }
 .merge-text .small { margin-top: 2px; }
-.merge-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 16px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .merge-h { font-size: 13px; margin: 16px 0 6px; }
-.merge-rates { display: grid; gap: 6px; }
-.merge-rate { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
-.merge-rate:has(input:checked) { border-color: var(--ochre); background: var(--select); }
 
 /* Shipping → All orders */
 .tbl.history td a { color: var(--ochre-text); text-decoration: underline; }

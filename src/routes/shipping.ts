@@ -22,7 +22,7 @@ import { escapeHtml } from "../lib/mime";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
-import { addressKey, combineOrders, dismissMerge, dismissedMerges, mergeSuggestions } from "../lib/merge";
+import { addressKey, combineOrders, dismissMerge, dismissedMerges, mergeDraftKey, mergeSuggestions } from "../lib/merge";
 
 const shipping = new Hono<AppEnv>();
 const demo = (env: Env) => !shopifyConfigured(env) && env.DEMO_DATA === "1";
@@ -124,7 +124,8 @@ async function idMap(env: Env, sql: string, ids: string[]) {
 }
 
 /** Everything the queue and slideout need about an order, computed once on the server. */
-async function describe(env: Env, all: ShopifyOrder[]) {
+/** `draftKey`: read the saved choices from this key instead of the order id (orders shipping together). */
+async function describe(env: Env, all: ShopifyOrder[], draftKey?: string) {
   const orders = all.map(remaining); // after a partial shipment, only what's still to ship
   const ids = orders.map((o) => o.id);
   const [plans, holds, labelled, slips, drafts, presets, pickups, merged] = await Promise.all([
@@ -132,14 +133,14 @@ async function describe(env: Env, all: ShopifyOrder[]) {
     holdsFor(env, ids),
     idSet(env, "SELECT DISTINCT order_id FROM shipments WHERE status = 'purchased' AND COALESCE(partial, 0) = 0 AND order_id IN (?)", ids),
     idMap(env, "SELECT order_id, printed_at AS v FROM packing_slip_prints WHERE order_id IN (?)", ids),
-    loadDrafts(env, ids),
+    loadDrafts(env, draftKey ? [draftKey] : ids),
     loadPresets(env),
     idMap(env, "SELECT order_id, COALESCE(ready_at, '') || '|' || COALESCE(picked_up_at, '') AS v FROM pickup_status WHERE order_id IN (?)", ids),
     // Shipped together with another order: that order's label covers this one
     idMap(env, "SELECT m.order_id, s.order_name AS v FROM merged_orders m JOIN shipments s ON s.id = m.shipment_id WHERE s.status = 'purchased' AND m.order_id IN (?)", ids),
   ]);
   return orders.map((o) => {
-    const draft = drafts.get(o.id) ?? null;
+    const draft = drafts.get(draftKey ?? o.id) ?? null;
     const base = plans.get(o.id)!;
     const plan = draft ? applyDraft(base, draft, presets, o.lineItems.nodes.map((l) => l.id)) : base;
     const h = holds.get(o.id);
@@ -251,7 +252,7 @@ shipping.get("/orders/:id", async (c) => {
 // ---- Choices saved from the order page (boxes, split, service, address) until a label is bought
 shipping.put("/drafts/:id", async (c) => {
   const id = decodeURIComponent(c.req.param("id"));
-  if (!id.startsWith("gid://shopify/Order/")) throw new HttpError(400, "Unknown order");
+  if (!id.startsWith("gid://shopify/Order/") && !id.startsWith("merge:gid://shopify/Order/")) throw new HttpError(400, "Unknown order");
   const draft = cleanDraft(await c.req.json());
   if (!draft) throw new HttpError(400, "Nothing to save");
   await saveDraft(c.env, id, draft);
@@ -497,9 +498,13 @@ shipping.post("/labels", async (c) => {
     batchId?: string;
     scanVerified?: boolean;
     customs?: unknown;
+    mergeIds?: unknown;
   }>();
-  const found = body.orderId ? (demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) ?? null : await getOrder(c.env, body.orderId)) : null;
-  const order = found ? remaining(found) : null;
+  // Shipping orders together: the combined order (oldest first) holds every item; the rest ride along on its label
+  const group = body.orderId && Array.isArray(body.mergeIds) && body.mergeIds.length ? (await mergeGroup(c.env, [body.orderId, ...body.mergeIds])).orders : null;
+  if (group && (body as any).partial) throw new HttpError(400, "Ship part of an order isn't available when shipping orders together");
+  const found = group ? combineOrders(group) : body.orderId ? (demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) ?? null : await getOrder(c.env, body.orderId)) : null;
+  const order = found ? (group ? found : remaining(found)) : null;
   const partial = cleanPartial((body as any).partial, order);
   const to = validAddress(body.to);
   let customs = customsFor(cleanCustoms(body.customs), partial);
@@ -528,7 +533,12 @@ shipping.post("/labels", async (c) => {
     scanVerified: !!body.scanVerified,
     partial,
   });
-  return c.json(r);
+  if (!group) return c.json(r);
+  const names = group.map((o) => o.name).join(" + ");
+  await c.env.DB.prepare("UPDATE shipments SET order_name = ? WHERE id = ?").bind(names.slice(0, 200), r.id).run();
+  const errors = [...(r.fulfillError ? [`${group[0].name}: ${r.fulfillError}`] : []), ...(await fulfillRiders(c.env, r, group.slice(1), body.notifyCustomer ?? true, !!body.fulfill))];
+  await c.env.DB.prepare("DELETE FROM order_drafts WHERE order_id IN (?, ?)").bind(mergeDraftKey(group.map((o) => o.id)), group[0].id).run();
+  return c.json({ ...r, orderName: names, fulfillError: errors.length ? errors.join("; ") : null });
 });
 
 /**
@@ -623,79 +633,38 @@ async function mergeGroup(env: Env, orderIds: unknown) {
   return { orders: orders.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), described };
 }
 
-/** What shipping together looks like: combined items, planned boxes and weight, and quotes. */
-shipping.post("/merge/preview", async (c) => {
-  const body = await c.req.json<{ orderIds?: unknown }>();
-  const { orders } = await mergeGroup(c.env, body.orderIds);
-  const combined = combineOrders(orders);
-  const plan = (await planOrders(c.env, [combined])).get(combined.id)!;
-  const to = addressFromOrder(combined);
-  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, combined) : undefined;
-  let rates: Awaited<ReturnType<typeof getRates>> = [];
-  let quoteError: string | null = null;
-  if (plan.weightKnown) {
-    try {
-      rates = await getRates(c.env, await shipFrom(c.env), to, plan.boxes.map((b) => b.parcel), plan.signature, customs);
-    } catch (e) {
-      quoteError = (e as Error).message;
-    }
-  }
-  return c.json({ names: orders.map((o) => o.name), items: itemCount(combined), shippingPaid: shippingPaid(combined), plan, rates, quoteError, to });
+/** Orders shipping together as one order for the order page: every item, boxes to adjust, one label. */
+shipping.get("/merge/order", async (c) => {
+  const ids = (c.req.query("ids") ?? "").split(",").filter(Boolean);
+  const { orders } = await mergeGroup(c.env, ids);
+  const key = mergeDraftKey(ids);
+  const [d] = await describe(c.env, [combineOrders(orders)], key);
+  return c.json({ order: { ...d, name: orders.map((o) => o.name).join(" + "), merge: { ids: orders.map((o) => o.id), names: orders.map((o) => o.name), key } } });
 });
 
-/** Buys one label for the group, then marks every order shipped with its tracking numbers. */
-shipping.post("/labels/merged", async (c) => {
-  const body = await c.req.json<{ orderIds?: unknown; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; parcels?: Parcel[] }>();
-  const { orders } = await mergeGroup(c.env, body.orderIds);
-  const combined = combineOrders(orders);
-  const [first, ...rest] = orders;
-  const plan = (await planOrders(c.env, [combined])).get(combined.id)!;
-  const parcels = Array.isArray(body.parcels) && body.parcels.length
-    ? validParcels(body.parcels)
-    : plan.weightKnown
-      ? validParcels(plan.boxes.map((b) => ({ ...b.parcel, presetId: b.preset?.id ?? null, box: b.preset?.name })))
-      : (() => { throw new HttpError(422, "No weight known for these items together — enter the box weight"); })();
-  let to = validAddress(addressFromOrder(combined));
-  const customs = isInternationalAddress(to) ? await buildCustoms(c.env, combined) : undefined;
-  if (customs) {
-    const problems = customsProblems(customs);
-    if (problems.length) throw new HttpError(422, `${problems[0]} — open ${first.name} to fix the customs list`);
-  }
-  const check = await checkAddress(c.env, to);
-  if (check.status === "invalid") throw new HttpError(422, `${check.message} — open ${first.name} to fix the address`);
-  if (check.status === "corrected" || check.status === "ambiguous") throw new HttpError(422, `${check.message} — open ${first.name} to review`);
-  if (check.residential !== null) to = { ...to, residential: check.residential };
-  const rates = await getRates(c.env, await shipFrom(c.env), to, parcels, plan.signature, customs);
-  const rate = chooseRate(rates, !body.policy || body.policy === "rule" ? plan.service ?? "cheapest" : body.policy);
-  const notify = body.notifyCustomer ?? true;
-  const r = await buyLabel(c.env, c.get("agent"), {
-    order: combined, to, parcels, presetId: plan.preset?.id ?? null, rate, signature: plan.signature,
-    labelFormat: labelFormat(body.labelFormat), fulfill: true, notifyCustomer: notify, batchId: body.batchId ?? null, customs,
-  });
-  const names = orders.map((o) => o.name).join(" + ");
-  await c.env.DB.prepare("UPDATE shipments SET order_name = ? WHERE id = ?").bind(names.slice(0, 200), r.id).run();
-  // The other orders ride along: each is marked shipped with the same tracking, so every confirmation email has it
-  const errors: string[] = r.fulfillError ? [`${first.name}: ${r.fulfillError}`] : [];
-  for (const o of rest) {
+/** The orders that rode along on a label: each is marked shipped with its tracking and remembered for voiding. */
+async function fulfillRiders(env: Env, r: { id: number; carrier: string; trackingNumbers: string[] }, riders: ShopifyOrder[], notify: boolean, fulfill = true) {
+  const errors: string[] = [];
+  for (const o of riders) {
     let fid: string | null = null;
     let ok = false;
-    if (r.trackingNumbers[0]) {
+    if (fulfill && r.trackingNumbers[0]) {
       try {
-        const f = demo(c.env) ? null : await fulfillOrder(c.env, o.id, { company: r.carrier, numbers: r.trackingNumbers, urls: r.trackingNumbers.map((n: string) => trackingUrlFor(r.carrier, n)) }, notify);
+        const f = demo(env) ? null : await fulfillOrder(env, o.id, { company: r.carrier, numbers: r.trackingNumbers, urls: r.trackingNumbers.map((n: string) => trackingUrlFor(r.carrier, n)) }, notify);
         fid = f?.id ?? null;
         ok = true;
       } catch (e) {
         errors.push(`${o.name}: ${(e as Error).message}`);
       }
     }
-    await c.env.DB.batch([
-      c.env.DB.prepare("INSERT OR REPLACE INTO merged_orders (order_id, order_name, shipment_id, fulfilled, fulfillment_id) VALUES (?, ?, ?, ?, ?)").bind(o.id, o.name, r.id, ok ? 1 : 0, fid),
-      c.env.DB.prepare("DELETE FROM order_drafts WHERE order_id = ?").bind(o.id),
-      c.env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id),
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR REPLACE INTO merged_orders (order_id, order_name, shipment_id, fulfilled, fulfillment_id) VALUES (?, ?, ?, ?, ?)").bind(o.id, o.name, r.id, ok ? 1 : 0, fid),
+      env.DB.prepare("DELETE FROM order_drafts WHERE order_id = ?").bind(o.id),
+      env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id),
     ]);
   }
-  return c.json({ ...r, orderName: names, serviceName: rate.serviceName, fulfillError: errors.length ? errors.join("; ") : null });
-});
+  return errors;
+}
 
 // ---- In-store pickup: "ready for pickup" (Shopify emails the customer), then "picked up" (fulfilled)
 shipping.post("/pickup/:id/ready", async (c) => {

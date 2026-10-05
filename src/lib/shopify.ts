@@ -149,6 +149,8 @@ export interface ShopifyOrder {
       variantTitle: string | null;
       quantity: number;
       unfulfilledQuantity?: number;
+      /** Shipping orders together: the order this line came from */
+      fromOrder?: string;
       sku: string | null;
       image: { url: string } | null;
       discountedUnitPriceAfterAllDiscountsSet?: { shopMoney: { amount: string } };

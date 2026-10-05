@@ -171,64 +171,18 @@ async function customsFor(o) {
 }
 
 const addrCache = new Map();
-/** One box, one label for several orders to the same person and address; every order is marked shipped with the tracking. */
-function shipTogether(orderIds, onDone) {
-  const body = h("div", {}, h("div", { class: "row" }, spinner(), h("span", { class: "muted" }, "Combining the orders and getting quotes…")));
-  const dlg = modal("Ship together", body, { width: 600 });
-  api("/shipping/merge/preview", { method: "POST", body: { orderIds } }).then((p) => {
-    const rates = [...(p.rates ?? [])].sort((a, b) => a.total - b.total);
-    let chosen = rates[0]?.serviceCode ?? null;
-    const boxes = p.plan.boxes ?? [];
-    const weight = h("input", { class: "input", type: "number", min: "0.1", step: "0.1", placeholder: "lb", style: { width: "90px" }, "aria-label": "Weight in pounds" });
-    const dims = ["Length", "Width", "Height"].map((d) => h("input", { class: "input", type: "number", min: "1", step: "0.5", placeholder: d[0], style: { width: "64px" }, "aria-label": `${d} in inches` }));
-    const rateList = rates.length
-      ? h("div", { class: "merge-rates" }, rates.map((r) => {
-          const radio = h("input", { type: "radio", name: "merge-rate", value: r.serviceCode, checked: r.serviceCode === chosen });
-          radio.onchange = () => { chosen = r.serviceCode; };
-          const m = p.shippingPaid - r.total;
-          return h("label", { class: "merge-rate" }, radio, h("span", {}, r.serviceName, r.days ? h("span", { class: "small muted" }, ` · ${r.days} day${r.days === 1 ? "" : "s"}`) : null),
-            h("span", { class: "margin " + (m >= 0 ? "pos" : "neg"), style: { marginLeft: "auto" } }, `${marginText(m)}`), h("b", {}, money(r.total, "USD")));
-        }))
-      : null;
-    const buy = h("button", { class: "btn primary" }, icon("printer"), `Buy 1 label for ${p.names.length} orders`);
-    buy.onclick = busy(buy, async () => {
-      let parcels;
-      if (!p.plan.weightKnown) {
-        const [l, w, hh] = dims.map((i) => Number(i.value));
-        if (!(Number(weight.value) > 0) || !(l > 0 && w > 0 && hh > 0)) return toast("Enter the box weight and size", true);
-        parcels = [{ weight: Number(weight.value), length: l, width: w, height: hh }];
-      }
-      const win = reserveWindow();
-      const batch = newBatchId();
-      try {
-        const r = await api("/shipping/labels/merged", { method: "POST", body: { orderIds, policy: chosen ?? "cheapest", labelFormat: labelFormat(), batchId: batch, parcels } });
-        dlg.close();
-        toast(r.fulfillError ? `Label bought for ${r.orderName}, but not every order was marked shipped: ${r.fulfillError}` : `${r.orderName} ship together — ${r.serviceName}, ${money(r.cost, "USD")}`, !!r.fulfillError);
-        await printLabels({ batch }, win).catch((e) => toast(e.message, true));
-        onDone?.();
-      } catch (e) {
-        if (win) win.close();
-        toast(e.message, true);
-      }
-    });
-    mount(body,
-      h("p", { class: "muted", style: { marginTop: 0 } }, "Everything goes in one shipment with one label. Each order is marked shipped in Shopify with the same tracking number."),
-      h("div", { class: "merge-sum" },
-        h("div", {}, h("div", { class: "small muted" }, "Orders"), h("b", {}, p.names.join(" + "))),
-        h("div", {}, h("div", { class: "small muted" }, "Ship to"), h("div", {}, [p.to.name, p.to.city, p.to.state || p.to.country].filter(Boolean).join(", "))),
-        h("div", {}, h("div", { class: "small muted" }, "Items"), h("b", {}, p.items)),
-        h("div", {}, h("div", { class: "small muted" }, "Shipping paid"), h("b", {}, money(p.shippingPaid, "USD")))),
-      h("h3", { class: "merge-h" }, boxes.length > 1 ? `${boxes.length} boxes` : "Box"),
-      p.plan.weightKnown
-        ? h("div", { class: "small" }, boxes.map((b) => h("div", {}, `${b.preset?.name ?? "Custom"} · ${b.parcel.length}×${b.parcel.width}×${b.parcel.height} in · ${lbOz(b.parcel.weight)}`)))
-        : h("div", {}, h("div", { class: "notice warn", style: { marginBottom: "8px" } }, "Some items have no weight — weigh the packed box."),
-            h("div", { class: "row", style: { gap: "6px" } }, weight, h("span", { class: "small muted" }, "Box (in)"), ...dims)),
-      p.plan.weightKnown ? h("h3", { class: "merge-h" }, "Service") : null,
-      p.quoteError ? h("div", { class: "notice bad" }, p.quoteError) : rateList,
-      h("div", { class: "row", style: { marginTop: "16px", justifyContent: "flex-end" } },
-        h("button", { class: "btn ghost", onclick: () => dlg.close() }, "Cancel"),
-        p.quoteError ? null : buy));
-  }).catch((e) => mount(body, h("div", { class: "notice bad" }, e.message), h("div", { class: "row", style: { marginTop: "12px", justifyContent: "flex-end" } }, h("button", { class: "btn", onclick: () => dlg.close() }, "Close"))));
+/**
+ * One box (or several), one shipment for orders to the same person and address: opens the order page with every
+ * item of the group, so boxes and items can be adjusted like any order. Each order is marked shipped with the tracking.
+ */
+async function shipTogether(orderIds, onDone) {
+  try {
+    const { order } = await api(`/shipping/merge/order?ids=${orderIds.map(encodeURIComponent).join(",")}`);
+    onDone?.();
+    openOrderPage(order, { list: [] });
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 function loadAddressChecks(orders, onEach) {
@@ -395,7 +349,7 @@ function renderQueue(root, params) {
     if (!show) return mount(mergeEl);
     mount(mergeEl, st.merges.map((m) => {
       const go = h("button", { class: "btn primary sm" }, icon("box"), "Ship together");
-      go.onclick = () => shipTogether(m.orderIds, load);
+      go.onclick = busy(go, () => shipTogether(m.orderIds));
       const no = h("button", { class: "btn ghost sm" }, "Not now");
       no.onclick = busy(no, async () => { await api("/shipping/merge/dismiss", { method: "POST", body: { key: m.key } }); st.merges = st.merges.filter((x) => x !== m); drawMerges(); });
       return h("div", { class: "card merge-sug" },
@@ -440,7 +394,7 @@ function renderQueue(root, params) {
       load();
     });
     const together = h("button", { class: "btn", title: "One box and one label for these orders (same name and address)" }, icon("box"), "Ship together");
-    together.onclick = () => shipTogether(picked.map((o) => o.id), () => { st.selected.clear(); load(); });
+    together.onclick = busy(together, () => shipTogether(picked.map((o) => o.id), () => { st.selected.clear(); drawBulk(visible()); }));
     const release = h("button", { class: "btn" }, "Release");
     release.onclick = busy(release, async () => {
       await api("/shipping/holds", { method: "POST", body: { hold: false, orders: picked.map((o) => ({ id: o.id, name: o.name })) } });
@@ -813,6 +767,10 @@ const marginText = (m) => `${m >= 0 ? "+" : "−"}${money(Math.abs(m), "USD")}`;
 
 function buildLabelForm(root, o, presets, opts) {
   const plan = o?.plan;
+  // Orders shipping together: one combined order; choices are saved under the group, not the first order
+  const merge = o?.merge ?? null;
+  const draftId = merge?.key ?? o?.id;
+  const reload = async () => (merge ? api(`/shipping/merge/order?ids=${merge.ids.map(encodeURIComponent).join(",")}`) : api(`/shipping/orders/${encodeURIComponent(o.id)}`));
   const s = {
     to: o ? addressFromOrder(o) : { ...EMPTY_TO },
     parcels: [],
@@ -839,7 +797,7 @@ function buildLabelForm(root, o, presets, opts) {
   }
   else s.parcels = [{ preset: defaultBox?.id ?? "", length: defaultBox?.length ?? "", width: defaultBox?.width ?? "", height: defaultBox?.height ?? "", weight: "", alloc: allIn(), auto: false }];
   // Choices already made for this order (boxes, split, service, signature, address)
-  const draft = o ? drafts.get(o.id) ?? o.draft : null;
+  const draft = o ? drafts.get(draftId) ?? o.draft : null;
   if (o && draft?.customs?.items?.length) {
     const qty = new Map(lines.map((l) => [l.id, l.ordered]));
     const items = draft.customs.items.filter((i) => !i.lineId || qty.has(i.lineId)).map((i) => (i.lineId ? { ...i, qty: qty.get(i.lineId) } : i));
@@ -870,14 +828,14 @@ function buildLabelForm(root, o, presets, opts) {
   const remember = () => {
     if (!o || s.bought) return;
     const d = draftNow();
-    drafts.set(o.id, d);
+    drafts.set(draftId, d);
     if (queueApi) queueApi.stale = true;
     savedEl.textContent = "Saving…";
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        await api(`/shipping/drafts/${encodeURIComponent(o.id)}`, { method: "PUT", body: draftNow() });
-        savedEl.textContent = "Saved for this order";
+        await api(`/shipping/drafts/${encodeURIComponent(draftId)}`, { method: "PUT", body: draftNow() });
+        savedEl.textContent = merge ? "Saved for these orders" : "Saved for this order";
       } catch (e) {
         savedEl.textContent = "";
         toast(`Couldn't save your choices: ${e.message}`, true);
@@ -888,9 +846,9 @@ function buildLabelForm(root, o, presets, opts) {
   if (draft) savedEl.textContent = "Your saved choices";
   const resetDraft = async () => {
     clearTimeout(saveTimer);
-    await api(`/shipping/drafts/${encodeURIComponent(o.id)}`, { method: "DELETE" });
-    drafts.delete(o.id);
-    const { order } = await api(`/shipping/orders/${encodeURIComponent(o.id)}`);
+    await api(`/shipping/drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" });
+    drafts.delete(draftId);
+    const { order } = await reload();
     if (queueApi) queueApi.stale = true;
     openOrderPage(order, opts);
   };
@@ -1224,12 +1182,12 @@ function buildLabelForm(root, o, presets, opts) {
       totalWeightEl,
       split() && anyLeft ? h("span", { class: "badge warn" }, "Some items aren't in a box") : null,
       split() && lines.length ? h("button", { class: "btn sm", title: "Spread the items so each box weighs about the same", onclick: () => { splitEvenly(); changed(); } }, "Split evenly") : null,
-      o && !o.pickup && lines.length ? h("button", { class: "btn sm" + (s.partialMode ? " primary" : ""), title: "Some items aren't in stock: ship what you have; the rest of the order goes on hold", onclick: togglePartial }, s.partialMode ? "Ship everything" : "Ship part of this order") : null);
+      o && !o.pickup && !merge && lines.length ? h("button", { class: "btn sm" + (s.partialMode ? " primary" : ""), title: "Some items aren't in stock: ship what you have; the rest of the order goes on hold", onclick: togglePartial }, s.partialMode ? "Ship everything" : "Ship part of this order") : null);
     if (!lines.length) return mount(itemsEl);
     const meta = (l) => {
       const src = lineInfo.get(l.id);
       const each = src ? (src.discountedUnitPriceAfterAllDiscountsSet ? Number(src.discountedUnitPriceAfterAllDiscountsSet.shopMoney.amount) : null) : null;
-      return { sub: [src?.variantTitle, src?.sku].filter(Boolean).join(" · "), price: each !== null ? money(each * l.qty, cur) : null, title: src?.title ?? l.title };
+      return { sub: [merge && src?.fromOrder ? `From ${src.fromOrder}` : null, src?.variantTitle, src?.sku].filter(Boolean).join(" · "), price: each !== null ? money(each * l.qty, cur) : null, title: src?.title ?? l.title };
     };
     const head = (l) => {
       const m = meta(l);
@@ -1312,7 +1270,7 @@ function buildLabelForm(root, o, presets, opts) {
     [["", "No signature"], ["standard", "Signature required"], ["adult", "Adult signature required"]].map(([v, t]) => h("option", { value: v, selected: s.signature === v }, t)));
   sigSel.onchange = () => { s.signature = sigSel.value; quote(0); remember(); };
 
-  const holdBtn = o ? h("button", { class: "btn sm" }, o.hold ? "Release hold" : "Hold") : null;
+  const holdBtn = o && !merge ? h("button", { class: "btn sm" }, o.hold ? "Release hold" : "Hold") : null;
   if (holdBtn) holdBtn.onclick = busy(holdBtn, async () => {
     if (o.hold) {
       await api("/shipping/holds", { method: "POST", body: { hold: false, orders: [{ id: o.id, name: o.name }] } });
@@ -1334,10 +1292,11 @@ function buildLabelForm(root, o, presets, opts) {
     totalWeightEl.textContent = w > 0 ? `Total ${lbOz(w)}${split() ? ` · ${s.parcels.length} boxes` : ""}` : "";
   };
   const items = o?.lineItems.nodes ?? [];
-  const labelsCard = o && !o.pickup ? orderLabelsCard(o) : null;
+  const labelsCard = o && !o.pickup && !merge ? orderLabelsCard(o) : null;
   const pickupEl = o?.pickup ? pickupCard(o, () => openOrderPage(queueApi?.find(o.id) ?? o, opts)) : null;
   if (o?.pickup) boxesEl.style.display = "none";
   const notices = [
+    merge ? h("div", { class: "notice info" }, icon("box"), ` Shipping ${merge.names.length} orders together: ${merge.names.join(" + ")}. One label for everything below — each order is marked shipped in Shopify with the same tracking. Move items between boxes like any order.`) : null,
     o?.hold ? h("div", { class: "notice bad" }, `On hold${o.holdUntil ? ` until ${holdDate(o.holdUntil)} — it comes back to Ready to ship that day` : ""}: ${o.hold}`) : null,
     o?.hasLabel ? h("div", { class: "notice" }, "This order already has a label. Buying another one ships it again.") : null,
     plan?.rules?.matched?.length ? h("div", { class: "notice info" }, icon("spark"), " Rules applied: ", plan.rules.matched.join(" · ")) : null,
@@ -1385,7 +1344,7 @@ function buildLabelForm(root, o, presets, opts) {
       o.tags?.length ? h("div", { class: "op-tags" }, o.tags.map((t) => h("span", { class: "badge plain" }, t))) : null,
       o.email ? h("button", { class: "btn sm email-customer", onclick: () => emailCustomer(o).catch((e) => toast(e.message, true)) }, icon("mail"), "Email customer") : null,
       h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
-        h("button", { class: "btn sm", onclick: () => openPackingSlips([o.id]), title: o.slipPrintedAt ? `Printed ${fullTime(o.slipPrintedAt)}` : null },
+        h("button", { class: "btn sm", onclick: () => openPackingSlips(merge ? merge.ids : [o.id]), title: o.slipPrintedAt ? `Printed ${fullTime(o.slipPrintedAt)}` : null },
           "Packing slip", o.slipPrintedAt ? h("span", { class: "badge plain", style: { marginLeft: "4px" } }, icon("check"), "printed") : null),
         holdBtn,
         h("a", { class: "btn sm ghost", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Shopify", icon("ext")))),
@@ -1463,12 +1422,13 @@ function buildLabelForm(root, o, presets, opts) {
           serviceCode: s.rate.serviceCode, serviceName: s.rate.serviceName, listTotal: s.rate.listTotal, perBox: s.rate.perBox,
           labelFormat: labelFormat(), fulfill, notifyCustomer: notify, signature: s.signature || undefined, batchId: newBatchId(),
           partial: partialActive() ? lines.map((l) => ({ id: l.id, qty: l.qty })) : undefined,
+          mergeIds: merge ? merge.ids.filter((id) => id !== o.id) : undefined,
           customs: isIntl() ? s.customs : undefined,
         },
       });
       await printLabels({ ids: [r.id] }, win).catch((e) => toast(e.message, true));
       clearTimeout(saveTimer);
-      if (o) drafts.delete(o.id);
+      if (o) drafts.delete(draftId);
       showPurchased(r);
       if (o) o.hasLabel = true;
       labelsCard?.reload();
@@ -1548,7 +1508,7 @@ function buildLabelForm(root, o, presets, opts) {
         nextUp ? h("button", { class: "btn primary", onclick: () => openOrderPage(queueApi?.find(nextUp.id) ?? nextUp, { list: opts.list }) }, "Next order", h("span", { style: { opacity: 0.75 } }, nextUp.name), icon("down")) : null,
         h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
         isIntl() ? h("button", { class: "btn", onclick: () => openCommercialInvoice({ shipmentId: r.id }).catch((e) => toast(e.message, true)) }, icon("printer"), "Commercial invoice") : null,
-        (split() || partialActive()) && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, split() ? "Packing slips (one per box)" : "Packing slip for this box") : null,
+        merge ? h("button", { class: "btn", onclick: () => openPackingSlips(merge.ids) }, "Packing slips") : (split() || partialActive()) && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, split() ? "Packing slips (one per box)" : "Packing slip for this box") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
         (() => {
           const b = h("button", { class: "btn ghost", title: "Cancel this label so you're not charged" }, "Void label");

@@ -65,8 +65,11 @@ export function combineOrders(orders: ShopifyOrder[]): ShopifyOrder {
   };
   return {
     ...first,
-    lineItems: { ...first.lineItems, nodes: [first, ...rest].flatMap((o) => o.lineItems.nodes) },
+    lineItems: { ...first.lineItems, nodes: [first, ...rest].flatMap((o) => o.lineItems.nodes.map((l) => ({ ...l, fromOrder: o.name }))) },
     totalPriceSet: sum((o) => o.totalPriceSet) as ShopifyOrder["totalPriceSet"],
     totalShippingPriceSet: sum((o) => o.totalShippingPriceSet) as ShopifyOrder["totalShippingPriceSet"],
   };
 }
+
+/** Where the box and item choices for a group are saved while it's being packed. */
+export const mergeDraftKey = (ids: string[]) => `merge:${[...ids].sort().join(",")}`;
