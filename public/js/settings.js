@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { state } from "./app.js";
+import { state, applyTheme } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
 import { printSettings, resetZebra, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
 import { slipCard } from "./settings-slip.js";
@@ -322,8 +322,22 @@ function profile() {
   const name = h("input", { class: "input", value: state.me.name });
   const sig = h("textarea", { class: "input", rows: 4, placeholder: "Leave blank to use the team signature" }, state.me.signature || "");
   sig.value = state.me.signature || "";
+  // Appearance applies right away and is saved to your account
+  const themeSeg = h("div", { class: "seg", role: "radiogroup", "aria-label": "Appearance" });
+  const drawTheme = () => mount(themeSeg, [["system", "Match device"], ["light", "Light"], ["dark", "Dark"]].map(([v, label]) =>
+    h("button", { type: "button", role: "radio", "aria-checked": (state.me.theme || "system") === v, class: (state.me.theme || "system") === v ? "on" : "",
+      onclick: async () => {
+        const prev = state.me.theme;
+        state.me.theme = v;
+        applyTheme(v);
+        drawTheme();
+        try { await api("/me", { method: "PATCH", body: { theme: v } }); }
+        catch (e) { state.me.theme = prev; applyTheme(prev); drawTheme(); toast(e.message, true); }
+      } }, label)));
+  drawTheme();
   return card("Your profile", "Your name shows on replies in the ticket view. Your signature is added to every email you send.",
     h("div", { class: "stack" },
+      h("div", { class: "field" }, "Appearance", h("div", {}, themeSeg), h("span", { class: "muted", style: { fontWeight: 400 } }, "“Match device” follows your computer or phone's light/dark setting.")),
       h("label", { class: "field" }, "Name", name),
       h("label", { class: "field" }, "Signature", sig),
       h("div", {}, saveButton(async () => {
@@ -359,11 +373,37 @@ function team(agents, isAdmin, inner) {
       return h("div", { class: "team-row" },
         h("div", { class: "avatar" }, initials(a.name)),
         h("div", { class: "who" }, h("b", {}, a.name), h("span", { class: "muted small", title: a.email }, a.email)),
-        h("span", { class: "badge" }, a.role),
+        isAdmin ? roleSelect(a, inner) : h("span", { class: "badge" }, a.role),
         h("label", { class: "check small" }, avail, "Available"),
         isAdmin && a.id !== state.me.id ? rm : h("span", { class: "rm-spacer" }));
     })),
     isAdmin ? h("div", { class: "team-add" }, email, name, role, add) : null);
+}
+
+/** Admin ↔ agent for a teammate (admins only; there's always at least one admin). */
+function roleSelect(a, inner) {
+  const sel = h("select", { class: "input role-select", "aria-label": `Access for ${a.name}`, title: "Admins can change settings, connections and the team" },
+    h("option", { value: "agent", selected: a.role === "agent" }, "Agent"), h("option", { value: "admin", selected: a.role === "admin" }, "Admin"));
+  sel.onchange = async () => {
+    const role = sel.value;
+    const me = a.id === state.me.id;
+    if (!confirm(role === "admin"
+      ? `Make ${a.name} an admin? They'll be able to change settings, connections, keys and the team.`
+      : me ? "Remove your own admin access? You won't be able to change settings or the team afterwards." : `Make ${a.name} an agent? They'll keep working tickets and shipping but lose access to settings and the team.`)) {
+      sel.value = a.role;
+      return;
+    }
+    try {
+      await api(`/agents/${a.id}`, { method: "PATCH", body: { role } });
+      toast(`${a.name} is now ${role === "admin" ? "an admin" : "an agent"}`);
+      if (me) location.reload();
+      else reload(inner);
+    } catch (e) {
+      sel.value = a.role;
+      toast(e.message, true);
+    }
+  };
+  return sel;
 }
 
 function mailRules(s) {

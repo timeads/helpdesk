@@ -29,7 +29,7 @@ export async function currentAgent(c: Context<AppEnv>): Promise<Agent | null> {
   const id = getCookie(c, SESSION_COOKIE);
   if (id) {
     const row = await c.env.DB.prepare(
-      `SELECT a.id, a.email, a.name, a.role, a.signature FROM sessions s
+      `SELECT a.id, a.email, a.name, a.role, a.signature, a.theme FROM sessions s
        JOIN agents a ON a.id = s.agent_id
        WHERE s.id = ? AND s.expires_at > ? AND a.active = 1`,
     )
@@ -48,7 +48,7 @@ export async function currentAgent(c: Context<AppEnv>): Promise<Agent | null> {
 /** Returns the agent for this email, creating it if listed in ADMIN_EMAILS. Null if not allowed. */
 export async function findOrProvisionAgent(env: Env, email: string, name: string): Promise<Agent | null> {
   const existing = await env.DB.prepare(
-    "SELECT id, email, name, role, signature FROM agents WHERE email = ? AND active = 1",
+    "SELECT id, email, name, role, signature, theme FROM agents WHERE email = ? AND active = 1",
   )
     .bind(email)
     .first<Agent>();
@@ -59,7 +59,7 @@ export async function findOrProvisionAgent(env: Env, email: string, name: string
     .filter(Boolean);
   if (!admins.includes(email.toLowerCase())) return null;
   const res = await env.DB.prepare(
-    "INSERT INTO agents (email, name, role) VALUES (?, ?, 'admin') ON CONFLICT(email) DO UPDATE SET active = 1, role = 'admin' RETURNING id, email, name, role, signature",
+    "INSERT INTO agents (email, name, role) VALUES (?, ?, 'admin') ON CONFLICT(email) DO UPDATE SET active = 1, role = 'admin' RETURNING id, email, name, role, signature, theme",
   )
     .bind(email.toLowerCase(), name || email.split("@")[0])
     .first<Agent>();

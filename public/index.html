@@ -8,6 +8,10 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preload" href="/fonts/chivo-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/chivo-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <script>
+    // Your light/dark choice (Settings → Profile), before anything draws
+    try { const t = localStorage.getItem("hd-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+  </script>
   <link rel="stylesheet" href="/css/app.css">
   <script type="module" src="/js/app.js"></script>
 </head>

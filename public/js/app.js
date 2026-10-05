@@ -176,6 +176,7 @@ async function boot() {
   try {
     const me = await api("/me");
     state.me = me.agent;
+    applyTheme(state.me.theme);
     state.appName = me.appName;
   } catch {
     return renderLogin();
@@ -193,3 +194,11 @@ async function boot() {
 }
 
 boot();
+
+/** Light, dark, or follow the device ("system"); remembered on this computer so the next load doesn't flash. */
+export function applyTheme(theme) {
+  const t = theme === "light" || theme === "dark" ? theme : "system";
+  if (t === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("hd-theme", t); } catch { /* private mode */ }
+}

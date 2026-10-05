@@ -25,10 +25,11 @@ const admin = new Hono<AppEnv>();
 admin.get("/me", (c) => c.json({ agent: c.get("agent"), appName: c.env.APP_NAME }));
 
 admin.patch("/me", async (c) => {
-  const body = await c.req.json<{ name?: string; signature?: string }>();
+  const body = await c.req.json<{ name?: string; signature?: string; theme?: string }>();
   const me = c.get("agent");
-  await c.env.DB.prepare("UPDATE agents SET name = COALESCE(?, name), signature = COALESCE(?, signature) WHERE id = ?")
-    .bind(body.name?.trim() || null, body.signature ?? null, me.id)
+  const theme = ["system", "light", "dark"].includes(body.theme ?? "") ? body.theme! : null;
+  await c.env.DB.prepare("UPDATE agents SET name = COALESCE(?, name), signature = COALESCE(?, signature), theme = COALESCE(?, theme) WHERE id = ?")
+    .bind(body.name?.trim() || null, body.signature ?? null, theme, me.id)
     .run();
   return c.json({ ok: true });
 });
@@ -38,12 +39,22 @@ admin.get("/agents", async (c) => {
   return c.json({ agents: results });
 });
 
-/** Availability for automatic assignment (round robin / balanced skip unavailable teammates). */
+/** Availability for automatic assignment (round robin / balanced skip unavailable teammates), and admin ↔ agent. */
 admin.patch("/agents/:id{[0-9]+}", async (c) => {
   const id = Number(c.req.param("id"));
-  if (id !== c.get("agent").id) requireAdmin(c);
-  const { available } = await c.req.json<{ available: boolean }>();
-  await c.env.DB.prepare("UPDATE agents SET available = ? WHERE id = ?").bind(available ? 1 : 0, id).run();
+  const body = await c.req.json<{ available?: boolean; role?: string }>();
+  if (id !== c.get("agent").id || body.role !== undefined) requireAdmin(c);
+  if (body.role !== undefined) {
+    if (body.role !== "admin" && body.role !== "agent") throw new HttpError(400, "Role must be admin or agent");
+    const target = await c.env.DB.prepare("SELECT role FROM agents WHERE id = ? AND active = 1").bind(id).first<{ role: string }>();
+    if (!target) throw new HttpError(404, "Teammate not found");
+    if (target.role === "admin" && body.role === "agent") {
+      const admins = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM agents WHERE role = 'admin' AND active = 1").first<{ n: number }>();
+      if ((admins?.n ?? 0) <= 1) throw new HttpError(409, "There has to be at least one admin — make someone else an admin first");
+    }
+    await c.env.DB.prepare("UPDATE agents SET role = ? WHERE id = ?").bind(body.role, id).run();
+  }
+  if (body.available !== undefined) await c.env.DB.prepare("UPDATE agents SET available = ? WHERE id = ?").bind(body.available ? 1 : 0, id).run();
   return c.json({ ok: true });
 });
 

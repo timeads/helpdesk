@@ -41,6 +41,7 @@ export interface Agent {
   name: string;
   role: "admin" | "agent";
   signature: string;
+  theme?: "system" | "light" | "dark";
 }
 
 export type AppEnv = { Bindings: Env; Variables: { agent: Agent } };

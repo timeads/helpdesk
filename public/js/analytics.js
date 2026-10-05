@@ -242,16 +242,6 @@ export function renderAnalytics(main) {
         h("section", { class: "card" }, h("h2", {}, "Top destinations"),
           a.states.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["State", "Labels", "Avg cost"].map((x) => h("th", {}, x)))),
             h("tbody", {}, a.states.map((r) => h("tr", {}, h("td", {}, r.state), h("td", {}, r.labels), h("td", { class: "num" }, usd(r.avg_cost))))))) : h("p", { class: "muted" }, "No labels in this period."))),
-      h("section", { class: "card" }, h("h2", {}, "Recent labels"),
-        a.recent.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
-          h("thead", {}, h("tr", {}, ["Order", "Customer chose", "Shipped with", "Paid", "Label", "Margin"].map((x) => h("th", {}, x)))),
-          h("tbody", {}, a.recent.map((r) => {
-            const m = r.shipping_paid == null ? null : r.shipping_paid - r.cost;
-            return h("tr", {}, h("td", {}, r.order_name || "—"), h("td", {}, r.requested_service || "—"), h("td", {}, r.service_name),
-              h("td", { class: "num" }, r.shipping_paid == null ? "—" : usd(r.shipping_paid)), h("td", { class: "num" }, usd(r.cost)),
-              h("td", { class: "num margin " + (m === null ? "" : m >= 0 ? "pos" : "neg") }, m === null ? "—" : `${m >= 0 ? "+" : "−"}${usd(Math.abs(m))}`));
-          })))) : h("p", { class: "muted" }, "No labels in this period.")),
-      checkCard ??= rateCheckCard(),
       h("h2", { class: "analytics-h" }, "Support"),
       h("div", { class: "kpis" },
         tile("New tickets", String(sp.created), a.ytd ? "this year" : `in the last ${days} days`),
@@ -263,6 +253,16 @@ export function renderAnalytics(main) {
         tile("One-touch", sp.oneTouchRate == null ? "—" : `${Math.round(sp.oneTouchRate * 100)}%`, "resolved with a single reply")),
       h("div", { class: "grid2 analytics-2" }, heatmapCard(sp.heatmap), teamCard(sp.team)),
       aiEl,
+      h("section", { class: "card" }, h("h2", {}, "Recent labels"),
+        a.recent.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
+          h("thead", {}, h("tr", {}, ["Order", "Customer chose", "Shipped with", "Paid", "Label", "Margin"].map((x) => h("th", {}, x)))),
+          h("tbody", {}, a.recent.map((r) => {
+            const m = r.shipping_paid == null ? null : r.shipping_paid - r.cost;
+            return h("tr", {}, h("td", {}, r.order_name || "—"), h("td", {}, r.requested_service || "—"), h("td", {}, r.service_name),
+              h("td", { class: "num" }, r.shipping_paid == null ? "—" : usd(r.shipping_paid)), h("td", { class: "num" }, usd(r.cost)),
+              h("td", { class: "num margin " + (m === null ? "" : m >= 0 ? "pos" : "neg") }, m === null ? "—" : `${m >= 0 ? "+" : "−"}${usd(Math.abs(m))}`));
+          })))) : h("p", { class: "muted" }, "No labels in this period.")),
+      checkCard ??= rateCheckCard()
     );
     api("/analytics/ai-usage").then((u) => mount(aiEl, h("h2", { class: "analytics-h" }, "AI usage"), aiUsageCard(u))).catch(() => mount(aiEl));
   };
