@@ -16,6 +16,7 @@ const VIEWS = [
   { id: "open", label: "Open", short: "Open", icon: "inbox" },
   { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock" },
   { id: "chats", label: "Live chats", short: "Chats", icon: "chat", desktopOnly: true },
+  { id: "social", label: "Instagram & Facebook", short: "Social", icon: "instagram", desktopOnly: true },
   { id: "snoozed", label: "Snoozed", short: "Snoozed", icon: "moon", minor: true },
   { id: "mentions", label: "Mentions", short: "@", icon: "at", minor: true },
   { id: "closed", label: "Closed", short: "Closed", icon: "check", minor: true },

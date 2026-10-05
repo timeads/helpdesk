@@ -35,8 +35,15 @@ export function chatBubble(t, m) {
   const out = m.direction === "out";
   const ai = m.kind === "chat_ai";
   const who = out ? (ai ? "AI assistant" : m.agent_name || m.from_name || "Us") : m.from_name || t.customer_name || t.customer_email;
+  // Instagram / Facebook: say whether it was a comment, a public reply, a private reply or a DM
+  let how = null;
+  if (m.kind === "social") {
+    let x = {};
+    try { x = m.extra ? JSON.parse(m.extra) : {}; } catch { /* plain */ }
+    how = out ? { public: "Public reply", private: "Private reply", dm: "DM" }[x.via] ?? null : x.commentId ? "Comment" : "DM";
+  }
   return h("div", { class: "chat-msg" + (out ? " out" : "") + (ai ? " ai" : ""), "data-mid": m.id },
-    h("div", { class: "chat-who" }, out ? null : h("span", { class: "avatar xs" }, initials(who)), ai ? [icon("spark"), " "] : null, who, h("span", { class: "chat-when", title: fullTime(m.sent_at) }, new Date(m.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))),
+    h("div", { class: "chat-who" }, out ? null : h("span", { class: "avatar xs" }, initials(who)), ai ? [icon("spark"), " "] : null, who, how ? h("span", { class: "chat-how" }, how) : null, h("span", { class: "chat-when", title: fullTime(m.sent_at) }, new Date(m.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))),
     m.body_text ? h("div", { class: "chat-text" }, m.body_text) : null,
     chatCards(m),
     m.attachments?.length ? h("div", { class: "chat-photos" }, m.attachments.map((a) =>

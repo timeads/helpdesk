@@ -25,6 +25,9 @@ export interface Env {
   BOOKING_SUPABASE_ANON_KEY?: string;
   TUFTSTOCK_URL?: string;
   TUFTSTOCK_TOKEN?: string;
+  META_APP_ID?: string;
+  META_APP_SECRET?: string;
+  META_GRAPH_VERSION?: string; // e.g. "v23.0"
   DEV_LOGIN_EMAIL?: string;
   DEMO_DATA?: string;
   RAW_ENV?: Env; // env before app-entered credentials were applied

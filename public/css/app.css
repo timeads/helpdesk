@@ -1387,3 +1387,22 @@ a.view-chip { text-decoration: none; }
 .od-line > div { flex: 1; }
 .od-img, .od-ico { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: var(--select); flex: none; display: grid; place-items: center; color: var(--ochre); }
 .od .op-card { margin: 0; }
+
+/* Instagram & Facebook tickets */
+.chat-tag.instagram { color: #c13584; }
+.chat-tag.facebook { color: #1877f2; }
+.chat-how { font-size: 11px; font-weight: 600; color: var(--text-3); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; margin-left: 6px; }
+.social-post { display: flex; gap: 12px; align-items: center; padding: 10px 12px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: inherit; text-decoration: none; }
+.social-post:hover { border-color: var(--ochre); }
+.social-post img, .social-post-ph { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; flex: none; background: var(--select); display: grid; place-items: center; }
+.social-post-text { min-width: 0; display: grid; gap: 2px; }
+.social-caption { font-size: 13px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.social-composer { padding: 0 16px 16px; display: grid; gap: 8px; }
+.social-box { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 10px; display: grid; gap: 8px; }
+.social-box textarea { width: 100%; resize: vertical; min-height: 72px; }
+.social-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.social-badge { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; font-size: 13px; }
+.social-badge.instagram { color: #c13584; }
+.social-badge.facebook { color: #1877f2; }
+.social-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.social-note { flex: 1 1 260px; }

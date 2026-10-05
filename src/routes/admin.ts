@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
+import { graph, metaConfigured } from "../lib/meta";
 import { DEFAULT_RULES, getMailbox, runBackfill, type BackfillJob, type MailRules } from "../lib/gmail";
 import { shopifyConfigured } from "../lib/shopify";
 import { upsConfigured } from "../lib/ups";
@@ -460,6 +461,12 @@ admin.post("/credentials/test/:group", async (c) => {
       ]);
       await deleteSetting(c.env, "ask_classes");
       return c.json({ ok: true, message: `Connected · ${workshops.length} active class${workshops.length === 1 ? "" : "es"}, ${sessions.length} upcoming date${sessions.length === 1 ? "" : "s"}` });
+    }
+    if (group === "meta") {
+      if (!metaConfigured(env)) throw new Error("Add the App ID and App secret.");
+      const app = await graph<{ name?: string }>(env, env.META_APP_ID!, { token: `${env.META_APP_ID}|${env.META_APP_SECRET}`, params: { fields: "name" } })
+        .catch((e) => { throw new Error(/Meta: /.test(e.message) ? "Meta turned down that App ID and secret — copy both again from App settings → Basic." : e.message); });
+      return c.json({ ok: true, message: `Connected to your Meta app${app.name ? ` “${app.name}”` : ""} — now click Connect Facebook & Instagram` });
     }
     if (group === "stock") {
       if (!stockConfigured(env)) throw new Error("Add the TuftStock address and the helpdesk token.");

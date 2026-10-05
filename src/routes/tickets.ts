@@ -35,7 +35,7 @@ interface ViewFilters {
   priority?: string;
   unread?: boolean;
   q?: string;
-  channel?: string; // "chat" for website chats
+  channel?: string; // "chat" for website chats, "instagram" / "facebook", or "social" for both
 }
 
 const BUILT_IN: Record<string, ViewFilters> = {
@@ -52,6 +52,7 @@ const BUILT_IN: Record<string, ViewFilters> = {
   all: { status: "any" },
   mentions: { status: "any" },
   chats: { status: "active", channel: "chat" },
+  social: { status: "active", channel: "social" },
 };
 
 async function viewFilters(env: Env, view: string): Promise<ViewFilters> {
@@ -93,10 +94,10 @@ function whereFor(f: ViewFilters, agentId: number, view = ""): { sql: string; ar
     }
   }
   if (f.unread) clauses.push("t.unread = 1");
-  if (f.channel === "chat" || f.channel === "email") {
+  if (f.channel === "chat" || f.channel === "email" || f.channel === "instagram" || f.channel === "facebook") {
     clauses.push("t.channel = ?");
     args.push(f.channel);
-  }
+  } else if (f.channel === "social") clauses.push("t.channel IN ('instagram', 'facebook')");
   if (f.tags_any?.length) {
     clauses.push(`EXISTS (SELECT 1 FROM json_each(t.tags) j WHERE j.value COLLATE NOCASE IN (${f.tags_any.map(() => "?").join(",")}))`);
     args.push(...f.tags_any);
@@ -151,7 +152,8 @@ tickets.get("/counts", async (c) => {
        SUM(status = 'spam') AS spam,
        (SELECT COUNT(DISTINCT ticket_id) FROM mentions WHERE agent_id = ?1 AND seen = 0) AS mentions,
        (SELECT COUNT(*) FROM chats WHERE state = 'waiting') AS chats_waiting,
-       SUM(status IN ('open','in_progress') AND channel = 'chat') AS chats
+       SUM(status IN ('open','in_progress') AND channel = 'chat') AS chats,
+       SUM(status = 'open' AND channel IN ('instagram', 'facebook')) AS social
      FROM tickets`,
   )
     .bind(me)
@@ -521,6 +523,7 @@ tickets.post("/:id{[0-9]+}/reply", async (c) => {
   const box = await getMailbox(c.env);
   if (!box) throw new HttpError(409, "Connect the support mailbox in Settings first");
   const mode = body.mode ?? "reply";
+  if ((ticket.channel === "instagram" || ticket.channel === "facebook") && mode !== "forward") throw new HttpError(409, `Reply with the ${ticket.channel === "instagram" ? "Instagram" : "Facebook"} reply box — this customer has no email address here`);
   if (ticket.channel === "chat" && mode === "reply") {
     const chat = await chatForTicket(c.env, id);
     if (chat && chat.state !== "email") {
@@ -755,7 +758,7 @@ tickets.get("/:id{[0-9]+}/suggestions", async (c) => {
   const id = Number(c.req.param("id"));
   await loadTicket(c.env, id);
   const s = await ticketSuggestion(c.env, id);
-  const last = await c.env.DB.prepare("SELECT id FROM messages WHERE ticket_id = ? AND (kind IS NULL OR kind = 'email') AND direction = 'in' ORDER BY sent_at DESC, id DESC LIMIT 1").bind(id).first<{ id: number }>();
+  const last = await c.env.DB.prepare("SELECT id FROM messages WHERE ticket_id = ? AND (kind IS NULL OR kind IN ('email', 'social')) AND direction = 'in' ORDER BY sent_at DESC, id DESC LIMIT 1").bind(id).first<{ id: number }>();
   return c.json({ suggestion: s, current: !!s && !!last && s.messageId === last.id, on: await suggestOn(c.env) });
 });
 
@@ -765,7 +768,7 @@ tickets.post("/:id{[0-9]+}/suggestions", async (c) => {
   if (!aiConfigured(c.env)) throw new HttpError(409, "AI is off — add an Anthropic API key in Settings → Connections.");
   await loadTicket(c.env, id);
   const s = await suggestReplies(c.env, id, c.get("agent").name);
-  if (!s) throw new HttpError(409, "There's no customer email to answer yet");
+  if (!s) throw new HttpError(409, "There's no customer message to answer yet");
   if (s.status === "error") throw new HttpError(502, `Couldn't write suggestions: ${s.error}`);
   return c.json({ suggestion: s, current: true });
 });
@@ -827,7 +830,9 @@ tickets.get("/:id{[0-9]+}/messages/:mid{[0-9]+}/attachments/:aid", async (c) => 
   if (!meta) throw new HttpError(404, "Attachment not found");
   const data = !m.gmail_message_id && /^c\d+$/.test(meta.id)
     ? (await c.env.DB.prepare("SELECT data FROM chat_files WHERE id = ?").bind(Number(meta.id.slice(1))).first<{ data: string }>())?.data ?? ""
-    : await getAttachment(c.env, m.gmail_message_id, meta.id);
+    : !m.gmail_message_id && /^s\d+$/.test(meta.id)
+      ? (await c.env.DB.prepare("SELECT data FROM social_files WHERE id = ?").bind(Number(meta.id.slice(1))).first<{ data: string }>())?.data ?? ""
+      : await getAttachment(c.env, m.gmail_message_id, meta.id);
   const inline = /^(image\/|video\/|application\/pdf)/.test(meta.mimeType) && c.req.query("download") === undefined;
   const bytes = base64UrlDecodeBytes(data);
   const headers: Record<string, string> = {

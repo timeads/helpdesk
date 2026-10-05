@@ -15,6 +15,8 @@ import rateCheckRoutes from "./routes/ratecheck";
 import chatPublicRoutes from "./routes/chat-public";
 import chatRoutes from "./routes/chat";
 import kbRoutes from "./routes/kb";
+import socialRoutes from "./routes/social";
+import { handleWebhook, validSignature, verifyToken } from "./lib/meta";
 import { sweepChats } from "./lib/chat";
 import { dailyRefresh } from "./lib/site-knowledge";
 import { autoMergeTick } from "./lib/kb-merge";
@@ -30,6 +32,21 @@ app.onError((err, c) => {
 
 app.route("/auth", authRoutes);
 app.route("/chat-api", chatPublicRoutes);
+
+// Meta (Instagram & Facebook) webhook: the address check, then signed deliveries of new comments and messages
+app.get("/meta/webhook", async (c) => {
+  if (c.req.query("hub.mode") !== "subscribe" || c.req.query("hub.verify_token") !== (await verifyToken(c.env))) return c.text("Forbidden", 403);
+  return c.text(c.req.query("hub.challenge") ?? "");
+});
+app.post("/meta/webhook", async (c) => {
+  const raw = await c.req.text();
+  if (!(await validSignature(c.env, raw, c.req.header("x-hub-signature-256")))) return c.text("Bad signature", 401);
+  let payload: unknown;
+  try { payload = JSON.parse(raw); } catch { return c.text("Bad JSON", 400); }
+  // Answer Meta straight away; photos are downloaded and tickets made after
+  c.executionCtx.waitUntil(handleWebhook(c.env, payload).catch((e) => console.error("Meta webhook failed", e)));
+  return c.text("OK");
+});
 
 // Knowledge-base photos: public, because the store's articles show them
 app.get("/kb/img/:id{[0-9]+}", async (c) => {
@@ -50,6 +67,7 @@ api.route("/manual", manualRoutes);
 api.route("/rate-check", rateCheckRoutes);
 api.route("/chats", chatRoutes);
 api.route("/kb", kbRoutes);
+api.route("/social", socialRoutes);
 api.route("/", adminRoutes);
 app.route("/api", api);
 
@@ -59,7 +77,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // Raw env stays reachable for the credentials screen, which must tell app-entered from Cloudflare values
     const path = new URL(request.url).pathname;
-    if (!path.startsWith("/api/") && !path.startsWith("/chat-api/")) return app.fetch(request, env, ctx);
+    if (!path.startsWith("/api/") && !path.startsWith("/chat-api/") && !path.startsWith("/meta/")) return app.fetch(request, env, ctx);
     const merged = await withCredentials(env);
     // Layer RAW_ENV on top without copying (copies can lose secret bindings)
     const withRaw = Object.create(merged) as Env;

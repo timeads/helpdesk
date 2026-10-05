@@ -6,7 +6,7 @@ import { decrypt, deleteSetting, encrypt, getSetting, setSetting } from "./util"
 export interface CredentialField {
   key: keyof Env & string;
   label: string;
-  group: "shopify" | "ups" | "usps" | "ai" | "booking" | "stock";
+  group: "shopify" | "ups" | "usps" | "ai" | "booking" | "stock" | "meta";
   secret: boolean; // never sent back to the browser
   options?: string[];
   placeholder?: string;
@@ -27,6 +27,8 @@ export const CREDENTIAL_FIELDS: CredentialField[] = [
   { key: "BOOKING_SUPABASE_ANON_KEY", label: "Anon (public) key", group: "booking", secret: true, placeholder: "eyJ…", help: "Same page, the anon public key (VITE_SUPABASE_ANON_KEY) — read-only, the same one the date picker uses" },
   { key: "TUFTSTOCK_URL", label: "TuftStock address", group: "stock", secret: false, placeholder: "https://tuftstock-….up.railway.app", help: "The address you open TuftStock at" },
   { key: "TUFTSTOCK_TOKEN", label: "Helpdesk token", group: "stock", secret: true, help: "The same value as HELPDESK_API_TOKEN in TuftStock's Railway variables" },
+  { key: "META_APP_ID", label: "App ID", group: "meta", secret: false, help: "Meta for Developers → your app → App settings → Basic" },
+  { key: "META_APP_SECRET", label: "App secret", group: "meta", secret: true, help: "Same page — click Show next to App secret" },
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", group: "ai", secret: true, placeholder: "sk-ant-…" },
   { key: "AI_MODEL", label: "Model", group: "ai", secret: false, options: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"] },
 ];
@@ -38,6 +40,7 @@ const TOKEN_CACHES: Record<CredentialField["group"], string[]> = {
   usps: [],
   booking: ["ask_classes"],
   stock: ["incoming_stock"],
+  meta: [],
   ai: [],
 };
 

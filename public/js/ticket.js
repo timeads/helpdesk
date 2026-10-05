@@ -6,6 +6,7 @@ import { h, mount, icon, relTime, fullTime, shortDate, money, humanize, initials
 import { STATUS, statusLabel, statusBadge, PRIORITY, priorityChip, statusMenu, priorityMenu, assignMenu, snoozeMenu, tagMenu, whenLabel } from "./common.js";
 import { buildComposer, loadSettings, settingsCache, newEmail } from "./composer.js";
 import { chatBubble, chatControls } from "./chat-agent.js";
+import { socialControls } from "./social-agent.js";
 
 const ticketHref = (id, view) => `/tickets/${id}?view=${view}`;
 
@@ -145,6 +146,8 @@ export async function openTicket(inbox, el, id) {
     });
     composer.el.replaceWith(live.el);
   }
+  // Instagram / Facebook: reply under the comment, privately, or by DM
+  if (t.channel === "instagram" || t.channel === "facebook") composer.el.replaceWith(socialControls(inbox, t, thread).el);
 
   // ---- Right pane
   const side = h("aside", { class: "customer", "aria-label": "Details" });
@@ -257,7 +260,7 @@ function renderThread(t, data) {
 
   // Collapse older history: keep the last two messages (and everything after them) open
   const msgIdx = out.map((x, i) => (x.kind === "msg" ? i : -1)).filter((i) => i >= 0);
-  if (msgIdx.length <= 3 || t.channel === "chat") return out.map(draw);
+  if (msgIdx.length <= 3 || ["chat", "instagram", "facebook"].includes(t.channel)) return out.map(draw);
   const cut = msgIdx[msgIdx.length - 2];
   const hidden = out.slice(0, cut);
   const hiddenMsgs = hidden.filter((x) => x.kind === "msg").length;
@@ -462,6 +465,10 @@ async function loadCustomer(el, t, composer, closeSheet, merge) {
     mount(el, h("div", { class: "cust-card" }, h("div", { class: "notice bad" }, e.message)));
     return;
   }
+  // Instagram / Facebook: we only know their account, not an email, so there's nothing to look up in Shopify
+  const social = t.channel === "instagram" || t.channel === "facebook";
+  if (social) data.shopify = null;
+  const handle = social && /^@[\w.]+$/.test(t.customer_name ?? "") ? t.customer_name.slice(1) : null;
   const c = data.shopify?.customer;
   const orders = data.shopify?.orders ?? [];
   const name = c?.displayName || t.customer_name || t.customer_email;
@@ -474,7 +481,10 @@ async function loadCustomer(el, t, composer, closeSheet, merge) {
       h("div", { class: "avatar" }, initials(name)),
       h("div", { style: { minWidth: 0, flex: 1 } },
         h("div", { class: "cust-name" }, name),
-        h("div", { class: "cust-meta row", style: { gap: "2px" } }, t.customer_email, copy),
+        social
+          ? h("div", { class: "cust-meta" }, t.channel === "instagram" ? "Instagram" : "Facebook",
+              handle && t.channel === "instagram" ? [" · ", h("a", { href: `https://www.instagram.com/${handle}/`, target: "_blank", rel: "noopener" }, "profile ", icon("ext"))] : null)
+          : h("div", { class: "cust-meta row", style: { gap: "2px" } }, t.customer_email, copy),
         c?.phone ? h("a", { class: "cust-meta", href: `tel:${c.phone}` }, c.phone) : null)),
     c ? h("div", { class: "stats" },
       h("div", { class: "stat" }, h("b", {}, c.numberOfOrders), h("span", {}, Number(c.numberOfOrders) === 1 ? "Order" : "Orders")),
@@ -484,8 +494,9 @@ async function loadCustomer(el, t, composer, closeSheet, merge) {
     c?.note ? h("div", { class: "notice", style: { marginTop: "12px", whiteSpace: "pre-wrap" } }, c.note) : null,
     !c && data.shopifyError === "not_configured" ? h("div", { class: "notice info", style: { marginTop: "14px" } }, "Connect Shopify to see this customer's orders here.") : null,
     data.shopifyError && data.shopifyError !== "not_configured" ? h("div", { class: "notice bad", style: { marginTop: "14px" } }, data.shopifyError) : null,
-    !c && !data.shopifyError ? h("div", { class: "notice", style: { marginTop: "14px" } }, "No Shopify customer uses this email. They may have ordered with a different address.") : null,
-    h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
+    social ? h("div", { class: "notice", style: { marginTop: "14px" } }, "To look up an order, ask for their order number or email (privately), then search it in Shipping → All orders.")
+      : !c && !data.shopifyError ? h("div", { class: "notice", style: { marginTop: "14px" } }, "No Shopify customer uses this email. They may have ordered with a different address.") : null,
+    social ? null : h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
       h("button", { class: "btn sm", onclick: () => newEmail({ to: t.customer_email }) }, icon("mail"), "New email")));
 
   const ordersCard = data.shopify ? h("div", { class: "cust-card" },
