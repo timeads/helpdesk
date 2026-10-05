@@ -117,25 +117,38 @@ function client(env: Env) {
 export async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], schema: Record<string, unknown>, effort: "low" | "medium", maxTokens: number, system = SYSTEM, feature = "Repair manual"): Promise<T> {
   const model = env.AI_MODEL || "claude-opus-5-5";
   try {
-    const r = await client(env).messages.create({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content }],
-      output_config: { format: { type: "json_schema", schema }, ...(model.startsWith("claude-haiku") ? {} : { effort }) },
-    });
-    await recordUsage(env, feature, r.model, r.usage);
-    if (r.stop_reason === "refusal") throw new HttpError(422, "The AI declined to process these conversations");
-    if (r.stop_reason === "max_tokens") throw new HttpError(502, "The AI ran out of room — try again");
-    const text = r.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
+    // Streamed so long answers don't time out; a long answer that's cut off gets one retry with twice the room
+    let r: Anthropic.Message | null = null;
+    for (const room of [maxTokens, Math.min(maxTokens * 2, 64000)]) {
+      r = await client(env).messages.stream({
+        model,
+        max_tokens: room,
+        system,
+        messages: [{ role: "user", content }],
+        output_config: { format: { type: "json_schema", schema }, ...(model.startsWith("claude-haiku") ? {} : { effort }) },
+      }).finalMessage();
+      await recordUsage(env, feature, r.model, r.usage);
+      if (r.stop_reason !== "max_tokens") break;
+    }
+    if (r!.stop_reason === "refusal") throw new HttpError(422, "The AI declined to process these conversations");
+    if (r!.stop_reason === "max_tokens") throw new HttpError(502, "The AI's answer was too long to finish, even with extra room — try fewer conversations at once");
+    const text = r!.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
     return JSON.parse(text) as T;
   } catch (e) {
     if (e instanceof HttpError) throw e;
-    if (e instanceof Anthropic.AuthenticationError) throw new HttpError(502, "Anthropic API key was rejected");
-    if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "AI is rate limited — try again in a minute");
-    if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
-    throw e;
+    throw aiError(e);
   }
+}
+
+/** Plain words for Anthropic API failures: out of credits, busy, rate limited, bad key. */
+export function aiError(e: unknown): unknown {
+  if (!(e instanceof Anthropic.APIError)) return e;
+  const msg = String(e.message ?? "");
+  if (/credit balance|billing|spend limit|usage limit/i.test(msg)) return new HttpError(402, "Your Anthropic account is out of credits or hit its spending limit — add credits or raise the limit at console.anthropic.com → Billing");
+  if (e instanceof Anthropic.AuthenticationError) return new HttpError(502, "Anthropic API key was rejected");
+  if (e instanceof Anthropic.RateLimitError) return new HttpError(429, "AI is rate limited — try again in a minute");
+  if (e.status === 529 || /overloaded/i.test(msg)) return new HttpError(503, "Anthropic's AI is overloaded right now (on their side, not your account) — try again in a minute");
+  return new HttpError(502, `AI error: ${msg}`);
 }
 
 interface Classified {
@@ -199,7 +212,7 @@ export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
     text: `For each conversation above, decide whether it's a repair (diagnosing or fixing a product problem). For repairs, file it under the existing topic for the same problem on the same product, or a new topic. Several conversations can share a new topic. Pick attachments that would help someone fix the same problem.`,
   });
 
-  const c = await ask<Classified>(env, content, CLASSIFY_SCHEMA, "low", 6000);
+  const c = await ask<Classified>(env, content, CLASSIFY_SCHEMA, "low", 12000);
 
   // ---- Create new topics, then rewrite every topic that got new cases
   const keyToId = new Map<string, number>();
@@ -241,7 +254,7 @@ export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
 ## Notes
 Keep it practical and specific to the product. Merge duplicate advice. Don't mention customers by name.`,
       ].filter(Boolean).join("\n\n"),
-    }], WRITE_SCHEMA, "medium", 8000);
+    }], WRITE_SCHEMA, "medium", 16000);
     await env.DB.prepare("UPDATE manual_topics SET title = ?, product = ?, summary = ?, body = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?")
       .bind(w.title.slice(0, 160) || cur.title, w.product.slice(0, 120), w.summary.slice(0, 500), w.body.slice(0, 40000), id).run();
     return { id, title: w.title || cur.title, isNew: created.has(id) };

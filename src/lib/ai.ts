@@ -3,7 +3,7 @@ import { askProducts, pickSources, productsBlock, sourcesBlock, type Product, ty
 import { asksAboutStock, incomingStock, stockText } from "./stock";
 import type { Env } from "../env";
 import { HttpError, sniffImageType } from "./util";
-import { manualKnowledge } from "./manual";
+import { aiError, manualKnowledge } from "./manual";
 import { recordUsage } from "./usage";
 import { kbForAI } from "./kb";
 
@@ -77,7 +77,7 @@ export async function draftReply(env: Env, input: DraftInput): Promise<string> {
     if (e instanceof HttpError) throw e;
     if (e instanceof Anthropic.AuthenticationError) throw new HttpError(502, "Anthropic API key was rejected");
     if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "AI is rate limited — try again in a moment");
-    if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
+    if (e instanceof Anthropic.APIError) throw aiError(e);
     throw e;
   }
 }
@@ -136,7 +136,7 @@ export async function ticketInsights(env: Env, subject: string, thread: DraftInp
   } catch (e) {
     if (e instanceof HttpError) throw e;
     if (e instanceof Anthropic.AuthenticationError) throw new HttpError(502, "Anthropic API key was rejected");
-    if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
+    if (e instanceof Anthropic.APIError) throw aiError(e);
     throw e;
   }
 }
@@ -273,7 +273,7 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     if (e instanceof HttpError) throw e;
     if (e instanceof Anthropic.AuthenticationError) throw new HttpError(502, "Anthropic API key was rejected");
     if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "AI is rate limited");
-    if (e instanceof Anthropic.APIError) throw new HttpError(502, `AI error: ${e.message}`);
+    if (e instanceof Anthropic.APIError) throw aiError(e);
     throw e;
   }
 }

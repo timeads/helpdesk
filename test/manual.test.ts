@@ -26,10 +26,20 @@ function seed(db: ReturnType<typeof testD1>) {
   msg(3, "out", "Try a new blade");
 }
 
-const aiReply = (obj: unknown) => new Response(JSON.stringify({
-  id: "msg_1", type: "message", role: "assistant", model: "m", stop_reason: "end_turn", stop_sequence: null,
-  usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text: JSON.stringify(obj) }],
-}), { status: 200, headers: { "content-type": "application/json" } });
+/** A streamed Messages API reply (server-sent events), as the SDK's stream() reads it. */
+const aiReply = (obj: unknown, stop = "end_turn") => {
+  const text = JSON.stringify(obj);
+  const ev = (type: string, data: object) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+  const sse = [
+    ev("message_start", { message: { id: "msg_1", type: "message", role: "assistant", model: "m", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } }),
+    ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+    ev("content_block_delta", { index: 0, delta: { type: "text_delta", text } }),
+    ev("content_block_stop", { index: 0 }),
+    ev("message_delta", { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 1 } }),
+    ev("message_stop", {}),
+  ].join("");
+  return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+};
 
 describe("repair manual scan", () => {
   let db: ReturnType<typeof testD1>;
@@ -95,5 +105,27 @@ describe("repair manual scan", () => {
     expect(await manualKnowledge(env)).toBe("");
     db.raw.exec("UPDATE manual_topics SET status = 'published'");
     expect(await manualKnowledge(env)).toContain("Repair: AK-I jams after a few stitches");
+  });
+});
+
+describe("AI answers that run long", () => {
+  it("retries once with twice the room, then explains; credit and overload errors are worded plainly", async () => {
+    const { ask, aiError } = await import("../src/lib/manual");
+    const env: any = { DB: testD1(), ANTHROPIC_API_KEY: "test", AI_MODEL: "claude-opus-5-5" };
+    const rooms: number[] = [];
+    let cut = 1;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: any) => {
+      rooms.push(JSON.parse(init.body).max_tokens);
+      return aiReply({ ok: true }, cut-- > 0 ? "max_tokens" : "end_turn");
+    }));
+    expect(await ask(env, [{ type: "text", text: "x" }], { type: "object" }, "low", 1000)).toEqual({ ok: true });
+    expect(rooms).toEqual([1000, 2000]);
+    cut = 2;
+    await expect(ask(env, [{ type: "text", text: "x" }], { type: "object" }, "low", 1000)).rejects.toThrow(/too long to finish/);
+    vi.unstubAllGlobals();
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const err = (status: number, message: string) => Anthropic.APIError.generate(status, { error: { message } }, message, new Headers());
+    expect((aiError(err(400, "Your credit balance is too low to access the Anthropic API.")) as Error).message).toMatch(/out of credits/);
+    expect((aiError(err(529, "Overloaded")) as Error).message).toMatch(/overloaded right now/);
   });
 });
