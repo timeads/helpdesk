@@ -209,7 +209,7 @@ ol.steps b { color: #1a1a1a; }
           el("a", { class: "item", href: a.url }, el("span", { class: "n" }, String(a.n)), a.image ? el("img", { src: a.image, alt: "", loading: "lazy" }) : null,
             el("span", {}, el("b", {}, a.title)))))] : null,
         foot,
-        el("div", { class: "note" }, "Answers are summarized from our guides."));
+        el("div", { class: "note" }, "Answers are automatically summarized from our guides."));
     }
   }
 
