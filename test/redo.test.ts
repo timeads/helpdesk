@@ -41,6 +41,9 @@ describe("Redo labels", () => {
       { carrier: "USPS", serviceCode: "redo:1:ca_1:USPS:GroundAdvantage", serviceName: "USPS Ground Advantage · Redo", total: 8.15, listTotal: 8.15, currency: "USD", days: 3 },
       { carrier: "UPS", serviceCode: "redo:1:ca_ups:UPS:Ground", serviceName: "UPS Ground · Redo", total: 11.2, listTotal: 11.2, currency: "USD", days: 3 },
     ]);
+    await getRedoRates(env, from, { ...to, company: "Acme Studio" }, [box(3)]);
+    expect(queries.at(-1)).toContain('toAddress: {name: "Jane Doe, Acme Studio" street1:');
+    expect(queries.at(-1)).not.toContain("company:");
     expect(parseRedoCode(rates[0].serviceCode)).toEqual({ mode: "1", carrierAccountId: "ca_1", carrier: "USPS", service: "GroundAdvantage" });
   });
 

@@ -62,10 +62,17 @@ function redoError(status: number, errors: any[]) {
 
 // ---------------------------------------------------------------- Request shape
 
+// Redo's address has no company field: a business keeps its name on the label as "Jane Doe, Acme Studio"
+const nameLine = (a: Address) => {
+  const name = a.name?.trim() ?? "";
+  const company = a.company?.trim() ?? "";
+  if (!company || name.toLowerCase().includes(company.toLowerCase())) return name || undefined;
+  return (name ? `${name}, ${company}` : company).slice(0, 70);
+};
+
 const address = (a: Address) => {
   const out: Record<string, unknown> = {
-    name: a.name || undefined,
-    company: a.company || undefined,
+    name: nameLine(a),
     street1: a.address1,
     street2: a.address2 || undefined,
     city: a.city,
