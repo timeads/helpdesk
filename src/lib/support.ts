@@ -43,6 +43,7 @@ export interface TicketRow {
   tags: string;
   message_count: number;
   gmail_thread_id: string | null;
+  folder_id?: number | null;
 }
 
 export const parseTags = (raw: string | null | undefined): string[] => {

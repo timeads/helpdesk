@@ -6,7 +6,7 @@ import { renderSettings } from "./settings.js";
 import { renderAnalytics } from "./analytics.js";
 import { renderManual } from "./manual.js";
 
-export const state = { me: null, appName: "Support", agents: [], counts: {}, views: [] };
+export const state = { me: null, appName: "Support", agents: [], counts: {}, views: [], folders: [] };
 const root = document.getElementById("app");
 let mainEl, navEl, cleanup = null;
 
@@ -30,12 +30,15 @@ const MORE_VIEWS = [
 export const viewLabel = (id) => {
   if (id === "pending") return "In progress";
   if (id?.startsWith("v:")) return state.views.find((v) => `v:${v.id}` === id)?.name ?? "View";
+  if (id?.startsWith("f:")) return state.folders.find((f) => `f:${f.id}` === id)?.name ?? "Folder";
   return [...VIEWS, ...MORE_VIEWS].find((v) => v.id === id)?.label ?? "Open";
 };
 
 export async function refreshViews() {
   try {
-    state.views = (await api("/views")).views;
+    const [v, f] = await Promise.all([api("/views"), api("/folders")]);
+    state.views = v.views;
+    state.folders = f.folders;
   } catch { /* keep what we had */ }
   renderNav();
 }
@@ -104,9 +107,22 @@ function renderNav() {
         renderNav();
       } }, icon(moreOpen ? "up" : "down"), h("span", { class: "label-long" }, moreOpen ? "Less" : "More")),
       moreOpen || MORE_VIEWS.some((v) => v.id === view) ? MORE_VIEWS.map((v) => item(`/?view=${v.id}`, v.label, v.label, v.icon, inInbox && view === v.id, v.id === "spam" ? state.counts.spam : 0, " closed-view")) : null,
+      // Ticket folders: filed away from the inbox; highlighted when a customer wrote back
+      h("div", { class: "nav-label closed-view nav-label-row" }, "Folders",
+        h("button", { class: "nav-add", title: "New folder", "aria-label": "New folder", onclick: async () => {
+          const name = prompt("Name the new folder (e.g. Repairs — waiting for machine)");
+          if (!name?.trim()) return;
+          try {
+            const { folder } = await api("/folders", { method: "POST", body: { name } });
+            await refreshViews();
+            navigate(`/?view=f:${folder.id}`);
+          } catch (e) { toast(e.message, true); }
+        } }, icon("plus"))),
+      state.folders.map((f) => item(`/?view=f:${f.id}`, f.name, f.name, "folder", inInbox && view === `f:${f.id}`, state.counts[`f:${f.id}`],
+        " closed-view" + (state.counts[`f:${f.id}:unread`] ? " folder-new" : ""))),
       state.views.length ? viewGroups().map(([folder, vs]) => [
         h("div", { class: "nav-label closed-view" }, folder || "Views"),
-        vs.map((v) => item(`/?view=v:${v.id}`, v.name, v.name, folder ? "folder" : "layers", inInbox && view === `v:${v.id}`, state.counts[`v:${v.id}`], " closed-view")),
+        vs.map((v) => item(`/?view=v:${v.id}`, v.name, v.name, "layers", inInbox && view === `v:${v.id}`, state.counts[`v:${v.id}`], " closed-view")),
       ]) : null),
     h("div", { class: "nav-label" }, "Store"),
     item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), undefined, " ship-view"),
@@ -124,6 +140,9 @@ function renderNav() {
       ),
     ),
   );
+  // Keep the open folder or view in sight when the list is taller than the sidebar
+  const active = navEl.querySelector(".nav-scroll .nav-item.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
 }
 
 function viewGroups() {
@@ -183,7 +202,11 @@ async function boot() {
   }
   const err = new URLSearchParams(location.search).get("error");
   if (err) toast(err, true);
-  [state.agents, state.views] = await Promise.all([api("/agents").then((r) => r.agents), api("/views").then((r) => r.views).catch(() => [])]);
+  [state.agents, state.views, state.folders] = await Promise.all([
+    api("/agents").then((r) => r.agents),
+    api("/views").then((r) => r.views).catch(() => []),
+    api("/folders").then((r) => r.folders).catch(() => []),
+  ]);
   root.className = "";
   navEl = h("nav", { class: "sidebar" });
   mainEl = h("main", { class: "main" });

@@ -55,6 +55,24 @@ export function statusMenu(anchor, current, onPick, { snooze = true } = {}) {
   popover(anchor, menuList(items), { width: 220 });
 }
 
+/** Pick a folder to file into, "Back to inbox", or make a new one. `current` is the ticket's folder id (or undefined for many). */
+export function folderMenu(anchor, current, onPick) {
+  const newFolder = async () => {
+    const name = prompt("Name the new folder (e.g. Repairs — waiting for machine)");
+    if (!name?.trim()) return;
+    const { folder } = await api("/folders", { method: "POST", body: { name } });
+    const { refreshViews } = await import("./app.js");
+    await refreshViews();
+    onPick(folder.id, folder.name);
+  };
+  popover(anchor, menuList([
+    ...state.folders.map((f) => ({ label: f.name, icon: "folder", active: f.id === current, run: () => onPick(f.id, f.name) })),
+    state.folders.length ? "-" : null,
+    current !== null ? { label: "Back to inbox (no folder)", icon: "inbox", run: () => onPick(null, null) } : null,
+    { label: "New folder…", icon: "plus", run: () => setTimeout(() => newFolder().catch((e) => alert(e.message)), 0) },
+  ].filter(Boolean)), { width: 260 });
+}
+
 export function priorityMenu(anchor, current, onPick) {
   popover(anchor, menuList([
     ...Object.entries(PRIORITY).map(([p, label]) => ({ label, icon: "flag", active: p === current, run: () => onPick(p) })),

@@ -3,7 +3,7 @@
 import { api } from "./api.js";
 import { state, navigate, refreshCounts } from "./app.js";
 import { h, mount, icon, relTime, fullTime, shortDate, money, humanize, initials, toast, busy, spinner, fileSize, skeletonRows, popover, menuList, modal } from "./ui.js";
-import { STATUS, statusLabel, statusBadge, PRIORITY, priorityChip, statusMenu, priorityMenu, assignMenu, snoozeMenu, tagMenu, whenLabel } from "./common.js";
+import { STATUS, statusLabel, statusBadge, PRIORITY, priorityChip, statusMenu, priorityMenu, assignMenu, snoozeMenu, tagMenu, folderMenu, whenLabel } from "./common.js";
 import { buildComposer, loadSettings, settingsCache, newEmail } from "./composer.js";
 import { chatBubble, chatControls } from "./chat-agent.js";
 import { socialControls } from "./social-agent.js";
@@ -51,6 +51,15 @@ export async function openTicket(inbox, el, id) {
   };
   const setPriority = async (p) => {
     try { await patch({ priority: p }, p ? `Priority: ${PRIORITY[p]}` : "Priority cleared"); inbox.reloadList(); redraw(); } catch (e) { toast(e.message, true); }
+  };
+  // Filing: leaving the inbox moves you on like closing does; filing from inside a folder just updates it
+  const setFolder = async (folderId, name) => {
+    try {
+      await patch({ folder_id: folderId }, folderId ? `Moved to ${name}` : "Moved back to the inbox");
+      const leavesView = inbox.view.startsWith("f:") ? `f:${folderId}` !== inbox.view : folderId !== null && !["all", "closed", "archived", "spam", "deleted", "mentions"].includes(inbox.view);
+      if (leavesView && !inbox.q) inbox.goNext(id);
+      else { inbox.reloadList(); redraw(); }
+    } catch (e) { toast(e.message, true); }
   };
   let tagTimer;
   const setTags = (tags) => {
@@ -103,6 +112,7 @@ export async function openTicket(inbox, el, id) {
     priority: () => priorityMenu(statusBtn, t.priority, setPriority),
     assign: () => assignMenu(statusBtn, t.assignee_id, setAssignee),
     tags: () => tagMenu(statusBtn, t.tags, setTags),
+    folder: () => folderMenu(statusBtn, t.folder_id ?? null, setFolder),
     assignToMe: () => setAssignee(state.me.id),
     merge,
   };
@@ -112,6 +122,8 @@ export async function openTicket(inbox, el, id) {
     { label: "Snooze…", icon: "moon", hint: "S", run: () => setTimeout(actions.snooze, 0) },
     t.status !== "archived" ? { label: "Archive", icon: "archive", run: () => setStatus("archived") } : null,
     { label: "Merge…", icon: "merge", run: merge },
+    { label: t.folder_id ? "Move to another folder…" : "Move to folder…", icon: "folder", hint: "V", run: () => setTimeout(() => actions.folder(), 0) },
+    t.folder_id ? { label: "Back to inbox", icon: "inbox", run: () => setFolder(null, null) } : null,
     "-",
     { label: "Assign…", icon: "user", hint: "A", run: () => setTimeout(actions.assign, 0) },
     t.assignee_id !== state.me.id ? { label: "Assign to me", icon: "user", run: actions.assignToMe } : null,
@@ -169,6 +181,12 @@ export async function openTicket(inbox, el, id) {
       h("h3", {}, "Ticket"),
       row("Assignee", assignBtn),
       row("Priority", prioBtn),
+      row("Folder", (() => {
+        const f = state.folders.find((x) => x.id === t.folder_id);
+        const b = h("button", { class: "kv-btn", title: "Move to folder (V)" }, f ? [icon("folder"), f.name] : h("span", { class: "muted" }, "Inbox"), icon("chevron"));
+        b.onclick = () => folderMenu(b, t.folder_id ?? null, setFolder);
+        return b;
+      })()),
       row("Status", statusBadge(t.status)),
       t.status === "snoozed" && t.snoozed_until ? row("Back on", whenLabel(t.snoozed_until)) : null,
       row("Created", fullTime(t.created_at)),
@@ -298,6 +316,7 @@ export function describeEvent(e) {
     case "tag_removed": return `${who} removed tag${d.includes(",") ? "s" : ""} ${d}`;
     case "priority": return d === "none" ? `${who} cleared the priority` : `${who} set priority to ${PRIORITY[d]?.toLowerCase() ?? d}`;
     case "subject": return `${who} renamed the ticket “${d}”`;
+    case "folder": return d ? `${who} moved this to the ${d} folder` : `${who} moved this back to the inbox`;
     case "merged": return d.startsWith("#") ? `${who} merged ${d}` : d;
     case "mention": return `${who} mentioned ${d}`;
     case "rules": return d;

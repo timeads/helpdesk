@@ -2,7 +2,7 @@
 import { api } from "./api.js";
 import { state, navigate, refreshCounts, viewLabel, refreshViews } from "./app.js";
 import { h, mount, icon, relTime, fullTime, initials, toast, busy, rugArt, skeletonRows, popover, menuList, modal } from "./ui.js";
-import { statusLabel, statusBadge, PRIORITY, priorityChip, statusMenu, priorityMenu, assignMenu, snoozeMenu, tagMenu, loadTags, tagChips, whenLabel } from "./common.js";
+import { statusLabel, statusBadge, PRIORITY, priorityChip, statusMenu, priorityMenu, assignMenu, snoozeMenu, tagMenu, folderMenu, loadTags, tagChips, whenLabel } from "./common.js";
 import { openTicket } from "./ticket.js";
 import { newEmail, loadSettings } from "./composer.js";
 
@@ -154,6 +154,9 @@ function createInbox(main, loc) {
         setTimeout(() => tagMenu(tagBtn, on, (name) => run({ remove_tags: [name] }, `untagged ${name}`), { mode: "remove" }), 0);
       } },
     ]), { width: 200 });
+    const folderBtn = h("button", { class: "btn sm icon-only", title: "Move to folder", "aria-label": "Move to folder" }, icon("folder"));
+    folderBtn.onclick = () => folderMenu(folderBtn, self.view.startsWith("f:") ? Number(self.view.slice(2)) : undefined,
+      (id, name) => run({ folder_id: id }, id ? `moved to ${name}` : "moved back to the inbox"));
     const more = h("button", { class: "btn sm icon-only", title: "More", "aria-label": "More bulk actions" }, icon("dots"));
     more.onclick = () => popover(more, menuList([
       { label: "Set priority…", icon: "flag", run: () => setTimeout(() => priorityMenu(more, undefined, (p) => run({ priority: p }, p ? `set to ${PRIORITY[p].toLowerCase()} priority` : "cleared priority")), 0) },
@@ -168,7 +171,7 @@ function createInbox(main, loc) {
     ]), { width: 230, align: "right" });
     mount(bulkBar,
       h("label", { class: "bulk-all" }, allBox, h("b", {}, `${n} selected`)),
-      h("div", { class: "row", style: { gap: "4px", marginLeft: "auto", flexWrap: "nowrap" } }, closeBtn, statusBtn, assignBtn, tagBtn, more,
+      h("div", { class: "row", style: { gap: "4px", marginLeft: "auto", flexWrap: "nowrap" } }, closeBtn, statusBtn, assignBtn, tagBtn, folderBtn, more,
         h("button", { class: "btn sm ghost icon-only", "aria-label": "Clear selection", title: "Clear selection (Esc)", onclick: () => { self.selected.clear(); renderList(); } }, icon("x"))));
   };
 
@@ -260,6 +263,7 @@ function createInbox(main, loc) {
           : t.channel === "instagram" || t.channel === "facebook" ? h("span", { class: `chat-tag ${t.channel}`, title: t.channel === "instagram" ? "Instagram" : "Facebook" }, icon(t.channel)) : null, h("span", {}, t.subject)),
         h("div", { class: "snip" }, t.snippet),
         h("div", { class: "meta" },
+          t.folder_id && self.view !== `f:${t.folder_id}` ? h("span", { class: "badge plain folder-chip", title: "In this folder" }, icon("folder"), state.folders.find((f) => f.id === t.folder_id)?.name ?? "Folder") : null,
           showStatus || t.status === "snoozed" ? statusBadge(t.status) : null,
           t.status === "snoozed" && t.snoozed_until ? h("span", { class: "small muted" }, whenLabel(t.snoozed_until)) : null,
           t.assignee_name
@@ -338,7 +342,7 @@ function createInbox(main, loc) {
     else if (k === "x" && self.ticketId) toggleSelect(self.ticketId);
     else if (k === "Escape" && self.selected.size) { self.selected.clear(); renderList(); }
     else if (d) {
-      const map = { r: () => d.focusReply("reply"), n: () => d.focusReply("note"), f: () => d.focusReply("forward"), e: d.close, s: d.snooze, a: d.assign, t: d.tags, p: d.priority, m: d.assignToMe };
+      const map = { r: () => d.focusReply("reply"), n: () => d.focusReply("note"), f: () => d.focusReply("forward"), e: d.close, s: d.snooze, a: d.assign, t: d.tags, p: d.priority, m: d.assignToMe, v: d.folder };
       if (map[k]) { e.preventDefault(); map[k](); }
     }
   };
@@ -368,7 +372,7 @@ function shortcutsHelp() {
   const groups = [
     ["Move", [["j", "k"], "Next / previous ticket"], [["/"], "Search"], [["x"], "Select ticket"], [["Esc"], "Clear selection"], [["c"], "New email"]],
     ["Ticket", [["r"], "Reply"], [["n"], "Internal note"], [["f"], "Forward"], [["e"], "Close"], [[ALT, "C"], "Close"], [[ALT, "R"], "Reopen"], [[ALT, "I"], "Mark in progress"], [[ALT, "M"], "Mark as spam"]],
-    ["Organize", [["a"], "Assign…"], [["m"], "Assign to me"], [["s"], "Snooze…"], [["t"], "Tags…"], [["p"], "Priority…"]],
+    ["Organize", [["a"], "Assign…"], [["m"], "Assign to me"], [["s"], "Snooze…"], [["t"], "Tags…"], [["p"], "Priority…"], [["v"], "Move to folder…"]],
     ["Composer", [[MOD, "↵"], "Send · mark in progress"], [[MOD, "⇧", "↵"], "Send & close"], [[ALT, "⇧", "↵"], "Send · mark in progress"], [[MOD, "5"], "Discount code"]],
   ];
   modal("Keyboard shortcuts", h("div", { class: "shortcuts" }, groups.map(([title, ...items]) => h("div", {},

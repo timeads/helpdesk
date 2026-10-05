@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
+import { createFolder, deleteFolder, listFolders, renameFolder } from "../lib/folders";
 import { graph, metaConfigured } from "../lib/meta";
 import { redoConfigured, testRedo } from "../lib/redo";
 import { shipFrom } from "../lib/fulfillment";
@@ -33,6 +34,15 @@ admin.patch("/me", async (c) => {
     .run();
   return c.json({ ok: true });
 });
+
+// ---- Ticket folders (anyone on the team can make and file into them)
+admin.get("/folders", async (c) => c.json({ folders: await listFolders(c.env) }));
+admin.post("/folders", async (c) => c.json({ folder: await createFolder(c.env, (await c.req.json<{ name?: string }>()).name) }));
+admin.patch("/folders/:id{[0-9]+}", async (c) => {
+  await renameFolder(c.env, Number(c.req.param("id")), (await c.req.json<{ name?: string }>()).name);
+  return c.json({ ok: true });
+});
+admin.delete("/folders/:id{[0-9]+}", async (c) => c.json({ ok: true, returned: await deleteFolder(c.env, Number(c.req.param("id"))) }));
 
 admin.get("/agents", async (c) => {
   const { results } = await c.env.DB.prepare("SELECT id, email, name, role, available FROM agents WHERE active = 1 ORDER BY name").all();

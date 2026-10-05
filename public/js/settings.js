@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { state, applyTheme } from "./app.js";
+import { state, applyTheme, refreshViews } from "./app.js";
 import { h, mount, relTime, toast, busy, icon, skeletonRows, initials, growInput } from "./ui.js";
 import { printSettings, resetZebra, savePrintSettings, testZebra, zebraDiagnostics, zebraPrinter } from "./printing.js";
 import { slipCard } from "./settings-slip.js";
@@ -12,7 +12,7 @@ const PAGES = [
   { id: "account", label: "Profile & team", icon: "user", desc: "Your profile, signature and who's on the team." },
   { id: "connections", label: "Connections", icon: "link", desc: "Gmail, Shopify, UPS, EasyPost and AI — and the keys behind them." },
   { id: "tickets", label: "Tickets & email", icon: "inbox", desc: "How tickets are assigned and merged, which email becomes a ticket, and automatic ticket rules.", admin: true },
-  { id: "macros", label: "Macros, tags & views", icon: "tag", desc: "Saved replies, tags and the ticket views in the sidebar." },
+  { id: "macros", label: "Macros, folders & tags", icon: "tag", desc: "Saved replies, ticket folders, tags and the ticket views in the sidebar." },
   { id: "knowledge", label: "AI knowledge", icon: "spark", desc: "What AI drafts know about your products and policies." },
   { id: "chat", label: "Website chat", icon: "chat", desc: "The chat on your store: AI replies, office hours, how it looks and how to install it.", admin: true },
   { id: "social", label: "Instagram & Facebook", icon: "instagram", desc: "Comments and direct messages from Instagram and Facebook as tickets.", admin: true },
@@ -71,7 +71,7 @@ async function load(inner, id = location.pathname.split("/")[2]) {
       cards = [supportBehavior(s), mailRules(s), supportRulesCard(supportRules, macros, tags, () => reload(inner))];
     } else if (id === "macros") {
       const [{ macros, variables }, { tags }, { views }] = await Promise.all([api("/macros"), api("/tags"), api("/views")]);
-      cards = [macrosCard(macros, variables, () => reload(inner)), tagsCard(tags, () => reload(inner)), viewsCard(views, tags, () => reload(inner))];
+      cards = [macrosCard(macros, variables, () => reload(inner)), foldersCard(() => reload(inner)), tagsCard(tags, () => reload(inner)), viewsCard(views, tags, () => reload(inner))];
     } else if (id === "knowledge") {
       const { knowledge } = await api("/knowledge");
       cards = [knowledgeCard(knowledge, () => reload(inner))];
@@ -638,4 +638,39 @@ function learnedList() {
   };
   load();
   return el;
+}
+
+/** Ticket folders: add, rename, remove (tickets in a removed folder go back to the inbox). */
+function foldersCard(reload) {
+  const name = h("input", { class: "input", placeholder: "New folder, e.g. Repairs — waiting for machine", maxlength: 60 });
+  const add = h("button", { class: "btn" }, icon("plus"), "Add folder");
+  add.onclick = busy(add, async () => {
+    await api("/folders", { method: "POST", body: { name: name.value } });
+    await refreshViews();
+    toast(`Folder “${name.value.trim()}” added`);
+    reload();
+  });
+  name.onkeydown = (e) => { if (e.key === "Enter") add.click(); };
+  const rows = state.folders.map((f) => {
+    const input = h("input", { class: "input", value: f.name, maxlength: 60, "aria-label": "Folder name" });
+    const save = async () => {
+      if (input.value.trim() === f.name) return;
+      try { await api(`/folders/${f.id}`, { method: "PATCH", body: { name: input.value } }); await refreshViews(); toast("Folder renamed"); }
+      catch (e) { toast(e.message, true); input.value = f.name; }
+    };
+    input.onchange = save;
+    const rm = h("button", { class: "btn sm ghost danger" }, "Remove");
+    rm.onclick = busy(rm, async () => {
+      const n = state.counts[`f:${f.id}`] ?? 0;
+      if (!confirm(`Remove the “${f.name}” folder?${n ? ` Its ${n} ticket${n === 1 ? "" : "s"} go back to the inbox.` : ""}`)) return;
+      await api(`/folders/${f.id}`, { method: "DELETE" });
+      await refreshViews();
+      reload();
+    });
+    return h("div", { class: "row folder-row" }, icon("folder"), input, h("span", { class: "small muted", style: { whiteSpace: "nowrap" } }, `${state.counts[`f:${f.id}`] ?? 0} open`), rm);
+  });
+  return h("section", { class: "card", id: "folders" }, h("h2", {}, "Folders"),
+    h("p", { class: "muted" }, "File tickets away from the inbox — like repairs waiting for the machine to arrive — and find them in the sidebar under Folders. A ticket in a folder keeps its status; when the customer writes back, the folder lights up. Move a ticket with the folder button on the ticket or in the list (shortcut V)."),
+    h("div", { class: "stack" }, rows.length ? rows : h("p", { class: "small muted", style: { margin: 0 } }, "No folders yet."),
+      h("div", { class: "row", style: { flexWrap: "nowrap" } }, name, add)));
 }

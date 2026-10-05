@@ -23,6 +23,7 @@ import {
   type TicketRow,
 } from "../lib/support";
 import { HttpError, base64UrlDecodeBytes, getSetting, nowIso, splitAddressList } from "../lib/util";
+import { fileTicket } from "../lib/folders";
 
 const tickets = new Hono<AppEnv>();
 
@@ -36,6 +37,7 @@ interface ViewFilters {
   unread?: boolean;
   q?: string;
   channel?: string; // "chat" for website chats, "instagram" / "facebook", or "social" for both
+  folder?: number; // a ticket folder's contents (filed tickets are left out of every other view but All, Closed and searches)
 }
 
 const BUILT_IN: Record<string, ViewFilters> = {
@@ -55,7 +57,11 @@ const BUILT_IN: Record<string, ViewFilters> = {
   social: { status: "active", channel: "social" },
 };
 
+// Views that show filed tickets too (everything else is the inbox, which filing keeps clear)
+const SHOWS_FILED = new Set(["all", "closed", "archived", "spam", "deleted", "mentions"]);
+
 async function viewFilters(env: Env, view: string): Promise<ViewFilters> {
+  if (/^f:\d+$/.test(view)) return { status: "unclosed", folder: Number(view.slice(2)) };
   if (view.startsWith("v:")) {
     const row = await env.DB.prepare("SELECT filters FROM views WHERE id = ?").bind(Number(view.slice(2))).first<{ filters: string }>();
     if (!row) throw new HttpError(404, "That view no longer exists");
@@ -69,6 +75,7 @@ function whereFor(f: ViewFilters, agentId: number, view = ""): { sql: string; ar
   const args: unknown[] = [];
   const st = f.status ?? "active";
   if (st === "active") clauses.push("t.status IN ('open','in_progress')");
+  else if (st === "unclosed") clauses.push("t.status IN ('open','in_progress','snoozed')");
   else if (st === "any") clauses.push("t.status NOT IN ('spam','deleted')");
   else if ((STATUSES as readonly string[]).includes(st)) {
     clauses.push("t.status = ?");
@@ -103,6 +110,10 @@ function whereFor(f: ViewFilters, agentId: number, view = ""): { sql: string; ar
     args.push(...f.tags_any);
   }
   const q = (f.q ?? "").trim();
+  if (f.folder) {
+    clauses.push("t.folder_id = ?");
+    args.push(f.folder);
+  } else if (!q && !SHOWS_FILED.has(view)) clauses.push("t.folder_id IS NULL");
   if (q) {
     const like = `%${q}%`;
     clauses.push(
@@ -136,7 +147,7 @@ const ORDER: Record<string, string> = {
 };
 
 const LIST_COLUMNS = `t.id, t.subject, t.customer_email, t.customer_name, t.status, t.priority, t.tags, t.assignee_id, a.name AS assignee_name,
-  t.unread, t.snippet, t.message_count, t.last_message_at, t.last_inbound_at, t.created_at, t.snoozed_until, t.ai_sentiment, t.channel`;
+  t.unread, t.snippet, t.message_count, t.last_message_at, t.last_inbound_at, t.created_at, t.snoozed_until, t.ai_sentiment, t.channel, t.folder_id`;
 
 const withTags = <T extends { tags?: string }>(r: T) => ({ ...r, tags: parseTags(r.tags) });
 
@@ -144,16 +155,16 @@ tickets.get("/counts", async (c) => {
   const me = c.get("agent").id;
   const row = await c.env.DB.prepare(
     `SELECT
-       SUM(status = 'open') AS open,
-       SUM(status IN ('open','in_progress') AND assignee_id = ?1) AS mine,
-       SUM(status = 'open' AND assignee_id IS NULL) AS unassigned,
-       SUM(status = 'in_progress') AS in_progress,
-       SUM(status = 'snoozed') AS snoozed,
+       SUM(status = 'open' AND folder_id IS NULL) AS open,
+       SUM(status IN ('open','in_progress') AND assignee_id = ?1 AND folder_id IS NULL) AS mine,
+       SUM(status = 'open' AND assignee_id IS NULL AND folder_id IS NULL) AS unassigned,
+       SUM(status = 'in_progress' AND folder_id IS NULL) AS in_progress,
+       SUM(status = 'snoozed' AND folder_id IS NULL) AS snoozed,
        SUM(status = 'spam') AS spam,
        (SELECT COUNT(DISTINCT ticket_id) FROM mentions WHERE agent_id = ?1 AND seen = 0) AS mentions,
        (SELECT COUNT(*) FROM chats WHERE state = 'waiting') AS chats_waiting,
-       SUM(status IN ('open','in_progress') AND channel = 'chat') AS chats,
-       SUM(status = 'open' AND channel IN ('instagram', 'facebook')) AS social
+       SUM(status IN ('open','in_progress') AND channel = 'chat' AND folder_id IS NULL) AS chats,
+       SUM(status = 'open' AND channel IN ('instagram', 'facebook') AND folder_id IS NULL) AS social
      FROM tickets`,
   )
     .bind(me)
@@ -165,6 +176,11 @@ tickets.get("/counts", async (c) => {
     const r = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM tickets t WHERE ${w.sql}`).bind(...w.args).first<{ n: number }>();
     custom[`v:${v.id}`] = r?.n ?? 0;
   }
+  // Folders: how many are filed there, and how many have something new from the customer
+  const { results: folders } = await c.env.DB.prepare(
+    "SELECT folder_id AS id, COUNT(*) AS n, SUM(unread) AS unread FROM tickets WHERE folder_id IS NOT NULL AND status IN ('open','in_progress','snoozed') GROUP BY folder_id",
+  ).all<{ id: number; n: number; unread: number }>();
+  for (const f of folders) { custom[`f:${f.id}`] = f.n; custom[`f:${f.id}:unread`] = f.unread ?? 0; }
   return c.json({ ...row, pending: row?.in_progress ?? 0, ...custom });
 });
 
@@ -305,8 +321,10 @@ tickets.patch("/:id{[0-9]+}", async (c) => {
     priority?: string | null;
     tags?: string[];
     subject?: string;
+    folder_id?: number | null;
   }>();
   const t = await loadTicket(c.env, id);
+  if (body.folder_id !== undefined) await fileTicket(c.env, t, body.folder_id, me.id);
   if (body.status) await changeStatus(c.env, c.executionCtx, t, parseStatus(body.status), me.id, body.snooze_until);
   if (body.assignee_id !== undefined) {
     try {
@@ -341,6 +359,7 @@ tickets.post("/bulk", async (c) => {
     add_tags?: string[];
     remove_tags?: string[];
     unread?: boolean;
+    folder_id?: number | null;
   }>();
   const ids = [...new Set((body.ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 500);
   if (!ids.length) throw new HttpError(400, "Select at least one ticket");
@@ -374,6 +393,10 @@ tickets.post("/bulk", async (c) => {
     if (body.add_tags?.length || body.remove_tags?.length) {
       const drop = new Set((body.remove_tags ?? []).map((x) => x.toLowerCase()));
       await setTags(c.env, t, [...parseTags(t.tags).filter((x) => !drop.has(x.toLowerCase())), ...(body.add_tags ?? [])], me.id);
+      did = true;
+    }
+    if (body.folder_id !== undefined && (body.folder_id ?? null) !== (t.folder_id ?? null)) {
+      await fileTicket(c.env, t, body.folder_id, me.id);
       did = true;
     }
     if (body.unread !== undefined) {
