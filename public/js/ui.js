@@ -136,6 +136,7 @@ export const icons = {
   edit: P('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>'),
   instagram: P('<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6" fill="currentColor"/>'),
   facebook: P('<path d="M14 21v-8h3l.5-3.5H14V7.7c0-1 .3-1.7 1.8-1.7H18V3h-2.7C12.6 3 11 4.6 11 7.4v2.1H8V13h3v8"/>'),
+  sidebar: P('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>'),
   keyboard: P('<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
 };
 

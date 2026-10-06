@@ -289,7 +289,7 @@ export function chooseRate(rates: Rate[], policy: string | null | undefined): Ra
     const timed = rates.filter((r) => r.days !== null).sort((a, b) => a.days! - b.days! || a.total - b.total);
     return timed[0] ?? byPrice[0];
   }
-  if (policy && policy !== "cheapest") return rates.find((r) => r.serviceCode === policy) ?? byPrice[0];
+  if (policy && policy !== "cheapest") return rates.find((r) => r.serviceCode === policy || r.alt?.includes(policy)) ?? byPrice[0];
   return byPrice[0];
 }
 

@@ -21,7 +21,33 @@ export async function getAllRates(env: Env, from: Address, to: Address, parcels:
   const rates = settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
   const errors = settled.filter((s): s is PromiseRejectedResult => s.status === "rejected").map((s) => s.reason);
   if (!rates.length && errors.length) throw errors[0];
-  return rates.sort((a, b) => a.total - b.total);
+  return dedupeRates(rates);
+}
+
+/** "UPS 3 Day Select · Redo" and "UPS 3day Select" are the same service: carrier + name without spaces or the "· via" part. */
+export const serviceKey = (r: Pick<Rate, "carrier" | "serviceName">) =>
+  `${(r.carrier ?? "").toLowerCase()}|${r.serviceName.replace(/\s·\s.*$/, "").toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+
+const via = (r: Rate) => (r.serviceCode.startsWith("redo:") ? 2 : r.serviceCode.startsWith("ep:") || r.serviceCode.startsWith("usps:") ? 1 : 0);
+
+/**
+ * One row per carrier service: the same service can come from several places (UPS direct, UPS through
+ * EasyPost or Redo, or two carrier accounts in Redo). Keep the cheapest; on a tie, the direct connection.
+ */
+export function dedupeRates(rates: Rate[]): Rate[] {
+  const best = new Map<string, Rate>();
+  const codes = new Map<string, Set<string>>();
+  for (const r of rates) {
+    const k = serviceKey(r);
+    codes.set(k, (codes.get(k) ?? new Set()).add(r.serviceCode));
+    const cur = best.get(k);
+    if (!cur || r.total < cur.total - 0.005 || (Math.abs(r.total - cur.total) <= 0.005 && via(r) < via(cur))) best.set(k, r);
+  }
+  // A rule or saved choice naming a hidden duplicate's code still finds the kept row
+  return [...best.entries()].map(([k, r]) => {
+    const alt = [...codes.get(k)!].filter((c) => c !== r.serviceCode);
+    return alt.length ? { ...r, alt } : r;
+  }).sort((a, b) => a.total - b.total);
 }
 
 export const carrierOf = (serviceCode: string) => (isRedoCode(serviceCode) ? carrierName(parseRedoCode(serviceCode).carrier) : isEasypostCode(serviceCode) ? carrierName(parseEasypostCode(serviceCode).raw) : "UPS");

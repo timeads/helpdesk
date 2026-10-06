@@ -54,6 +54,26 @@ const REDO_SAVE_MIN = 3;
 const REDO_SITE = "https://app.getredo.com";
 const redoSaving = (best, redo) => (best && redo ? Math.round((best.total - redo.total) * 100) / 100 : null);
 
+/** A small carrier mark (UPS brown, USPS blue, FedEx purple…) so options are easy to tell apart at a glance. */
+const CARRIER_MARKS = {
+  ups: ["UPS", "ups"], usps: ["USPS", "usps"], fedex: ["FedEx", "fedex"], dhl: ["DHL", "dhl"], "dhl express": ["DHL", "dhl"], "dhl ecommerce": ["DHL", "dhl"],
+  ontrac: ["OnTrac", "ontrac"], "amazon shipping": ["amzn", "amazon"], "canada post": ["CP", "canpost"],
+};
+function carrierMark(r, small = false) {
+  const name = String(r.carrier || (/^\d/.test(r.serviceCode) ? "UPS" : r.serviceName.split(" ")[0])).toLowerCase();
+  const [label, cls] = CARRIER_MARKS[name] ?? [String(r.carrier || "?").slice(0, 5), "other"];
+  return h("span", { class: `carrier-mark ${cls}${small ? " sm" : ""}`, title: r.carrier || "", "aria-hidden": "true" },
+    cls === "fedex" ? [h("b", {}, "Fed"), h("i", {}, "Ex")] : label);
+}
+
+/** The order page covers the screen; the side menu can stay visible next to it (remembered on this computer). */
+const orderNavOn = () => { try { return localStorage.getItem("op-nav") === "1"; } catch { return false; } };
+function toggleOrderNav() {
+  const on = !document.body.classList.contains("order-nav");
+  document.body.classList.toggle("order-nav", on);
+  try { localStorage.setItem("op-nav", on ? "1" : "0"); } catch { /* private mode */ }
+}
+
 let shipStatus = null; // /shipping/status, for notices inside the queue
 
 /** Why an order needs (or doesn't need) a signature: the rule that asked, or a choice saved on the order. */
@@ -149,7 +169,7 @@ function pickRate(rates, policy, plan) {
   const want = policy === "rule" ? plan.service ?? "cheapest" : policy;
   if (want === "fastest") return [...rates].filter((r) => r.days).sort((a, b) => a.days - b.days || a.total - b.total)[0] ?? rates[0];
   if (want === "cheapest") return [...rates].sort((a, b) => a.total - b.total)[0];
-  return rates.find((r) => r.serviceCode === want) ?? null;
+  return rates.find((r) => r.serviceCode === want || r.alt?.includes(want)) ?? null;
 }
 function loadQuotes(orders, onEach) {
   const todo = orders.filter((o) => o.plan.weightKnown && !o.hasLabel && !o.pickup && !quoteCache.has(quoteKey(o)));
@@ -359,7 +379,7 @@ function renderQueue(root, params) {
     const m = o.shippingPaid - r.total;
     td.title = q.rates.map((x) => `${x.serviceName}: ${money(x.total, "USD")} → ${marginText(o.shippingPaid - x.total)}`).join("\n");
     const save = o.plan.signature ? redoSaving(r, q.redo) : null;
-    mount(td, h("div", { class: "q-line" }, h("span", { class: "small" }, r.serviceName.replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority")), h("b", {}, money(r.total, "USD"))),
+    mount(td, h("div", { class: "q-line" }, h("span", { class: "small q-service" }, carrierMark(r, true), r.serviceName.replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority")), h("b", {}, money(r.total, "USD"))),
       h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`),
       q.redo && o.plan.signature ? h("div", { class: "redo-line small", title: `${q.redo.serviceName} on Redo, without a signature` },
         `Redo ${money(q.redo.total, "USD")}`,
@@ -537,7 +557,7 @@ function closeOrderPage(keepUrl = false) {
   if (!page) return;
   page.el.remove();
   document.removeEventListener("keydown", page.keys, true);
-  document.body.classList.remove("order-open");
+  document.body.classList.remove("order-open", "order-nav");
   const id = page.orderId;
   page = null;
   if (keepUrl) return;
@@ -576,6 +596,7 @@ async function openOrderPage(order, opts = {}) {
   const scroller = h("div", { class: "op-scroll" }, body);
   const el = h("div", { class: "order-page", role: "dialog", "aria-modal": "true", "aria-label": order ? `Order ${order.name}` : "New label" },
     h("div", { class: "op-bar" },
+      h("button", { class: "btn sm ghost icon-only op-menu", "aria-label": "Show or hide the menu", title: "Show or hide the side menu", onclick: toggleOrderNav }, icon("sidebar")),
       h("nav", { class: "op-crumbs", "aria-label": "Breadcrumb" },
         h("button", { class: "linkish", onclick: () => closeOrderPage() }, "Shipping"),
         h("span", { class: "sep" }, "/"),
@@ -608,6 +629,7 @@ async function openOrderPage(order, opts = {}) {
   };
   document.addEventListener("keydown", keys, true);
   document.body.classList.add("order-open");
+  document.body.classList.toggle("order-nav", orderNavOn());
   document.body.append(el);
   page = { el, keys, buy: null, orderId: order?.id };
   el.tabIndex = -1;
@@ -1060,7 +1082,7 @@ function buildLabelForm(root, o, presets, opts) {
       s.redoCompare = redo ?? null;
       const want = s.wantCode ?? plan?.service;
       const fastest = [...rates].filter((r) => r.days).sort((x, y) => x.days - y.days || x.total - y.total)[0];
-      s.rate = (want === "fastest" ? fastest : rates.find((r) => r.serviceCode === want)) ?? rates[0] ?? null;
+      s.rate = (want === "fastest" ? fastest : rates.find((r) => r.serviceCode === want || r.alt?.includes(want))) ?? rates[0] ?? null;
       drawRates();
     } catch (e) {
       if (my !== seq) return;
@@ -1543,6 +1565,7 @@ function buildLabelForm(root, o, presets, opts) {
           onkeydown: (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); s.rate = r; drawRates(); remember(); } },
         },
           h("span", { class: "radio" }),
+          carrierMark(r),
           h("div", { style: { minWidth: 0 } },
             h("div", { style: { fontWeight: 700 } }, r.serviceName),
             h("div", { class: "row", style: { gap: "6px", marginTop: "2px" } },
@@ -1550,7 +1573,7 @@ function buildLabelForm(root, o, presets, opts) {
               r.total === cheapest ? h("span", { class: "badge plain" }, "Cheapest") : null,
               fastestDays !== null && r.days === fastestDays ? h("span", { class: "badge plain" }, "Fastest") : null,
               o?.requestedService && sameService(o.requestedService, r.serviceName) ? h("span", { class: "badge plain" }, "Customer's choice") : null,
-              plan?.service === r.serviceCode ? h("span", { class: "badge plain" }, "By rule") : null),
+              plan?.service && (plan.service === r.serviceCode || r.alt?.includes(plan.service)) ? h("span", { class: "badge plain" }, "By rule") : null),
             split() && r.perBox?.length === s.parcels.length ? h("div", { class: "small muted per-box" }, r.perBox.map((x, i) => `Box ${i + 1} ${money(x, r.currency)}`).join(" · ")) : null),
           h("div", { class: "price-col" },
             h("div", { class: "price" }, money(r.total, r.currency), r.listTotal > r.total ? h("span", { class: "list" }, money(r.listTotal, r.currency)) : null),

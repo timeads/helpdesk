@@ -154,7 +154,7 @@ export function parseRedoCode(code: string) {
 export function redoServiceName(carrier: string, service: string) {
   const c = carrierName(carrier);
   const s = service.replace(/_/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(new RegExp(`^${carrier}\\s+`, "i"), "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())
-    .replace(/\bUsps\b/g, "USPS").replace(/\bUps\b/g, "UPS").replace(/\bAm\b/g, "AM");
+    .replace(/\bUsps\b/g, "USPS").replace(/\bUps\b/g, "UPS").replace(/\bAm\b/g, "AM").replace(/(\d)day\b/gi, "$1 Day");
   return `${c} ${s} · Redo`;
 }
 

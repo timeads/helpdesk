@@ -1472,3 +1472,27 @@ a.view-chip { text-decoration: none; }
 .sig-why { flex-basis: 100%; white-space: normal; }
 .kpis.ai-kpis, .kpis.compact { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
 .backlog-card .kpis { margin-top: 10px; }
+
+/* Carrier marks on rates */
+.carrier-mark { display: inline-grid; place-items: center; grid-auto-flow: column; min-width: 46px; height: 26px; padding: 0 6px; border-radius: 6px; font: 800 11px/1 var(--ui); letter-spacing: .02em; flex: none; }
+.carrier-mark.sm { min-width: 34px; height: 18px; font-size: 9.5px; padding: 0 4px; margin-right: 6px; vertical-align: 1px; border-radius: 4px; display: inline-grid; }
+.carrier-mark.ups { background: #351c15; color: #ffb500; }
+.carrier-mark.usps { background: #333366; color: #fff; }
+.carrier-mark.fedex { background: #fff; border: 1px solid #ddd; }
+.carrier-mark.fedex b { color: #4d148c; font-weight: 800; }
+.carrier-mark.fedex i { color: #ff6600; font-style: normal; font-weight: 800; }
+.carrier-mark.dhl { background: #ffcc00; color: #d40511; }
+.carrier-mark.ontrac { background: #0a3d7a; color: #fff; }
+.carrier-mark.amazon { background: #232f3e; color: #ff9900; }
+.carrier-mark.canpost { background: #da291c; color: #fff; }
+.carrier-mark.other { background: var(--sunken); color: var(--text-2); }
+.rate { gap: 12px; }
+.q-service { display: inline-flex; align-items: center; }
+
+/* Order page with the side menu showing (toggle in its top bar) */
+.op-bar { justify-content: flex-start; }
+.op-bar .op-nav { margin-left: auto; }
+body.order-nav .order-page { left: 228px; box-shadow: -1px 0 0 var(--border); }
+body.order-nav .op-menu { color: var(--ochre-text); }
+@media (max-width: 1240px) { body.order-nav .order-page { left: 64px; } }
+@media (max-width: 760px) { .op-menu { display: none; } body.order-nav .order-page { left: 0; } }

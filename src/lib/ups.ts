@@ -57,6 +57,7 @@ export interface Rate {
   currency: string;
   days: number | null;
   perBox?: number[]; // multi-box shipments: what each box costs (adds up to total)
+  alt?: string[]; // the same service's codes from other connections it stands in for (see dedupeRates)
 }
 
 /** Shares a total across boxes in proportion to each box's own charge (so per-box costs add up). */

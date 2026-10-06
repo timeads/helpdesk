@@ -158,3 +158,28 @@ describe("Redo labels", () => {
     expect(await redoSignatureWatch({ DB: db.DB } as any, t0 + 48 * 3600_000)).toBeNull(); // Redo not connected: nothing to check
   });
 });
+
+describe("one row per carrier service", async () => {
+  const { dedupeRates } = await import("../src/lib/carriers");
+  const { chooseRate } = await import("../src/lib/fulfillment");
+  const r = (serviceCode: string, carrier: string, serviceName: string, total: number) => ({ serviceCode, carrier, serviceName, total, listTotal: total, currency: "USD", days: 3 });
+  it("drops repeats from other connections and accounts, keeping the cheapest (direct on a tie)", () => {
+    const rates = dedupeRates([
+      r("03", "UPS", "UPS Ground", 11.21),
+      r("redo:1:ca_a:UPS:Ground", "UPS", "UPS Ground · Redo", 11.21),
+      r("redo:1:ca_b:UPS:Ground", "UPS", "UPS Ground · Redo", 11.21),
+      r("12", "UPS", "UPS 3 Day Select", 16.44),
+      r("redo:1:ca_a:UPS:3daySelect", "UPS", "UPS 3 Day Select · Redo", 15.9),
+      r("usps:GroundAdvantage", "USPS", "USPS Ground Advantage", 8.4),
+      r("redo:1:ca_u:USPS:GroundAdvantage", "USPS", "USPS Ground Advantage · Redo", 8.15),
+    ]);
+    expect(rates.map((x) => [x.serviceCode, x.alt ?? []])).toEqual([
+      ["redo:1:ca_u:USPS:GroundAdvantage", ["usps:GroundAdvantage"]],
+      ["03", ["redo:1:ca_a:UPS:Ground", "redo:1:ca_b:UPS:Ground"]],
+      ["redo:1:ca_a:UPS:3daySelect", ["12"]],
+    ]);
+    // A rule asking for UPS 3 Day Select (12) still gets that service, now through Redo
+    expect(chooseRate(rates, "12").serviceCode).toBe("redo:1:ca_a:UPS:3daySelect");
+    expect(redoServiceName("UPS", "3daySelect")).toBe("UPS 3 Day Select · Redo");
+  });
+});
