@@ -334,6 +334,17 @@ shipping.delete("/presets/:id{[0-9]+}", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- Packing station: print the label by itself once every item is scanned
+shipping.get("/scan-settings", async (c) => c.json(await getSetting(c.env, "scan", { autoPrint: false })));
+
+shipping.put("/scan-settings", async (c) => {
+  requireAdmin(c);
+  const { autoPrint } = await c.req.json<{ autoPrint?: boolean }>();
+  const s = { autoPrint: !!autoPrint };
+  await setSetting(c.env, "scan", s);
+  return c.json(s);
+});
+
 // ---- Shipping rules (Redo "automations") and package learning
 shipping.get("/rules", async (c) =>
   c.json({ rules: await loadRules(c.env), fields: RULE_FIELDS, learning: await getSetting(c.env, "learning", { parcel: true, weight: true }) }),

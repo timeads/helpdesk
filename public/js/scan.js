@@ -50,6 +50,11 @@ export function renderScan(root, { openSlideout }) {
     area));
   const focus = () => setTimeout(() => input.focus(), 0);
   focus();
+  // Settings → Shipping & boxes: buy & print as soon as the last item is scanned
+  let autoPrint = false;
+  const autoNote = h("p", { class: "small", hidden: true, style: { margin: "6px 0 0" } }, icon("printer"), " Auto-print is on: the label prints as soon as the last item is scanned.");
+  input.closest(".scan-card").append(autoNote);
+  api("/shipping/scan-settings").then((s) => { autoPrint = !!s.autoPrint; autoNote.hidden = !autoPrint; }).catch(() => {});
   const onDocClick = (e) => { if (!e.target.closest("button, a, input, select, textarea")) focus(); };
   document.addEventListener("click", onDocClick);
 
@@ -102,6 +107,18 @@ export function renderScan(root, { openSlideout }) {
     if (st.boxN && shown().every((l) => st.counts.get(l.id) >= target(l))) st.packed.add(st.boxN);
     beep(true);
     draw();
+    autoPrintIfDone();
+  }
+
+  /** With auto-print on, the scan that finishes the order (or this box) presses print. Counts filled in by hand don't qualify. */
+  function autoPrintIfDone() {
+    if (!autoPrint || st.manual) return;
+    const perBox = st.boxN && st.boxes.length > 1;
+    if (perBox ? !boxVerified() || st.printed?.has(st.boxN) : !allVerified()) return;
+    const btn = area.querySelector(perBox ? "[data-auto=box]" : "[data-auto=go]");
+    if (!btn || btn.disabled) return; // on hold, already has a label, or no weight: the page says why
+    toast(perBox ? `Box ${st.boxN} scanned — printing its label` : `All scanned — printing the label for ${st.order.name}`);
+    btn.click();
   }
 
   /** The whole order checked: every box packed (split orders), or every item scanned. */
@@ -211,7 +228,7 @@ export function renderScan(root, { openSlideout }) {
     if (!o) return mount(area);
     const verified = allVerified();
     const multi = st.boxes.length > 1 && st.boxN;
-    const go = h("button", { class: verified ? "btn primary big" : multi && boxVerified() ? "btn big" : "btn primary big" }, icon("printer"),
+    const go = h("button", { "data-auto": "go", class: verified ? "btn primary big" : multi && boxVerified() ? "btn big" : "btn primary big" }, icon("printer"),
       multi ? (verified ? `Verify & print ${st.boxes.length} labels` : `Print all ${st.boxes.length} labels now`) : verified ? "Verify & print label" : "Print label anyway");
     const missing = () => o.lineItems.nodes.filter((l) => scannedTotal(l) < l.quantity).map((l) => `${l.quantity - scannedTotal(l)} × ${l.title}`);
     const shipPart = !verified && scannedAny() ? h("button", { class: "btn big", title: "Out of stock? Ship the scanned items now; the rest of the order goes on hold" }, "Ship what's scanned") : null;
@@ -246,7 +263,7 @@ export function renderScan(root, { openSlideout }) {
       focus();
     };
     // Packing a split order one box at a time: print just this box's label (buying the shipment the first time)
-    const printBox = st.boxN && st.boxes.length > 1 ? h("button", { class: boxVerified() ? "btn primary big" : "btn big" }, icon("printer"), `Print box ${st.boxN} label`) : null;
+    const printBox = st.boxN && st.boxes.length > 1 ? h("button", { "data-auto": "box", class: boxVerified() ? "btn primary big" : "btn big" }, icon("printer"), `Print box ${st.boxN} label`) : null;
     if (printBox) printBox.onclick = async () => {
       if (!boxVerified() && !confirm(`Not everything in box ${st.boxN} has been packed. Print its label anyway?`)) return;
       printBox.disabled = true;

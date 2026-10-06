@@ -542,7 +542,25 @@ function shipping(s, presets, inner) {
       h("p", { class: "muted small", style: { margin: 0 } }, "In “multi layer” names, the number in parentheses is the depth the box is cut down to."),
       h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("tbody", {}, presetRows))),
       h("div", { class: "preset-add" },
-        pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset)));
+        pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset),
+      h("h3", { class: "section" }, "Packing station"),
+      scanAutoPrint()));
+}
+
+/** Scan page: buy & print the label as soon as the last item is scanned (saves on click). */
+function scanAutoPrint() {
+  const c = h("input", { type: "checkbox", disabled: true });
+  api("/shipping/scan-settings").then((s) => { c.checked = !!s.autoPrint; c.disabled = false; }).catch(() => {});
+  c.onchange = async () => {
+    c.disabled = true;
+    try {
+      await api("/shipping/scan-settings", { method: "PUT", body: { autoPrint: c.checked } });
+      toast(c.checked ? "Labels print by themselves once every item is scanned" : "Auto-print off — press Verify & print as before");
+    } catch (e) { c.checked = !c.checked; toast(e.message, true); }
+    c.disabled = false;
+  };
+  return h("label", { class: "check" }, c, h("span", {}, "Print the label automatically when every item is verified by scan",
+    h("div", { class: "small muted" }, "On the Scan page, scanning the last item buys and prints the label right away — no button press. Only when every item was scanned (not marked packed by hand), the order isn't on hold and has a weight. Split orders print each box's label as that box is finished.")));
 }
 
 const SERVICE_CHOICES = [["cheapest", "Cheapest rate"], ["fastest", "Fastest rate"], ["usps:GroundAdvantage", "USPS Ground Advantage"], ["usps:Priority", "USPS Priority Mail"], ["usps:Express", "USPS Priority Mail Express"], ["03", "UPS Ground"], ["12", "UPS 3 Day Select"], ["02", "UPS 2nd Day Air"], ["59", "UPS 2nd Day Air A.M."], ["13", "UPS Next Day Air Saver"], ["01", "UPS Next Day Air"], ["14", "UPS Next Day Air Early"], ["93", "UPS Ground Saver"]];
