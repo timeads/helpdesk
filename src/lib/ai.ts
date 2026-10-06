@@ -47,7 +47,7 @@ export async function draftReply(env: Env, input: DraftInput): Promise<string> {
     .filter(Boolean)
     .join("\n\n");
 
-  const model = env.AI_MODEL || "claude-opus-5-5";
+  const model = env.AI_MODEL || "claude-sonnet-5-5";
   const isHaiku = model.startsWith("claude-haiku");
   try {
     const response = await client.beta.messages.create({
@@ -119,7 +119,7 @@ const INSIGHTS_SCHEMA = {
 export async function ticketInsights(env: Env, subject: string, thread: DraftInput["thread"]): Promise<Insights> {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(409, "Add an Anthropic API key in Settings → Connections to use AI insights");
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  const model = env.AI_MODEL || "claude-opus-5-5";
+  const model = env.AI_MODEL || "claude-sonnet-5-5";
   const convo = thread.map((m) => `--- ${m.direction === "in" ? "Customer" : "Us"} (${m.sentAt}) ---\n${m.text.slice(0, 4000)}`).join("\n\n");
   try {
     const response = await client.messages.create({
@@ -246,7 +246,7 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     }),
     { type: "text", text },
   ];
-  const model = env.AI_MODEL || "claude-opus-5-5";
+  const model = env.AI_MODEL || "claude-sonnet-5-5";
   const isHaiku = model.startsWith("claude-haiku");
   try {
     const response = await client.beta.messages.create({

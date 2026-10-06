@@ -152,12 +152,14 @@ export async function ticketSuggestion(env: Env, ticketId: number): Promise<Tick
 }
 
 export const suggestOn = async (env: Env) => !!env.ANTHROPIC_API_KEY && (await getSetting<boolean>(env, "ai_suggest", true));
+/** When they're written: "open" = when someone opens the ticket (nothing spent on emails nobody answers); "auto" = as each email arrives. */
+export const suggestMode = (env: Env) => getSetting<"open" | "auto">(env, "ai_suggest_mode", "open");
 
 const AUTOMATED = /(^|[._-])(no-?reply|do-?not-?reply|mailer-daemon|postmaster|notifications?|bounce|alerts?)([._-]|@)/i;
 
 /** Every minute: suggestions for the newest customer emails waiting on us (a few at a time). */
 export async function suggestTick(env: Env, max = 3) {
-  if (!(await suggestOn(env))) return { made: 0 };
+  if (!(await suggestOn(env)) || (await suggestMode(env)) !== "auto") return { made: 0 };
   const since = new Date(Date.now() - 3 * 86400_000).toISOString();
   const stale = new Date(Date.now() - 10 * 60_000).toISOString(); // a 'working' row older than this was interrupted
   const { results } = await env.DB.prepare(

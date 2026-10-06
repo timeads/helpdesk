@@ -374,6 +374,7 @@ admin.get("/settings", async (c) => {
     shipFrom: await getSetting(c.env, "ship_from", null),
     aiGuidance: await getSetting(c.env, "ai_guidance", ""),
     aiSuggest: await getSetting(c.env, "ai_suggest", true),
+    aiSuggestMode: await getSetting(c.env, "ai_suggest_mode", "open"),
     support: await supportSettings(c.env),
     backfill: await getSetting<BackfillJob | null>(c.env, "backfill", null),
     customs: await customsSettings(c.env),
@@ -382,7 +383,7 @@ admin.get("/settings", async (c) => {
 
 admin.put("/settings", async (c) => {
   requireAdmin(c);
-  const body = await c.req.json<{ signature?: string; mailRules?: Partial<MailRules>; shipFrom?: unknown; aiGuidance?: string; aiSuggest?: boolean; support?: Partial<SupportSettings>; customs?: Partial<CustomsSettings> }>();
+  const body = await c.req.json<{ signature?: string; mailRules?: Partial<MailRules>; shipFrom?: unknown; aiGuidance?: string; aiSuggest?: boolean; aiSuggestMode?: string; support?: Partial<SupportSettings>; customs?: Partial<CustomsSettings> }>();
   if (body.customs) {
     const cur = await customsSettings(c.env);
     const n = { ...cur, ...body.customs };
@@ -423,6 +424,7 @@ admin.put("/settings", async (c) => {
   if (body.shipFrom !== undefined) await setSetting(c.env, "ship_from", body.shipFrom);
   if (body.aiGuidance !== undefined) await setSetting(c.env, "ai_guidance", body.aiGuidance);
   if (body.aiSuggest !== undefined) await setSetting(c.env, "ai_suggest", !!body.aiSuggest);
+  if (body.aiSuggestMode !== undefined) await setSetting(c.env, "ai_suggest_mode", body.aiSuggestMode === "auto" ? "auto" : "open");
   return c.json({ ok: true });
 });
 
@@ -476,8 +478,8 @@ admin.post("/credentials/test/:group", async (c) => {
     if (group === "ai") {
       if (!aiConfigured(env)) throw new Error("Add an Anthropic API key.");
       const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-      await client.models.retrieve(env.AI_MODEL || "claude-opus-5-5");
-      return c.json({ ok: true, message: `Key works · ${env.AI_MODEL || "claude-opus-5-5"} is available` });
+      await client.models.retrieve(env.AI_MODEL || "claude-sonnet-5-5");
+      return c.json({ ok: true, message: `Key works · ${env.AI_MODEL || "claude-sonnet-5-5"} is available` });
     }
     if (group === "booking") {
       const base = env.BOOKING_SUPABASE_URL?.trim().replace(/\/+$/, "");

@@ -22,6 +22,7 @@ vi.mock("../src/lib/shopify", () => ({
 
 import { importKb } from "../src/lib/kb";
 import { suggestReplies, suggestTick, ticketSuggestion } from "../src/lib/suggest";
+import { setSetting } from "../src/lib/util";
 
 let env: any;
 const now = () => new Date().toISOString();
@@ -59,7 +60,14 @@ describe("suggested replies for email tickets", () => {
     expect(prompt).toContain("You're writing as Tim");
   });
 
+  it("by default nothing is written in the background (only when a ticket is opened)", async () => {
+    ticket(1, "jane@example.com");
+    expect(await suggestTick(env)).toEqual({ made: 0 });
+    expect(await ticketSuggestion(env, 1)).toBeNull();
+  });
+
   it("the minute job does new customer emails on open tickets only, once per email", async () => {
+    await setSetting(env, "ai_suggest_mode", "auto");
     ticket(1, "jane@example.com");
     ticket(2, "noreply@shopify.com");
     ticket(3, "bob@example.com", "closed");

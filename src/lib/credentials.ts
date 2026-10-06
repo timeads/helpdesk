@@ -32,7 +32,7 @@ export const CREDENTIAL_FIELDS: CredentialField[] = [
   { key: "META_APP_ID", label: "App ID", group: "meta", secret: false, help: "Meta for Developers → your app → App settings → Basic" },
   { key: "META_APP_SECRET", label: "App secret", group: "meta", secret: true, help: "Same page — click Show next to App secret" },
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", group: "ai", secret: true, placeholder: "sk-ant-…" },
-  { key: "AI_MODEL", label: "Model", group: "ai", secret: false, options: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"] },
+  { key: "AI_MODEL", label: "Model", group: "ai", secret: false, options: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5"] },
 ];
 
 const STORE_KEY = "credentials";

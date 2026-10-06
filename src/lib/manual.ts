@@ -115,7 +115,7 @@ function client(env: Env) {
 }
 
 export async function ask<T>(env: Env, content: Anthropic.ContentBlockParam[], schema: Record<string, unknown>, effort: "low" | "medium", maxTokens: number, system = SYSTEM, feature = "Repair manual"): Promise<T> {
-  const model = env.AI_MODEL || "claude-opus-5-5";
+  const model = env.AI_MODEL || "claude-sonnet-5-5";
   try {
     // Streamed so long answers don't time out; a long answer that's cut off gets one retry with twice the room
     let r: Anthropic.Message | null = null;

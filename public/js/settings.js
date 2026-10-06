@@ -119,17 +119,24 @@ function markDirty(e) {
   });
 }
 
-/** Suggested replies on new customer emails (on by default). */
+/** Suggested replies: off, written when a ticket is opened (default — nothing spent on emails nobody answers), or as each email arrives. */
 function suggestToggle(s) {
-  const c = h("input", { type: "checkbox", checked: s.aiSuggest !== false });
-  c.onchange = async () => {
+  const cur = s.aiSuggest === false ? "off" : s.aiSuggestMode === "auto" ? "auto" : "open";
+  const sel = h("select", { class: "input", style: { width: "auto" }, "aria-label": "Suggested replies" },
+    [["open", "When I open a ticket (saves tokens)"], ["auto", "As soon as an email arrives (ready instantly)"], ["off", "Off"]]
+      .map(([v, t]) => h("option", { value: v, selected: v === cur }, t)));
+  sel.onchange = async () => {
+    const v = sel.value;
     try {
-      await api("/settings", { method: "PUT", body: { aiSuggest: c.checked } });
-      s.aiSuggest = c.checked;
-      toast(c.checked ? "New customer emails get 2–3 suggested replies" : "Suggested replies are off — “AI” in the reply box still drafts on request");
-    } catch (e) { c.checked = !c.checked; toast(e.message, true); }
+      await api("/settings", { method: "PUT", body: { aiSuggest: v !== "off", ...(v === "off" ? {} : { aiSuggestMode: v }) } });
+      s.aiSuggest = v !== "off";
+      if (v !== "off") s.aiSuggestMode = v;
+      toast(v === "off" ? "Suggested replies are off — “AI” in the reply box still drafts on request"
+        : v === "open" ? "Suggested replies are written when a ticket is opened"
+        : "Suggested replies are written as each customer email arrives");
+    } catch (e) { sel.value = cur; toast(e.message, true); }
   };
-  return h("label", { class: "check small", style: { marginTop: "4px" } }, c, "Suggest replies to new customer emails (a few cents each)");
+  return h("label", { class: "field small", style: { marginTop: "4px" } }, "Suggested replies (a cent or two each)", sel);
 }
 
 function connections(s, isAdmin, inner) {
