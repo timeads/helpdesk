@@ -64,11 +64,28 @@ async function availablePrinters() {
  * The printer to send to: Browser Print's default when it's complete; otherwise (it can come back
  * with no name after a restart, and then every send fails with 500) the one it can actually see.
  */
+/**
+ * Newer Chrome asks before a website may talk to apps on this computer (like Browser Print).
+ * Returns "denied" when that permission was turned off for this site, "prompt" when it hasn't been asked yet.
+ */
+export async function appAccessPermission() {
+  for (const name of ["loopback-network", "local-network-access", "local-network"]) {
+    try {
+      const st = await navigator.permissions.query({ name });
+      return st.state;
+    } catch { /* this browser doesn't know that permission name */ }
+  }
+  return null;
+}
+
 export async function zebraPrinter({ skipDefault = false } = {}) {
   let res;
   try {
     res = await agentFetch("/default?type=printer");
   } catch (e) {
+    if ((await appAccessPermission()) === "denied") {
+      throw new Error("Chrome is blocking this site from talking to Zebra Browser Print. Click the icon at the left of the address bar → Site settings → set “Local network access” (or “Apps on device”) to Allow, then reload the page.");
+    }
     throw new Error(`Can't reach Zebra Browser Print on this computer. Check that it's running (its icon is in the system tray / menu bar). Details: ${e.message}`);
   }
   const text = await res.text();
@@ -148,6 +165,10 @@ export async function sendZpl(zpl) {
 /** Settings → "Check connection": each step on its own, so a failure says where it is. */
 export async function zebraDiagnostics() {
   const out = [];
+  const perm = await appAccessPermission();
+  if (perm) out.push({ ok: perm !== "denied", text: perm === "denied"
+    ? "Chrome is blocking this site from apps on this computer — address bar icon → Site settings → Local network access → Allow, then reload"
+    : `Chrome permission to reach apps on this computer: ${perm === "granted" ? "allowed" : "will ask"}` });
   for (const base of AGENTS) {
     try {
       const r = await fetch(`${base}/default?type=printer`);
