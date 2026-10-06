@@ -1496,3 +1496,5 @@ body.order-nav .order-page { left: 228px; box-shadow: -1px 0 0 var(--border); }
 body.order-nav .op-menu { color: var(--ochre-text); }
 @media (max-width: 1240px) { body.order-nav .order-page { left: 64px; } }
 @media (max-width: 760px) { .op-menu { display: none; } body.order-nav .order-page { left: 0; } }
+.chose-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--select); color: var(--text); font-weight: 600; }
+.chose-chip svg { width: 13px; height: 13px; }
