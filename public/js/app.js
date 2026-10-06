@@ -6,7 +6,7 @@ import { renderSettings } from "./settings.js";
 import { renderAnalytics } from "./analytics.js";
 import { renderManual } from "./manual.js";
 
-export const state = { me: null, appName: "Support", agents: [], counts: {}, views: [], folders: [] };
+export const state = { me: null, appName: "Support", agents: [], counts: {}, views: [], folders: [], shipReady: 0 };
 const root = document.getElementById("app");
 let mainEl, navEl, cleanup = null;
 
@@ -58,6 +58,16 @@ document.addEventListener("click", (e) => {
   navigate(a.getAttribute("href"));
 });
 addEventListener("popstate", () => route());
+
+/** The Shipping bubble: orders ready to ship (the Shipping page updates it whenever it loads the queue). */
+export function setShipReady(n) {
+  if (state.shipReady === n) return;
+  state.shipReady = n;
+  renderNav();
+}
+async function refreshShipReady() {
+  try { setShipReady((await api("/shipping/ready-count")).ready ?? 0); } catch { /* not connected */ }
+}
 
 let lastWaiting = null;
 export async function refreshCounts() {
@@ -125,7 +135,7 @@ function renderNav() {
         vs.map((v) => item(`/?view=v:${v.id}`, v.name, v.name, "layers", inInbox && view === `v:${v.id}`, state.counts[`v:${v.id}`], " closed-view")),
       ]) : null),
     h("div", { class: "nav-label" }, "Store"),
-    item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), undefined, " ship-view"),
+    item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), state.shipReady, " ship-view"),
     item("/manual", "Repair manual", "Manual", "wrench", path.startsWith("/manual"), undefined, " ship-view"),
     item("/settings", "Settings", "Settings", "settings", path.startsWith("/settings")),
     h("div", { class: "spacer" }),
@@ -214,6 +224,8 @@ async function boot() {
   route();
   refreshCounts();
   setInterval(refreshCounts, 20000);
+  refreshShipReady();
+  setInterval(refreshShipReady, 120000);
 }
 
 boot();

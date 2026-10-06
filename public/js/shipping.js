@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { navigate } from "./app.js";
+import { navigate, setShipReady } from "./app.js";
 import { h, mount, icon, money, shortDate, relTime, fullTime, toast, busy, spinner, skeletonRows, modal } from "./ui.js";
 import { invoiceCopies, labelFormat, openCommercialInvoice, openPackingSlips, printLabels, printSettings, reserveWindow, setInvoiceCopies } from "./printing.js";
 import { renderScan } from "./scan.js";
@@ -269,6 +269,7 @@ function renderQueue(root, params) {
       const r = await api("/shipping/queue");
       st.orders = r.orders;
       st.counts = r.counts;
+      setShipReady(r.counts.ready ?? 0);
       st.merges = r.merges ?? [];
       st.loadedAt = Date.now();
       draw();

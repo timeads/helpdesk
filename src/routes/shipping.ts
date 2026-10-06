@@ -198,7 +198,23 @@ shipping.get("/queue", async (c) => {
   const orders = demo(c.env) ? demoOrders() : await queueOrders(c.env);
   const described = await describe(c.env, orders);
   const counts = Object.fromEntries(Object.entries(VIEWS).map(([k, f]) => [k, described.filter(f).length]));
+  await setSetting(c.env, "ready_count", { n: counts.ready, at: Date.now() });
   return c.json({ orders: described, counts, merges: mergeSuggestions(described, await dismissedMerges(c.env)) });
+});
+
+/** The sidebar's Shipping bubble: orders ready to ship. Asking Shopify is slow, so it's reused for a couple of minutes. */
+shipping.get("/ready-count", async (c) => {
+  if (!demo(c.env) && !shopifyConfigured(c.env)) return c.json({ ready: 0 });
+  const cached = await getSetting<{ n: number; at: number } | null>(c.env, "ready_count", null);
+  if (cached && Date.now() - cached.at < 120_000 && c.req.query("fresh") === undefined) return c.json({ ready: cached.n });
+  try {
+    const described = await describe(c.env, demo(c.env) ? demoOrders() : await queueOrders(c.env));
+    const n = described.filter(VIEWS.ready).length;
+    await setSetting(c.env, "ready_count", { n, at: Date.now() });
+    return c.json({ ready: n });
+  } catch {
+    return c.json({ ready: cached?.n ?? 0 });
+  }
 });
 
 shipping.get("/orders", async (c) => {
