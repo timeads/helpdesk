@@ -77,7 +77,7 @@ async function load(inner, id = location.pathname.split("/")[2]) {
       cards = [knowledgeCard(knowledge, () => reload(inner))];
     } else if (id === "shipping") {
       const [s, { presets }, rulesData] = await Promise.all([api("/settings"), api("/shipping/presets"), get("/shipping/rules", isAdmin)]);
-      cards = [shipping(s, presets, inner), rulesData ? shippingRules(rulesData, presets, inner) : null];
+      cards = [packingStation(), shipping(s, presets, inner), rulesData ? shippingRules(rulesData, presets, inner) : null];
     } else if (id === "chat") {
       cards = [chatCard()];
     } else if (id === "social") {
@@ -549,9 +549,12 @@ function shipping(s, presets, inner) {
       h("p", { class: "muted small", style: { margin: 0 } }, "In “multi layer” names, the number in parentheses is the depth the box is cut down to."),
       h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("tbody", {}, presetRows))),
       h("div", { class: "preset-add" },
-        pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset),
-      h("h3", { class: "section" }, "Packing station"),
-      scanAutoPrint()));
+        pi("name", "Box name", "text"), typeSel, pi("length", "L in"), pi("width", "W in"), pi("height", "H in"), pi("weight", "Empty lb"), addPreset)));
+}
+
+/** Scan page settings, first on Shipping & boxes so they're easy to find. */
+function packingStation() {
+  return card("Packing station", "How the Scan page behaves while you pack.", scanAutoPrint());
 }
 
 /** Scan page: buy & print the label as soon as the last item is scanned (saves on click). */

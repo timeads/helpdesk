@@ -53,9 +53,20 @@ export function renderScan(root, { openSlideout }) {
   focus();
   // Settings → Shipping & boxes: buy & print as soon as the last item is scanned
   let autoPrint = false;
-  const autoNote = h("p", { class: "small", hidden: true, style: { margin: "6px 0 0" } }, icon("printer"), " Auto-print is on: the label prints as soon as the last item is scanned.");
-  input.closest(".scan-card").append(autoNote);
-  api("/shipping/scan-settings").then((s) => { autoPrint = !!s.autoPrint; autoNote.hidden = !autoPrint; }).catch(() => {});
+  const autoBox = h("input", { type: "checkbox", disabled: true });
+  autoBox.onchange = async () => {
+    autoBox.disabled = true;
+    try {
+      await api("/shipping/scan-settings", { method: "PUT", body: { autoPrint: autoBox.checked } });
+      autoPrint = autoBox.checked;
+      toast(autoPrint ? "Auto-print on: the label prints when the last item is scanned" : "Auto-print off: press Verify & print");
+    } catch (e) { autoBox.checked = autoPrint; toast(e.message, true); }
+    autoBox.disabled = false;
+    focus();
+  };
+  input.closest(".scan-card").append(h("label", { class: "check small", style: { marginTop: "8px" }, title: "Also in Settings → Shipping & boxes → Packing station" },
+    autoBox, icon("printer"), " Print the label as soon as every item is scanned"));
+  api("/shipping/scan-settings").then((s) => { autoPrint = autoBox.checked = !!s.autoPrint; autoBox.disabled = false; }).catch(() => {});
   const onDocClick = (e) => { if (!e.target.closest("button, a, input, select, textarea")) focus(); };
   document.addEventListener("click", onDocClick);
 
