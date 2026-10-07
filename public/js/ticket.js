@@ -129,6 +129,7 @@ export async function openTicket(inbox, el, id) {
     t.assignee_id !== state.me.id ? { label: "Assign to me", icon: "user", run: actions.assignToMe } : null,
     { label: "Set priority…", icon: "flag", hint: "P", run: () => setTimeout(actions.priority, 0) },
     { label: "Manage tags…", icon: "tag", hint: "T", run: () => setTimeout(actions.tags, 0) },
+    state.me.role === "admin" ? { label: "Add to repair manual", icon: "wrench", run: () => addToManual(t) } : null,
     { label: "Mark as unread", icon: "eye", run: async () => { await patch({ unread: true }, "Marked unread"); inbox.reloadList(); navigate(`/?view=${inbox.view}`); } },
     "-",
     { label: t.status === "spam" ? "Not spam" : "Mark as spam", icon: "spam", hint: "Alt M", run: actions.spam },
@@ -416,6 +417,21 @@ body:not(.show-quotes) #divRplyFwdMsg, body:not(.show-quotes) .yahoo_quoted { di
       h("a", { class: "attachment", target: "_blank", rel: "noopener", href: `/api/tickets/${t.id}/messages/${m.id}/attachments/${encodeURIComponent(a.id)}` },
         icon("clip"), a.filename, h("span", { class: "muted" }, fileSize(a.size))))) : null,
   );
+}
+
+// ---------------------------------------------------------------- Repair manual
+
+/** Reads just this conversation into the repair manual (no full scan). */
+async function addToManual(t) {
+  toast("Reading this conversation for the repair manual…");
+  try {
+    const r = await api(`/manual/ticket/${t.id}`, { method: "POST" });
+    if (!r.repairs) return toast("The AI didn't find a repair in this conversation, so the manual wasn't changed", true);
+    const names = r.topics.map((x) => `${x.title}${x.isNew ? " (new)" : ""}`).join(", ");
+    toast(names ? `Added to the repair manual: ${names}` : "Added to the repair manual");
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 // ---------------------------------------------------------------- Merge

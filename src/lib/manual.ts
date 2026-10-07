@@ -20,22 +20,31 @@ export interface ScanResult {
   remaining: number;
 }
 
+/**
+ * Which waiting conversations to read: "new" ones (activity in the last NEW_DAYS days, the everyday
+ * update), the "archive" (everything older, a deep dig) or "all".
+ */
+export type ScanScope = "new" | "archive" | "all";
+export const NEW_DAYS = 14;
+const newSince = () => new Date(Date.now() - NEW_DAYS * 86400_000).toISOString();
+
 /** Finished conversations with a reply from us that look like repairs and haven't been read yet. */
-function candidateSql(countOnly: boolean) {
+function candidateSql(countOnly: boolean, scope: ScanScope = "all") {
   const words = REPAIR_WORDS.map(() => "lower(t.subject) LIKE ?").join(" OR ");
   const bodyWords = REPAIR_WORDS.map(() => "lower(m.body_text) LIKE ?").join(" OR ");
+  const when = scope === "new" ? "AND t.last_message_at >= ?" : scope === "archive" ? "AND t.last_message_at < ?" : "";
   return `SELECT ${countOnly ? "COUNT(*) AS n" : "t.id, t.subject, t.customer_name, t.customer_email, t.created_at, t.closed_at"} FROM tickets t
-    WHERE t.status = 'closed'
+    WHERE t.status = 'closed' ${when}
       AND NOT EXISTS (SELECT 1 FROM manual_scanned s WHERE s.ticket_id = t.id)
       AND EXISTS (SELECT 1 FROM messages o WHERE o.ticket_id = t.id AND o.direction = 'out')
       AND (t.ai_type = 'REPAIR' OR t.tags LIKE '%"Repairs"%' OR ${words}
            OR EXISTS (SELECT 1 FROM messages m WHERE m.ticket_id = t.id AND m.direction = 'in' AND (${bodyWords})))
     ${countOnly ? "" : "ORDER BY t.created_at DESC LIMIT ?"}`;
 }
-const likeParams = () => [...REPAIR_WORDS, ...REPAIR_WORDS].map((w) => `%${w}%`);
+const params = (scope: ScanScope) => [...(scope === "all" ? [] : [newSince()]), ...[...REPAIR_WORDS, ...REPAIR_WORDS].map((w) => `%${w}%`)];
 
-export async function pendingCount(env: Env): Promise<number> {
-  const r = await env.DB.prepare(candidateSql(true)).bind(...likeParams()).first<{ n: number }>();
+export async function pendingCount(env: Env, scope: ScanScope = "all"): Promise<number> {
+  const r = await env.DB.prepare(candidateSql(true, scope)).bind(...params(scope)).first<{ n: number }>();
   return r?.n ?? 0;
 }
 
@@ -159,10 +168,36 @@ interface Classified {
   new_topics: { key: string; title: string; product: string }[];
 }
 
-/** Reads the next few repair conversations into the manual. */
-export async function scanBatch(env: Env, size = 4): Promise<ScanResult> {
-  const { results: batch } = await env.DB.prepare(candidateSql(false)).bind(...likeParams(), Math.max(1, Math.min(6, size))).all<TicketRow>();
+/** Reads the next few repair conversations into the manual: new ones, the archive, or all of them. */
+export async function scanBatch(env: Env, size = 4, scope: ScanScope = "all"): Promise<ScanResult> {
+  const { results: batch } = await env.DB.prepare(candidateSql(false, scope)).bind(...params(scope), Math.max(1, Math.min(6, size))).all<TicketRow>();
   if (!batch.length) return { read: 0, repairs: 0, topics: [], remaining: 0 };
+  return readTickets(env, batch, scope);
+}
+
+/**
+ * Reads one conversation into the manual now, whatever its status (an email just answered), as long as
+ * we've replied. Reading it again updates its case instead of adding another.
+ */
+export async function scanTicket(env: Env, ticketId: number): Promise<ScanResult> {
+  const t = await env.DB.prepare("SELECT id, subject, customer_name, customer_email, created_at, closed_at FROM tickets WHERE id = ?").bind(ticketId).first<TicketRow>();
+  if (!t) throw new HttpError(404, "Ticket not found");
+  const ours = await env.DB.prepare("SELECT 1 FROM messages WHERE ticket_id = ? AND direction = 'out' LIMIT 1").bind(ticketId).first();
+  if (!ours) throw new HttpError(409, "Reply to the customer first — the manual is written from our answers");
+  const r = await readTickets(env, [t], "new");
+  // Read again, it may land under a different topic: the latest reading wins, so drop its case elsewhere
+  const now = r.topics.map((x) => x.id);
+  if (r.repairs && now.length) {
+    const keep = now.map(() => "?").join(",");
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM manual_cases WHERE ticket_id = ? AND topic_id NOT IN (${keep})`).bind(ticketId, ...now),
+      env.DB.prepare(`DELETE FROM manual_media WHERE ticket_id = ? AND topic_id NOT IN (${keep})`).bind(ticketId, ...now),
+    ]);
+  }
+  return r;
+}
+
+async function readTickets(env: Env, batch: TicketRow[], scope: ScanScope): Promise<ScanResult> {
   // Reading old conversations is the one-time backlog; new repairs (the last 45 days) are everyday use
   const newest = Math.max(...batch.map((t) => Date.parse(t.closed_at ?? t.created_at) || 0));
   const feature = Date.now() - newest > 45 * 86400_000 ? BACKLOG_FEATURE : "Repair manual";
@@ -288,7 +323,7 @@ Keep it practical and specific to the product. Merge duplicate advice. Don't men
   for (const t of batch) stmts.push(env.DB.prepare("INSERT OR REPLACE INTO manual_scanned (ticket_id, result) VALUES (?, ?)").bind(t.id, repairIds.has(t.id) ? "repair" : "not_repair"));
   await env.DB.batch(stmts);
 
-  return { read: batch.length, repairs: repairIds.size, topics: touched.filter((x): x is NonNullable<typeof x> => !!x), remaining: await pendingCount(env) };
+  return { read: batch.length, repairs: repairIds.size, topics: touched.filter((x): x is NonNullable<typeof x> => !!x), remaining: await pendingCount(env, scope) };
 }
 
 /** Published topics, for AI reply drafts. */

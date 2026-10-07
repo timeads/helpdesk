@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testD1 } from "./helpers/d1";
 
 vi.mock("../src/lib/gmail", () => ({ getAttachment: vi.fn(async () => "iVBORw0KGgo-_") }));
-import { pendingCount, scanBatch, manualKnowledge } from "../src/lib/manual";
+import { pendingCount, scanBatch, scanTicket, manualKnowledge } from "../src/lib/manual";
 
 const PHOTO = { id: "att1", filename: "jam.jpg", mimeType: "image/jpeg", size: 1000 };
 const VIDEO = { id: "att2", filename: "noise.mp4", mimeType: "video/mp4", size: 5_000_000 };
@@ -98,6 +98,30 @@ describe("repair manual scan", () => {
     calls.length = 0;
     expect(await scanBatch(env, 4)).toMatchObject({ read: 0 });
     expect(calls).toHaveLength(0);
+  });
+
+  it("splits waiting conversations into new (last 14 days) and the archive, and reads only the one asked for", async () => {
+    db.raw.prepare("UPDATE tickets SET last_message_at = ? WHERE id = 1").run(new Date().toISOString());
+    expect(await pendingCount(env, "new")).toBe(1);
+    expect(await pendingCount(env, "archive")).toBe(1);
+    const r = await scanBatch(env, 4, "new");
+    expect(r).toMatchObject({ read: 1, repairs: 1, remaining: 0 });
+    expect(db.raw.prepare("SELECT ticket_id FROM manual_scanned").all()).toEqual([{ ticket_id: 1 }]);
+    expect(await pendingCount(env, "archive")).toBe(1); // the archive waits until asked
+    expect(await scanBatch(env, 4, "archive")).toMatchObject({ read: 1, remaining: 0 });
+  });
+
+  it("adds one conversation on request, even one still open, and only once we've replied", async () => {
+    const r = await scanTicket(env, 3); // open ticket we answered: read now, no full scan
+    expect(r.read).toBe(1);
+    expect(calls).toHaveLength(1); // one classify call; ticket 3 isn't a repair in the stubbed answer
+    expect(db.raw.prepare("SELECT ticket_id FROM manual_scanned").all()).toEqual([{ ticket_id: 3 }]);
+    db.raw.prepare("INSERT INTO tickets (id, subject, customer_email, status, created_at, last_message_at, tags) VALUES (9, 'Gun broke', 'x@y.com', 'open', ?, ?, '[]')").run("2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z");
+    await expect(scanTicket(env, 9)).rejects.toThrow(/Reply to the customer first/);
+    // Reading the same conversation again updates its case rather than adding another
+    await scanTicket(env, 1);
+    await scanTicket(env, 1);
+    expect(db.raw.prepare("SELECT COUNT(*) AS n FROM manual_cases WHERE ticket_id = 1").get()).toEqual({ n: 1 });
   });
 
   it("feeds only published topics to AI drafts", async () => {

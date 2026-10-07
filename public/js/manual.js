@@ -43,7 +43,7 @@ export function renderManual(main) {
   if (location.pathname.split("/")[2] === "kb") return renderKb(main);
   const isAdmin = state.me.role === "admin";
   const id = Number(location.pathname.split("/")[2]) || null;
-  const st = { topics: [], q: "", pending: 0, scanned: 0, repairs: 0, ai: false };
+  const st = { topics: [], q: "", pending: 0, pendingNew: 0, pendingArchive: 0, newDays: 14, scanned: 0, repairs: 0, ai: false };
   const statusEl = h("div");
   const listEl = h("div", { class: "manual-list" }, skeletonRows(6));
   const detailEl = h("div", { class: "manual-detail" });
@@ -63,8 +63,8 @@ export function renderManual(main) {
   async function load() {
     try {
       const r = await api("/manual");
-      Object.assign(st, { topics: r.topics, pending: r.pending, scanned: r.scanned, repairs: r.repairs, ai: r.ai });
-      drawStatus(job.running ? { text: `Read ${job.read} conversation${job.read === 1 ? "" : "s"}${st.pending ? ` · ${st.pending} to go` : ""}`, recent: job.recent } : null);
+      Object.assign(st, { topics: r.topics, pending: r.pending, pendingNew: r.pendingNew ?? r.pending, pendingArchive: r.pendingArchive ?? 0, newDays: r.newDays ?? 14, scanned: r.scanned, repairs: r.repairs, ai: r.ai });
+      drawStatus(job.running ? { text: `Read ${job.read} conversation${job.read === 1 ? "" : "s"}${job.remaining ? ` · ${job.remaining} to go` : ""}${job.scope === "archive" ? " (archive)" : ""}`, recent: job.recent } : null);
       drawList();
       if (id) openTopic(id);
       else drawEmptyDetail();
@@ -77,27 +77,34 @@ export function renderManual(main) {
   function drawStatus(progress) {
     if (!isAdmin) return mount(statusEl);
     if (!st.ai) return mount(statusEl, h("div", { class: "notice info manual-status" }, "Add an Anthropic API key in Settings → Connections so AI can write the manual from your repair conversations."));
-    const run = h("button", { class: "btn primary sm" }, icon("spark"), st.topics.length ? "Update from tickets" : "Build the manual");
-    run.onclick = () => scan();
+    // New conversations (the everyday update) and the archive (a deep dig, run on purpose) are separate
+    const runNew = st.pendingNew ? h("button", { class: "btn primary sm", title: `Closed repair conversations from the last ${st.newDays} days` }, icon("spark"), `Read ${st.pendingNew} new`) : null;
+    if (runNew) runNew.onclick = () => scan("new");
+    const runOld = st.pendingArchive ? h("button", { class: "btn sm", title: `Closed repair conversations older than ${st.newDays} days` }, icon("search"), `Dig into archive (${st.pendingArchive})`) : null;
+    if (runOld) runOld.onclick = () => {
+      if (confirm(`Read ${st.pendingArchive} older repair conversation${st.pendingArchive === 1 ? "" : "s"} from the archive? This uses AI for each one (counted as the one-time backlog). You can stop any time.`)) scan("archive");
+    };
+    const run = runNew || runOld ? h("div", { class: "row", style: { gap: "6px", flexWrap: "nowrap" } }, runNew, runOld) : null;
     const stop = h("button", { class: "btn sm", onclick: () => { job.stop = true; stop.disabled = true; stop.textContent = "Stopping after this batch…"; } }, "Stop");
     mount(statusEl, h("div", { class: "card manual-status" },
       h("div", { style: { minWidth: 0, flex: 1 } },
         job.running
           ? h("div", { class: "row", style: { gap: "8px" } }, spinner(), h("b", {}, progress?.text ?? "Reading repair conversations…"))
-          : h("b", {}, st.pending ? `${st.pending} finished repair conversation${st.pending === 1 ? "" : "s"} waiting to be read` : "Up to date"),
-        h("div", { class: "small muted" }, `${st.scanned} conversation${st.scanned === 1 ? "" : "s"} read so far · ${st.repairs} were repairs. Closed tickets tagged Repairs (or that mention a broken, jammed or not-cutting machine) are read; photos are looked at, videos are attached.`),
+          : h("b", {}, st.pendingNew ? `${st.pendingNew} new repair conversation${st.pendingNew === 1 ? "" : "s"} to read` : "Up to date with new conversations"),
+        !job.running && st.pendingArchive ? h("div", { class: "small muted" }, `${st.pendingArchive} older one${st.pendingArchive === 1 ? "" : "s"} in the archive (before the last ${st.newDays} days), read only when you dig in.`) : null,
+        h("div", { class: "small muted" }, `${st.scanned} conversation${st.scanned === 1 ? "" : "s"} read so far · ${st.repairs} were repairs. Closed tickets tagged Repairs (or that mention a broken, jammed or not-cutting machine) are read; photos are looked at, videos are attached. To add one conversation right away, use “Add to repair manual” on the ticket.`),
         progress?.recent?.length ? h("div", { class: "small", style: { marginTop: "6px" } }, "Updated: ", progress.recent.slice(-6).map((t, i) => [i ? ", " : "", h("a", { href: `/manual/${t.id}`, "data-link": "" }, t.title), t.isNew ? h("span", { class: "muted" }, " (new)") : null])) : null),
-      job.running ? stop : st.pending ? run : null));
+      job.running ? stop : run));
   }
 
-  async function scan() {
+  async function scan(scope = "new") {
     if (job.running) return;
-    Object.assign(job, { running: true, stop: false, read: 0, recent: [] });
+    Object.assign(job, { running: true, stop: false, read: 0, recent: [], scope });
     const show = () => job.onUpdate?.();
     show();
     try {
       while (!job.stop) {
-        const r = await api("/manual/scan", { method: "POST", body: { size: 4 } });
+        const r = await api("/manual/scan", { method: "POST", body: { size: 4, scope } });
         job.read += r.read;
         job.remaining = r.remaining;
         job.scannedAdd = (job.scannedAdd ?? 0) + r.read;
@@ -119,14 +126,14 @@ export function renderManual(main) {
   // Whichever manual page is on screen shows the progress
   job.onUpdate = async () => {
     if (!listEl.isConnected) return;
-    if (job.remaining !== undefined) st.pending = job.remaining;
+    if (job.remaining !== undefined) st[job.scope === "archive" ? "pendingArchive" : "pendingNew"] = job.remaining;
     if (job.topicsChanged) {
       job.topicsChanged = false;
       const fresh = await api("/manual").catch(() => null);
-      if (fresh) Object.assign(st, { topics: fresh.topics, pending: fresh.pending, scanned: fresh.scanned, repairs: fresh.repairs });
+      if (fresh) Object.assign(st, { topics: fresh.topics, pending: fresh.pending, pendingNew: fresh.pendingNew ?? fresh.pending, pendingArchive: fresh.pendingArchive ?? 0, scanned: fresh.scanned, repairs: fresh.repairs });
       drawList();
     }
-    drawStatus(job.running ? { text: `Read ${job.read} conversation${job.read === 1 ? "" : "s"}${st.pending ? ` · ${st.pending} to go` : ""}`, recent: job.recent } : { recent: job.recent });
+    drawStatus(job.running ? { text: `Read ${job.read} conversation${job.read === 1 ? "" : "s"}${job.remaining ? ` · ${job.remaining} to go` : ""}${job.scope === "archive" ? " (archive)" : ""}`, recent: job.recent } : { recent: job.recent });
   };
 
   // ---- Topic list, grouped by machine

@@ -4,7 +4,7 @@ import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { HttpError } from "../lib/util";
 import { aiConfigured } from "../lib/ai";
-import { pendingCount, scanBatch } from "../lib/manual";
+import { NEW_DAYS, pendingCount, scanBatch, scanTicket } from "../lib/manual";
 import { copyTopicFor } from "../lib/manual-copy";
 
 const manual = new Hono<AppEnv>();
@@ -18,7 +18,8 @@ manual.get("/", async (c) => {
      FROM manual_topics t ORDER BY t.product COLLATE NOCASE, cases DESC, t.title COLLATE NOCASE`,
   ).all();
   const scanned = await c.env.DB.prepare("SELECT COUNT(*) AS n, SUM(result = 'repair') AS repairs FROM manual_scanned").first<{ n: number; repairs: number | null }>();
-  return c.json({ topics: results, pending: await pendingCount(c.env), scanned: scanned?.n ?? 0, repairs: scanned?.repairs ?? 0, ai: aiConfigured(c.env) });
+  const [pendingNew, pendingArchive] = await Promise.all([pendingCount(c.env, "new"), pendingCount(c.env, "archive")]);
+  return c.json({ topics: results, pending: pendingNew + pendingArchive, pendingNew, pendingArchive, newDays: NEW_DAYS, scanned: scanned?.n ?? 0, repairs: scanned?.repairs ?? 0, ai: aiConfigured(c.env) });
 });
 
 manual.get("/:id{[0-9]+}", async (c) => {
@@ -117,8 +118,14 @@ manual.delete("/:id{[0-9]+}/media/:mid{[0-9]+}", async (c) => {
 /** Reads the next few repair conversations into the manual (the page calls this repeatedly). */
 manual.post("/scan", async (c) => {
   requireAdmin(c);
-  const { size } = await c.req.json<{ size?: number }>().catch(() => ({ size: undefined }));
-  return c.json(await scanBatch(c.env, size ?? 4));
+  const { size, scope } = await c.req.json<{ size?: number; scope?: string }>().catch(() => ({ size: undefined, scope: undefined }));
+  return c.json(await scanBatch(c.env, size ?? 4, scope === "new" || scope === "archive" ? scope : "all"));
+});
+
+/** Adds one conversation to the manual now (e.g. an email answered today), without a full scan. */
+manual.post("/ticket/:id{[0-9]+}", async (c) => {
+  requireAdmin(c);
+  return c.json(await scanTicket(c.env, Number(c.req.param("id"))));
 });
 
 export default manual;
