@@ -271,6 +271,10 @@ export async function printLabels({ ids, batch, box = null }, win = null) {
           if (l.format === "PDF") {
             const { pdfToPngs } = await import("./pdf-labels.js");
             for (const p of await pdfToPngs(d, dpi)) jobs.push(await imageToZpl(p.png, "PNG", dpi));
+          } else if (l.crop) {
+            // Redo images can carry white margins: crop to the label so it fills the sticker
+            const { fitLabelImage } = await import("./zpl.js");
+            jobs.push(await imageToZpl(await fitLabelImage(d, l.format), "PNG", dpi));
           } else jobs.push(await imageToZpl(d, l.format, dpi));
         }
       }

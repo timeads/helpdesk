@@ -250,3 +250,48 @@ export function contentBox(px, w, h, threshold = 200) {
   }
   return x1 < 0 ? null : { x0, y0, x1, y1 };
 }
+
+/** The canvas cropped to its non-white content, plus `pad` pixels of white around it (unchanged if blank). */
+export function trimmed(canvas, pad = 0) {
+  const { width: w, height: h } = canvas;
+  const px = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+  const box = contentBox(px, w, h);
+  if (!box) return canvas;
+  const x0 = Math.max(0, box.x0 - pad), y0 = Math.max(0, box.y0 - pad);
+  const x1 = Math.min(w - 1, box.x1 + pad), y1 = Math.min(h - 1, box.y1 + pad);
+  if (x0 === 0 && y0 === 0 && x1 === w - 1 && y1 === h - 1) return canvas;
+  const out = document.createElement("canvas");
+  out.width = x1 - x0 + 1;
+  out.height = y1 - y0 + 1;
+  const ctx = out.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+/** A landscape canvas turned a quarter clockwise to portrait; portrait ones as they are. */
+export function upright(canvas) {
+  if (canvas.width <= canvas.height) return canvas;
+  const out = document.createElement("canvas");
+  out.width = canvas.height;
+  out.height = canvas.width;
+  const ctx = out.getContext("2d");
+  ctx.translate(out.width, 0);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(canvas, 0, 0);
+  return out;
+}
+
+/** A label image (Redo PNG/GIF) cropped to what's printed and stood upright, as a PNG: it then fills the 4×6. */
+export async function fitLabelImage(base64, format, padPx = 12) {
+  const img = await loadImage(`data:image/${format === "GIF" ? "gif" : "png"};base64,${base64}`);
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0);
+  return upright(trimmed(canvas, padPx)).toDataURL("image/png").split(",")[1];
+}

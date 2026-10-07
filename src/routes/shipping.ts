@@ -799,20 +799,31 @@ const GUARD_CSS = `.guard { font: 14px/1.4 system-ui, sans-serif; margin: 12px; 
 .guard .only { background: #213838; border-color: #213838; color: #fff; }
 @media print { .guard { display: none; } }`;
 
-function labelPage(title: string, labels: { data: string; format: string }[], guard?: ReturnType<typeof printGuard>) {
+/** Labels bought through Redo: their files can carry white margins, so they're cropped before printing. */
+const isRedoLabel = (r: { service_code?: string | null }) => String(r.service_code ?? "").startsWith("redo:");
+
+function labelPage(title: string, labels: { data: string; format: string; crop?: boolean }[], guard?: ReturnType<typeof printGuard>) {
   // UPS GIF labels are landscape and get rotated onto the 4×6 page; USPS PNG labels are already 4×6 portrait;
   // PDF labels (Redo) are drawn page by page in the browser, then printed
   const pages = labels
     .map((l) => (l.format === "PDF"
       ? `<div class="pdf-src" data-pdf="${l.data}"></div>`
+      : l.crop
+        ? `<div class="img-src" data-img="${l.data}" data-fmt="${l.format}"></div>`
       : l.format === "PNG"
         ? `<div class="page"><img class="portrait" src="data:image/png;base64,${l.data}" alt="Label"></div>`
         : `<div class="page"><img class="landscape" src="data:image/gif;base64,${l.data}" alt="UPS label"></div>`))
     .join("");
-  const pdf = labels.some((l) => l.format === "PDF")
+  const pdf = labels.some((l) => l.format === "PDF" || l.crop)
     ? `<script type="module">
 import { pdfToPngs } from "/js/pdf-labels.js";
+import { fitLabelImage } from "/js/zpl.js";
 window.labelsReady = (async () => {
+  for (const el of document.querySelectorAll(".img-src")) {
+    const png = await fitLabelImage(el.dataset.img, el.dataset.fmt);
+    const d = document.createElement("div"); d.className = "page"; d.innerHTML = '<img class="portrait" src="data:image/png;base64,' + png + '" alt="Label">';
+    el.replaceWith(d);
+  }
   for (const el of document.querySelectorAll(".pdf-src")) {
     const pages = await pdfToPngs(el.dataset.pdf);
     el.replaceWith(...pages.map((p) => { const d = document.createElement("div"); d.className = "page"; d.innerHTML = '<img class="' + (p.landscape ? "landscape" : "portrait") + '" src="data:image/png;base64,' + p.png + '" alt="Label">'; return d; }));
@@ -910,7 +921,7 @@ shipping.get("/labels/print", async (c) => {
   const rows = onlyBox(await labelRows(c.env, { ids: c.req.query("ids"), batch: c.req.query("batch") }), box);
   if (!rows.length) throw new HttpError(404, "No labels found");
   if (rows.every((r: any) => r.labels === "[]")) throw new HttpError(404, "These were imported from Redo — reprint them in Redo or UPS");
-  const gif = rows.filter((r) => r.label_format !== "ZPL").flatMap((r) => (JSON.parse(r.labels) as string[]).map((data) => ({ data, format: r.label_format as string })));
+  const gif = rows.filter((r) => r.label_format !== "ZPL").flatMap((r) => (JSON.parse(r.labels) as string[]).map((data) => ({ data, format: r.label_format as string, crop: isRedoLabel(r) })));
   const zpl = rows.filter((r) => r.label_format === "ZPL").flatMap((r) => JSON.parse(r.labels) as string[]);
   if (c.req.query("format") === "zpl") return c.text(zplOf(zpl));
   if (!gif.length && zpl.length) {
@@ -943,7 +954,8 @@ shipping.get("/labels/print-data", async (c) => {
   return c.json({
     labels: rows.filter((r: any) => r.labels !== "[]").map((r: any) => {
       const data = JSON.parse(r.labels) as string[];
-      return { id: r.id, name: r.order_name, format: r.label_format, data: r.label_format === "ZPL" ? data.map((l) => zplOf([l])) : data, printedAt: r.printed_at, count: r.print_count };
+      return { id: r.id, name: r.order_name, format: r.label_format, data: r.label_format === "ZPL" ? data.map((l) => zplOf([l])) : data, printedAt: r.printed_at, count: r.print_count,
+        crop: isRedoLabel(r) };
     }),
   });
 });
@@ -966,9 +978,9 @@ shipping.post("/labels/printed", async (c) => {
 
 /** Printable label page (GIF) or raw ZPL for thermal printers. */
 shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
-  const s = await c.env.DB.prepare("SELECT id, labels, label_format, tracking_numbers, order_name, printed_at, print_count FROM shipments WHERE id = ?")
+  const s = await c.env.DB.prepare("SELECT id, labels, label_format, tracking_numbers, order_name, printed_at, print_count, service_code FROM shipments WHERE id = ?")
     .bind(Number(c.req.param("id")))
-    .first<{ id: number; labels: string; label_format: string; tracking_numbers: string; order_name: string | null; printed_at: string | null; print_count: number }>();
+    .first<{ id: number; labels: string; label_format: string; tracking_numbers: string; order_name: string | null; printed_at: string | null; print_count: number; service_code: string | null }>();
   if (!s) throw new HttpError(404, "Label not found");
   const labels: string[] = JSON.parse(s.labels);
   if (!labels.length) throw new HttpError(404, "Imported from Redo — reprint it in Redo or UPS");
@@ -982,7 +994,7 @@ shipping.get("/labels/:id{[0-9]+}/print", async (c) => {
     what: "label", markUrl: "/api/shipping/labels/printed", markIds: [s.id], total: 1,
     already: s.printed_at ? [{ name: s.order_name ?? `Label ${s.id}`, at: s.printed_at, count: s.print_count }] : [],
   });
-  return c.html(labelPage(`Label ${s.order_name ?? ""}`, labels.map((data) => ({ data, format: s.label_format })), guard));
+  return c.html(labelPage(`Label ${s.order_name ?? ""}`, labels.map((data) => ({ data, format: s.label_format, crop: isRedoLabel(s) })), guard));
 });
 
 shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
