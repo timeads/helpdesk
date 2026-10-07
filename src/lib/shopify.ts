@@ -85,6 +85,7 @@ const ORDER_FIELDS_TEMPLATE = `
   totalTaxSet: currentTotalTaxSet { shopMoney { amount } }
   shippingAddress { ${ADDRESS} }
   shippingLines(first: 1) { nodes { title } }
+  customAttributes { key value }
   lineItems(first: __LINES__) {
     nodes {
       id title variantTitle quantity: currentQuantity unfulfilledQuantity sku
@@ -142,6 +143,8 @@ export interface ShopifyOrder {
   totalTaxSet?: { shopMoney: { amount: string } } | null;
   shippingAddress: Record<string, string | null> | null;
   shippingLines: { nodes: { title: string }[] };
+  /** Order attributes (marketplace apps put the Amazon order id and ship-by dates here) */
+  customAttributes?: { key: string; value: string | null }[];
   lineItems: {
     nodes: {
       id: string;

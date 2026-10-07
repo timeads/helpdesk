@@ -2,6 +2,7 @@
 import { api } from "./api.js";
 import { h, mount, icon, money, toast, spinner } from "./ui.js";
 import { labelFormat, openPackingSlips, printLabels, reserveWindow } from "./printing.js";
+import { shipByChip } from "./deadline.js";
 
 let audio;
 function beep(ok) {
@@ -304,7 +305,8 @@ export function renderScan(root, { openSlideout }) {
     const blocked = o.hasLabel && !(st.boxN && st.shipmentId) ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending ? "Payment is still pending." : null;
     mount(area, h("div", { class: "card" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
-        h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name, st.boxN ? h("span", { class: "badge plain", style: { marginLeft: "8px", fontSize: "13px" } }, `Box ${st.boxN} of ${st.boxes.length}`) : null), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`)),
+        h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name, st.boxN ? h("span", { class: "badge plain", style: { marginLeft: "8px", fontSize: "13px" } }, `Box ${st.boxN} of ${st.boxes.length}`) : null), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.marketplace ? `${o.marketplace} · ` : ""}${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`),
+          o.shipBy ? h("div", { style: { marginTop: "4px" } }, shipByChip(o, false)) : null),
         h("button", { class: "btn sm", onclick: () => openSlideout(o) }, "Open label builder")),
       blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked) : null,
       st.boxN ? boxStrip() : null,

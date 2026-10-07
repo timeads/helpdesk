@@ -47,6 +47,20 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 export const itemCount = (o: ShopifyOrder) => o.lineItems.nodes.reduce((n, l) => n + l.quantity, 0);
 export const shippingPaid = (o: ShopifyOrder) => Number(o.totalShippingPriceSet?.shopMoney.amount ?? 0);
 export const requestedService = (o: ShopifyOrder) => o.shippingLines.nodes[0]?.title ?? "";
+
+/** Marketplace orders (Amazon via Marketplace Connect): the deadlines the marketplace holds us to. */
+export function marketplaceDeadlines(o: ShopifyOrder) {
+  const attr = (k: string) => o.customAttributes?.find((a) => a.key.toLowerCase() === k.toLowerCase())?.value || null;
+  const date = (v: string | null) => (v && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+  const amazonId = attr("Amazon Order Id");
+  if (!amazonId && !attr("Amazon Latest Ship Date")) return null;
+  return {
+    marketplace: "Amazon",
+    marketplaceOrderId: amazonId,
+    shipBy: date(attr("Amazon Latest Ship Date")),
+    deliverBy: date(attr("Amazon Latest Delivery Date")),
+  };
+}
 export const isPriority = (o: ShopifyOrder) => /next|overnight|express|priority|2nd|second|2[- ]day|3 day|rush/i.test(requestedService(o));
 export const isPaymentPending = (o: ShopifyOrder) => ["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED"].includes(o.displayFinancialStatus ?? "");
 /** In-store pickup: Shopify's delivery method says so (or, without fulfillment-order access, the checkout option's name). */

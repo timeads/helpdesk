@@ -3,6 +3,7 @@ import { navigate, setShipReady } from "./app.js";
 import { h, mount, icon, money, shortDate, relTime, fullTime, toast, busy, spinner, skeletonRows, modal } from "./ui.js";
 import { invoiceCopies, labelFormat, openCommercialInvoice, openPackingSlips, printLabels, printSettings, reserveWindow, setInvoiceCopies } from "./printing.js";
 import { renderScan } from "./scan.js";
+import { deadline, shipByChip } from "./deadline.js";
 import { parseCsv } from "./settings-support.js";
 
 const VIEWS = [
@@ -336,7 +337,9 @@ function renderQueue(root, params) {
           h("td", {}, h("div", { class: "cell-box", title: (o.plan.boxes ?? []).map((b) => b.preset?.name ?? "Custom").join(" + ") },
               (o.plan.boxes?.length ?? 1) > 1 ? `${o.plan.boxes.length} boxes` : o.plan.preset?.name ?? "Custom"),
             o.plan.source !== "default" ? h("div", { class: "small muted" }, SOURCE_LABEL[o.plan.source] ?? "") : null),
-          h("td", {}, o.requestedService || "—", o.priority ? h("span", { class: "badge warn plain", style: { marginLeft: "6px" } }, "Priority") : null),
+          h("td", {}, o.marketplace ? h("span", { class: "badge plain", style: { marginRight: "6px" } }, o.marketplace) : null, o.requestedService || "—",
+            o.priority && !o.shipBy ? h("span", { class: "badge warn plain", style: { marginLeft: "6px" } }, "Priority") : null,
+            o.shipBy ? h("div", { style: { marginTop: "3px" } }, shipByChip(o)) : null),
           h("td", { class: "num" }, money(o.shippingPaid, "USD")),
           quoteCell(o),
           h("td", {}, h("div", {}, [a.city, a.provinceCode].filter(Boolean).join(", "), o.international ? h("span", { class: "badge plain", style: { marginLeft: "6px" } }, a.countryCodeV2) : null), addrCell(o)),
@@ -1429,6 +1432,9 @@ function buildLabelForm(root, o, presets, opts) {
       kv("Phone", o.phone || a.phone || null),
       kv("Payment", o.displayFinancialStatus ? o.displayFinancialStatus.replace(/_/g, " ").toLowerCase() : null),
       kv("Customer chose", o.requestedService || "—"),
+      o.marketplace ? kv(`${o.marketplace} order`, o.marketplaceOrderId) : null,
+      o.shipBy ? kv("Ship by", deadline(o.shipBy)) : null,
+      o.deliverBy ? kv("Deliver by", deadline(o.deliverBy)) : null,
       o.tags?.length ? h("div", { class: "op-tags" }, o.tags.map((t) => h("span", { class: "badge plain" }, t))) : null,
       o.email ? h("button", { class: "btn sm email-customer", onclick: () => emailCustomer(o).catch((e) => toast(e.message, true)) }, icon("mail"), "Email customer") : null,
       h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
@@ -1448,7 +1454,8 @@ function buildLabelForm(root, o, presets, opts) {
     h("div", { class: "op-title" },
       h("div", { style: { minWidth: 0 } },
         h("h1", {}, o ? o.name : "New label",
-          o?.priority ? h("span", { class: "badge warn plain" }, "Priority") : null,
+          o?.marketplace ? h("span", { class: "badge plain" }, o.marketplace) : null,
+          o?.shipBy ? shipByChip(o, false) : o?.priority ? h("span", { class: "badge warn plain" }, "Priority") : null,
           o?.international ? h("span", { class: "badge plain" }, `International · ${a.countryCodeV2}`) : null,
           o?.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
           o?.pickup ? h("span", { class: "badge warn plain" }, "In-store pickup") : null),

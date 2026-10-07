@@ -11,7 +11,7 @@ import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
 import {
   addressFromOrder, buyLabel, chooseRate, isInternational, isPickup, isPaymentPending, isPriority, itemCount, itemsWeightLb,
-  loadPresets, loadRules, planOrders, requestedService, shipFrom, shippingPaid, type Plan,
+  loadPresets, loadRules, marketplaceDeadlines, planOrders, requestedService, shipFrom, shippingPaid, type Plan,
 } from "../lib/fulfillment";
 import { code128Svg } from "../lib/code128";
 import { requireAdmin } from "../lib/auth";
@@ -124,6 +124,8 @@ async function idMap(env: Env, sql: string, ids: string[]) {
   return out;
 }
 
+const dueSoon = (shipBy: string | null | undefined) => !!shipBy && Date.parse(shipBy) - Date.now() < 36 * 3600_000;
+
 /** Everything the queue and slideout need about an order, computed once on the server. */
 /** `draftKey`: read the saved choices from this key instead of the order id (orders shipping together). */
 async function describe(env: Env, all: ShopifyOrder[], draftKey?: string) {
@@ -165,10 +167,12 @@ async function describe(env: Env, all: ShopifyOrder[], draftKey?: string) {
       itemsWeight: itemsWeightLb(o),
       shippingPaid: shippingPaid(o),
       requestedService: requestedService(o),
-      priority: isPriority(o),
+      // A fast service, or a marketplace order that has to leave within a day and a half
+      priority: isPriority(o) || dueSoon(marketplaceDeadlines(o)?.shipBy),
       paymentPending: isPaymentPending(o),
       international: isInternational(o),
       pickup: isPickup(o),
+      ...(marketplaceDeadlines(o) ?? { marketplace: null, marketplaceOrderId: null, shipBy: null, deliverBy: null }),
       pickupReadyAt: pickups.get(o.id)?.split("|")[0] || null,
       pickedUpAt: pickups.get(o.id)?.split("|")[1] || null,
     };
