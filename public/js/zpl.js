@@ -233,3 +233,20 @@ export async function imageToZpl(base64, format, dpi = 203) {
   for (let i = 0; i < bits.length; i++) bits[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2] < 128 ? 1 : 0;
   return `^XA^PW${W}^LL${H}^LH0,0${await bitsToGfaZ64(bits, W, H)}^XZ`;
 }
+
+/** Bounding box of the dark-enough pixels in RGBA data (null if there are none). */
+export function contentBox(px, w, h, threshold = 200) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2] < threshold) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  return x1 < 0 ? null : { x0, y0, x1, y1 };
+}

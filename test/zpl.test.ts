@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain browser JS module
-import { bitsToGfa, bitsToGfaZ64, compressRow, crc16, expandRows } from "../public/js/zpl.js";
+import { bitsToGfa, bitsToGfaZ64, compressRow, contentBox, crc16, expandRows } from "../public/js/zpl.js";
 // @ts-expect-error Node built-in (the app is typed for Workers)
 import { inflateSync } from "node:zlib";
 
@@ -51,5 +51,19 @@ describe("Z64 graphics", () => {
     expect(raw.length).toBe(Number(m[1]));
     for (let y = 0; y < h; y += 7) for (let x = 0; x < w; x += 3) expect((raw[y * bpr + (x >> 3)] >> (7 - (x & 7))) & 1).toBe(bits[y * w + x]);
     expect(gfa.length).toBeLessThan(bitsToGfa(bits, w, h).length);
+  });
+});
+
+describe("contentBox (cropping PDF labels to what's printed)", () => {
+  const rgba = (w: number, h: number, dark: [number, number][]) => {
+    const px = new Uint8ClampedArray(w * h * 4).fill(255);
+    for (const [x, y] of dark) px.fill(0, (y * w + x) * 4, (y * w + x) * 4 + 3);
+    return px;
+  };
+  it("finds the printed area inside white margins", () => {
+    expect(contentBox(rgba(10, 8, [[2, 3], [7, 5], [4, 1]]), 10, 8)).toEqual({ x0: 2, y0: 1, x1: 7, y1: 5 });
+  });
+  it("is null for a blank page", () => {
+    expect(contentBox(rgba(4, 4, []), 4, 4)).toBeNull();
   });
 });
