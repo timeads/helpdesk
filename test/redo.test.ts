@@ -221,6 +221,23 @@ describe("Redo signature confirmation", () => {
     expect(findSignatureOption("Req", new Map<string, any>([obj("Req", [["service", T("SCALAR", "String")]])]))).toBeNull();
   });
 
+  it("reads Redo's actual option: OutboundShipmentRequestInput.signatureConfirmation = STANDARD | ADULT", () => {
+    const redo = new Map<string, any>([
+      obj("OutboundShipmentRequestInput", [["toAddress", T("INPUT_OBJECT", "Addr")], ["signatureConfirmation", T("ENUM", "SignatureConfirmation")]]),
+      obj("Addr", [["zip", T("SCALAR", "String")]]),
+      en("SignatureConfirmation", ["ADULT", "STANDARD"]),
+    ]);
+    const opt = findSignatureOption("OutboundShipmentRequestInput", redo)!;
+    expect(opt).toEqual({ path: [{ name: "signatureConfirmation", list: false }], kind: "enum", standard: "STANDARD", adult: "ADULT" });
+    const req: any = { toAddress: { zip: "83642" } };
+    applySignature(req, opt, "standard");
+    expect(literal(req)).toBe('{toAddress: {zip: "83642"} signatureConfirmation: STANDARD}');
+    // A NONE choice is never used as the signature
+    const withNone = new Map(redo);
+    withNone.set("SignatureConfirmation", { name: "SignatureConfirmation", kind: "ENUM", inputFields: null, enumValues: [{ name: "NONE" }, { name: "ADULT" }, { name: "STANDARD" }] });
+    expect(findSignatureOption("OutboundShipmentRequestInput", withNone)).toMatchObject({ standard: "STANDARD", adult: "ADULT" });
+  });
+
   it("writes it into the request, on every parcel when that's where it lives", () => {
     const req: any = { parcels: [{ weight: 1 }, { weight: 2 }] };
     applySignature(req, { path: [{ name: "parcels", list: true }, { name: "options", list: false }, { name: "signatureConfirmation", list: false }], kind: "enum", standard: "SIGNATURE_REQUIRED", adult: "ADULT_SIGNATURE_REQUIRED" }, "adult");
@@ -250,7 +267,7 @@ describe("Redo signature confirmation", () => {
     // Redo adds it: found, checked with a test quote, then used
     supported = true;
     resetRedoSignatureCache();
-    db.DB.raw.exec("DELETE FROM settings WHERE key = 'redo_signature_option'");
+    db.DB.raw.exec("DELETE FROM settings WHERE key = 'redo_signature_option_v2'");
     queries = [];
     const rates = await getRedoRates(db, from, to, [box(3)], "standard");
     expect(rates.map((r) => r.total)).toEqual([25.53]);

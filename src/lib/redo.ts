@@ -405,11 +405,15 @@ export function findSignatureOption(root: string, types: Map<string, IType>): Si
       const named = SIG.test(f.name) || SIG.test(f.description ?? "");
       if (bt?.kind === "ENUM") {
         const values = (bt.enumValues ?? []).map((v) => v.name);
-        const sigValues = values.filter((v) => SIG.test(v) && !/^(NO|NONE)|NO_?SIGNATURE/i.test(v));
+        const off = /^(NO|NONE|OFF|FALSE|DISABLED?)$|^NO_|NO_?SIGNATURE|NOT_REQUIRED|WAIVE/i;
+        // A field named for signatures takes its values as they are (e.g. STANDARD, ADULT);
+        // a general confirmation field only its SIGNATURE values
+        const sigValues = named ? values.filter((v) => !off.test(v)) : values.filter((v) => SIG.test(v) && !off.test(v));
         if ((named || /confirm/i.test(f.name)) && sigValues.length) {
           return {
             path: step, kind: "enum",
-            standard: sigValues.find((v) => !/ADULT|INDIRECT/i.test(v)) ?? sigValues.find((v) => !/ADULT/i.test(v)) ?? null,
+            standard: sigValues.find((v) => /STANDARD|^SIGNATURE|REQUIRED|DIRECT/i.test(v) && !/ADULT|INDIRECT/i.test(v))
+              ?? sigValues.find((v) => !/ADULT|INDIRECT/i.test(v)) ?? sigValues.find((v) => !/ADULT/i.test(v)) ?? null,
             adult: sigValues.find((v) => /ADULT/i.test(v)) ?? null,
           };
         }
@@ -462,7 +466,7 @@ export const resetRedoSignatureCache = () => { sigCache = null; };
 export async function redoSignatureOption(env: Env, now = Date.now()): Promise<SigOption | null> {
   if (sigCache && now - sigCache.at < 6 * 3600_000) return sigCache.option;
   const { getSetting, setSetting } = await import("./util");
-  const saved = await getSetting<SigState | null>(env, "redo_signature_option", null);
+  const saved = await getSetting<SigState | null>(env, "redo_signature_option_v2", null);
   if (saved && now - saved.at < 24 * 3600_000) return (sigCache = saved).option;
   try {
     const top = await gql<{ __schema: { mutationType: { fields: { name: string; args: { name: string; type: TypeRef }[] }[] } | null } }>(env, () =>
@@ -515,7 +519,7 @@ export async function redoSignatureOption(env: Env, now = Date.now()): Promise<S
       }
     }
     sigCache = { at: now, option, ...(option ? {} : { reason }) };
-    await setSetting(env, "redo_signature_option", sigCache);
+    await setSetting(env, "redo_signature_option_v2", sigCache);
     return option;
   } catch (e) {
     if (!saved) sigCache = { at: now - 23 * 3600_000, option: null, reason: `Couldn't read Redo's API: ${(e as Error).message.slice(0, 200)}` }; // try again within the hour
@@ -540,7 +544,7 @@ export async function redoSignatureStatus(env: Env): Promise<{ ready: boolean; f
 export async function recheckRedoSignature(env: Env) {
   sigCache = null;
   const { deleteSetting } = await import("./util");
-  await deleteSetting(env, "redo_signature_option");
+  await deleteSetting(env, "redo_signature_option_v2");
   return redoSignatureStatus(env);
 }
 
