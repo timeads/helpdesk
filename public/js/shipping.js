@@ -49,11 +49,15 @@ const ago = (iso) => {
   const r = relTime(iso);
   return r === "now" ? "just now" : /\d[mhd]$/.test(r) ? `${r} ago` : r;
 };
-// Signature orders vs Redo: Redo can't add a signature through the app yet, so its price is shown for comparison.
-// When it's at least this much cheaper, it's worth buying that label on Redo's own site (where a signature can be added).
+// Signature orders vs Redo: Redo can't add a signature through the app yet, so its price comes without one.
+// Redo's site charges this much to add a signature (checked Oct 2026: $19.28 → $25.53), so it's added before comparing.
+// When Redo with a signature is still at least REDO_SAVE_MIN cheaper, buy that label on Redo's site.
+const REDO_SIGNATURE_FEE = 6.25;
 const REDO_SAVE_MIN = 3;
 const REDO_SITE = "https://app.getredo.com";
-const redoSaving = (best, redo) => (best && redo ? Math.round((best.total - redo.total) * 100) / 100 : null);
+/** What Redo would charge with a signature added on its site. */
+const redoWithSig = (redo) => Math.round((redo.total + REDO_SIGNATURE_FEE) * 100) / 100;
+const redoSaving = (best, redo) => (best && redo ? Math.round((best.total - redoWithSig(redo)) * 100) / 100 : null);
 
 /** A small carrier mark (UPS brown, USPS blue, FedEx purple…) so options are easy to tell apart at a glance. */
 const CARRIER_MARKS = {
@@ -394,8 +398,8 @@ function renderQueue(root, params) {
     mount(td, h("div", { class: "q-line" }, h("span", { class: "small q-service" }, carrierMark(r, true), r.serviceName.replace(/ · Redo$/, "").replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority"),
       r.source ? h("span", { class: "muted", title: VIA[r.source]?.title ?? "" }, ` · ${VIA[r.source]?.label ?? r.source}`) : null), h("b", {}, money(r.total, "USD"))),
       h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`),
-      q.redo && o.plan.signature ? h("div", { class: "redo-line small", title: `${q.redo.serviceName} on Redo, without a signature` },
-        `Redo ${money(q.redo.total, "USD")}`,
+      q.redo && o.plan.signature ? h("div", { class: "redo-line small", title: `${q.redo.serviceName.replace(/ · Redo$/, "")} on Redo: ${money(q.redo.total, "USD")} + about ${money(REDO_SIGNATURE_FEE, "USD")} to add the signature on Redo's site` },
+        `Redo ~${money(redoWithSig(q.redo), "USD")}`,
         save >= REDO_SAVE_MIN ? h("span", { class: "badge warn", style: { marginLeft: "6px" } }, `save ${money(save, "USD")}`) : h("span", { class: "muted" }, save > 0 ? ` (−${money(save, "USD")})` : " (not cheaper)")) : null);
   }
   const refreshQuotes = (rows) => loadQuotes(rows, (o) => { fillQuote(o); if (st.selected.has(o.id)) drawBulk(visible()); });
@@ -431,7 +435,7 @@ function renderQueue(root, params) {
         h("b", {}, "Orders that need a signature"),
         h("div", { class: "small muted" }, shipStatus && !shipStatus.redo
           ? "Connect Redo in Settings → Connections to compare its prices here."
-          : `Redo can't add a signature through the app yet, so its price without one is shown under each quote. When it's ${money(REDO_SAVE_MIN, "USD")}+ cheaper (“save”), buy that label on Redo's site and add the signature there.`),
+          : `Redo can't add a signature through the app yet. Under each quote is Redo's price with one added on its site (its price + about ${money(REDO_SIGNATURE_FEE, "USD")} for the signature). When that's ${money(REDO_SAVE_MIN, "USD")}+ cheaper (“save”), buy the label on Redo's site and add the signature there.`),
         w ? h("div", { class: "small muted" }, w.found?.length ? "Redo now supports signatures — see the notice above." : `Checked Redo's API for signature support ${relTime(w.checkedAt)} ago — not yet (checked daily).`) : null),
       h("div", { class: "row", style: { gap: "6px" } }, sort, h("a", { class: "btn sm", href: REDO_SITE, target: "_blank", rel: "noopener" }, "Open Redo", icon("ext")))));
   }
@@ -1571,7 +1575,7 @@ function buildLabelForm(root, o, presets, opts) {
       s.signature && s.redoCompare ? (() => {
         const save = redoSaving({ total: cheapest }, s.redoCompare);
         return h("div", { class: "notice redo-compare" + (save >= REDO_SAVE_MIN ? " info" : ""), style: { marginBottom: "10px" } },
-          h("b", {}, `Redo: ${money(s.redoCompare.total, "USD")}`), ` for ${s.redoCompare.serviceName.replace(/ · Redo$/, "")} without a signature — `,
+          h("b", {}, `Redo with signature: ~${money(redoWithSig(s.redoCompare), "USD")}`), ` for ${s.redoCompare.serviceName.replace(/ · Redo$/, "")} (${money(s.redoCompare.total, "USD")} + about ${money(REDO_SIGNATURE_FEE, "USD")} for the signature on Redo's site) — `,
           save >= REDO_SAVE_MIN
             ? [`${money(save, "USD")} less than the cheapest here. To keep the signature, buy this label on `, h("a", { href: REDO_SITE, target: "_blank", rel: "noopener" }, "Redo's site"), " and add it there."]
             : save > 0 ? `only ${money(save, "USD")} less — buying here keeps the signature.` : "no cheaper than buying here.");
