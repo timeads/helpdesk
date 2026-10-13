@@ -182,4 +182,18 @@ describe("one row per carrier service", async () => {
     expect(chooseRate(rates, "12").serviceCode).toBe("redo:1:ca_a:UPS:3daySelect");
     expect(redoServiceName("UPS", "3daySelect")).toBe("UPS 3 Day Select · Redo");
   });
+
+  it("says where each row is bought (TTW, EasyPost, Redo) and what the other connections charge", () => {
+    const rates = dedupeRates([
+      r("03", "UPS", "UPS Ground", 31.29),
+      r("ep:UPSDAP:Ground", "UPS", "UPS Ground", 33.1),
+      r("redo:1:ca_a:UPS:Ground", "UPS", "UPS Ground · Redo", 34),
+      r("redo:1:ca_b:UPS:Ground", "UPS", "UPS Ground · Redo", 32.5),
+      r("usps:GroundAdvantage", "USPS", "USPS Ground Advantage", 30.25),
+    ]);
+    expect(rates.map((x) => [x.serviceCode, x.source, x.others ?? []])).toEqual([
+      ["usps:GroundAdvantage", "EasyPost", []],
+      ["03", "TTW", [{ source: "Redo", total: 32.5, serviceCode: "redo:1:ca_b:UPS:Ground" }, { source: "EasyPost", total: 33.1, serviceCode: "ep:UPSDAP:Ground" }]],
+    ]);
+  });
 });

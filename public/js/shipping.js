@@ -60,6 +60,14 @@ const CARRIER_MARKS = {
   ups: ["UPS", "ups"], usps: ["USPS", "usps"], fedex: ["FedEx", "fedex"], dhl: ["DHL", "dhl"], "dhl express": ["DHL", "dhl"], "dhl ecommerce": ["DHL", "dhl"],
   ontrac: ["OnTrac", "ontrac"], "amazon shipping": ["amzn", "amazon"], "canada post": ["CP", "canpost"],
 };
+/** Where a label is bought: our own UPS account, EasyPost or Redo. */
+const VIA = {
+  TTW: { label: "TTW", title: "Bought on Tuft the World's own UPS account" },
+  EasyPost: { label: "EasyPost", title: "Bought through EasyPost (paid from the EasyPost wallet)" },
+  Redo: { label: "Redo", title: "Bought through Redo (paid from the Redo labels balance)" },
+};
+const viaChip = (source) => h("span", { class: "badge plain via-chip", title: VIA[source]?.title ?? "", style: { marginLeft: "8px", fontWeight: 600, verticalAlign: "middle" } }, `via ${VIA[source]?.label ?? source}`);
+
 function carrierMark(r, small = false) {
   const name = String(r.carrier || (/^\d/.test(r.serviceCode) ? "UPS" : r.serviceName.split(" ")[0])).toLowerCase();
   const [label, cls] = CARRIER_MARKS[name] ?? [String(r.carrier || "?").slice(0, 5), "other"];
@@ -381,9 +389,10 @@ function renderQueue(root, params) {
     const r = pickRate(q.rates, st.policy, o.plan);
     if (!r) return mount(td, h("span", { class: "small muted" }, "Service not offered"));
     const m = o.shippingPaid - r.total;
-    td.title = q.rates.map((x) => `${x.serviceName}: ${money(x.total, "USD")} → ${marginText(o.shippingPaid - x.total)}`).join("\n");
+    td.title = q.rates.map((x) => `${x.serviceName.replace(/ · Redo$/, "")}${x.source ? ` (${VIA[x.source]?.label ?? x.source})` : ""}: ${money(x.total, "USD")} → ${marginText(o.shippingPaid - x.total)}`).join("\n");
     const save = o.plan.signature ? redoSaving(r, q.redo) : null;
-    mount(td, h("div", { class: "q-line" }, h("span", { class: "small q-service" }, carrierMark(r, true), r.serviceName.replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority")), h("b", {}, money(r.total, "USD"))),
+    mount(td, h("div", { class: "q-line" }, h("span", { class: "small q-service" }, carrierMark(r, true), r.serviceName.replace(/ · Redo$/, "").replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority"),
+      r.source ? h("span", { class: "muted", title: VIA[r.source]?.title ?? "" }, ` · ${VIA[r.source]?.label ?? r.source}`) : null), h("b", {}, money(r.total, "USD"))),
       h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`),
       q.redo && o.plan.signature ? h("div", { class: "redo-line small", title: `${q.redo.serviceName} on Redo, without a signature` },
         `Redo ${money(q.redo.total, "USD")}`,
@@ -1577,13 +1586,14 @@ function buildLabelForm(root, o, presets, opts) {
           h("span", { class: "radio" }),
           carrierMark(r),
           h("div", { style: { minWidth: 0 } },
-            h("div", { style: { fontWeight: 700 } }, r.serviceName),
+            h("div", { style: { fontWeight: 700 } }, r.serviceName.replace(/ · Redo$/, ""), r.source ? viaChip(r.source) : null),
             h("div", { class: "row", style: { gap: "6px", marginTop: "2px" } },
               h("span", { class: "small muted" }, r.days ? `Est. ${r.days} business day${r.days > 1 ? "s" : ""}` : "Transit time varies"),
               r.total === cheapest ? h("span", { class: "badge plain" }, "Cheapest") : null,
               fastestDays !== null && r.days === fastestDays ? h("span", { class: "badge plain" }, "Fastest") : null,
               o?.requestedService && sameService(o.requestedService, r.serviceName) ? h("span", { class: "badge plain" }, "Customer's choice") : null,
               plan?.service && (plan.service === r.serviceCode || r.alt?.includes(plan.service)) ? h("span", { class: "badge plain" }, "By rule") : null),
+            r.others?.length ? h("div", { class: "small muted", style: { marginTop: "2px" } }, "Also ", r.others.map((x, i) => [i ? " · " : "", `${VIA[x.source]?.label ?? x.source} ${money(x.total, r.currency)}`])) : null,
             split() && r.perBox?.length === s.parcels.length ? h("div", { class: "small muted per-box" }, r.perBox.map((x, i) => `Box ${i + 1} ${money(x, r.currency)}`).join(" · ")) : null),
           h("div", { class: "price-col" },
             h("div", { class: "price" }, money(r.total, r.currency), r.listTotal > r.total ? h("span", { class: "list" }, money(r.listTotal, r.currency)) : null),

@@ -58,7 +58,13 @@ export interface Rate {
   days: number | null;
   perBox?: number[]; // multi-box shipments: what each box costs (adds up to total)
   alt?: string[]; // the same service's codes from other connections it stands in for (see dedupeRates)
+  /** Where the label is bought: TTW (our own UPS account), EasyPost or Redo (set by dedupeRates) */
+  source?: RateSource;
+  /** The same service from the other connections, dearer (or tied), for comparison */
+  others?: { source: RateSource; total: number; serviceCode: string }[];
 }
+
+export type RateSource = "TTW" | "EasyPost" | "Redo";
 
 /** Shares a total across boxes in proportion to each box's own charge (so per-box costs add up). */
 export function splitCost(total: number, parts: number[]): number[] | undefined {
