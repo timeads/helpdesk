@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buyRedo, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, redoSignatureWatch, sniffLabel, voidRedo } from "../src/lib/redo";
+import { applySignature, buyRedo, findSignatureOption, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, redoSignatureWatch, resetRedoSignatureCache, sniffLabel, voidRedo } from "../src/lib/redo";
 import { testD1 } from "./helpers/d1";
 import { getAllRates, purchase, voidLabel } from "../src/lib/carriers";
 
@@ -195,5 +195,71 @@ describe("one row per carrier service", async () => {
       ["usps:GroundAdvantage", "EasyPost", []],
       ["03", "TTW", [{ source: "Redo", total: 32.5, serviceCode: "redo:1:ca_b:UPS:Ground" }, { source: "EasyPost", total: 33.1, serviceCode: "ep:UPSDAP:Ground" }]],
     ]);
+  });
+});
+
+describe("Redo signature confirmation", () => {
+  const T = (kind: string, name: string | null, ofType: any = null) => ({ kind, name, ofType });
+  const obj = (name: string, fields: [string, any][]) => [name, { name, kind: "INPUT_OBJECT", enumValues: null, inputFields: fields.map(([n, type]) => ({ name: n, description: null, type })) }] as const;
+  const en = (name: string, values: string[]) => [name, { name, kind: "ENUM", inputFields: null, enumValues: values.map((v) => ({ name: v })) }] as const;
+
+  it("finds the setting wherever Redo put it: an enum on each parcel, a yes/no flag, or text", () => {
+    const parcelEnum = new Map<string, any>([
+      obj("Req", [["toAddress", T("INPUT_OBJECT", "Addr")], ["parcels", T("NON_NULL", null, T("LIST", null, T("INPUT_OBJECT", "ParcelIn")))]]),
+      obj("Addr", [["zip", T("SCALAR", "String")]]),
+      obj("ParcelIn", [["weight", T("SCALAR", "Float")], ["options", T("INPUT_OBJECT", "ParcelOpts")]]),
+      obj("ParcelOpts", [["signatureConfirmation", T("ENUM", "SigConf")]]),
+      en("SigConf", ["NONE", "INDIRECT_SIGNATURE", "SIGNATURE_REQUIRED", "ADULT_SIGNATURE_REQUIRED"]),
+    ]);
+    expect(findSignatureOption("Req", parcelEnum)).toEqual({
+      path: [{ name: "parcels", list: true }, { name: "options", list: false }, { name: "signatureConfirmation", list: false }],
+      kind: "enum", standard: "SIGNATURE_REQUIRED", adult: "ADULT_SIGNATURE_REQUIRED",
+    });
+    const flags = new Map<string, any>([obj("Req", [["requireSignature", T("SCALAR", "Boolean")], ["requireAdultSignature", T("SCALAR", "Boolean")]])]);
+    expect(findSignatureOption("Req", flags)).toMatchObject({ kind: "boolean", path: [{ name: "requireSignature", list: false }], adultPath: [{ name: "requireAdultSignature", list: false }] });
+    expect(findSignatureOption("Req", new Map<string, any>([obj("Req", [["signatureConfirmation", T("SCALAR", "String")]])]))).toMatchObject({ kind: "string", standard: "SIGNATURE" });
+    expect(findSignatureOption("Req", new Map<string, any>([obj("Req", [["service", T("SCALAR", "String")]])]))).toBeNull();
+  });
+
+  it("writes it into the request, on every parcel when that's where it lives", () => {
+    const req: any = { parcels: [{ weight: 1 }, { weight: 2 }] };
+    applySignature(req, { path: [{ name: "parcels", list: true }, { name: "options", list: false }, { name: "signatureConfirmation", list: false }], kind: "enum", standard: "SIGNATURE_REQUIRED", adult: "ADULT_SIGNATURE_REQUIRED" }, "adult");
+    expect(literal(req)).toBe("{parcels: [{weight: 1 options: {signatureConfirmation: ADULT_SIGNATURE_REQUIRED}} {weight: 2 options: {signatureConfirmation: ADULT_SIGNATURE_REQUIRED}}]}");
+  });
+
+  it("quotes signature orders with the signature once Redo takes one, and not at all before", async () => {
+    resetRedoSignatureCache();
+    const db = { ...env, DB: testD1() };
+    let supported = false;
+    answer = (q) => {
+      if (q.includes("__schema")) return { data: { __schema: { mutationType: { fields: [{ name: "getShippingLabelQuotes", args: [{ name: "input", type: { kind: "NON_NULL", name: null, ofType: { kind: "INPUT_OBJECT", name: "ShipReq", ofType: null } } }] }] } } } };
+      if (q.includes("__type")) {
+        const types: Record<string, any> = {
+          ShipReq: { name: "ShipReq", kind: "INPUT_OBJECT", enumValues: null, inputFields: [{ name: "toAddress", description: null, type: { kind: "SCALAR", name: "String", ofType: null } }, ...(supported ? [{ name: "options", description: null, type: { kind: "INPUT_OBJECT", name: "Opts", ofType: null } }] : [])] },
+          Opts: { name: "Opts", kind: "INPUT_OBJECT", enumValues: null, inputFields: [{ name: "signature", description: null, type: { kind: "ENUM", name: "Sig", ofType: null } }] },
+          Sig: { name: "Sig", kind: "ENUM", inputFields: null, enumValues: [{ name: "NO_SIGNATURE" }, { name: "SIGNATURE" }, { name: "ADULT_SIGNATURE" }] },
+        };
+        const names = [...q.matchAll(/__type\(name: "(\w+)"\)/g)].map((m) => m[1]);
+        return { data: Object.fromEntries(names.map((n, i) => [`t${i}`, types[n] ?? null])) };
+      }
+      return { data: { getShippingLabelQuotes: { rates: [rate("UPS", "Ground", "25.53", "ca_ups")], messages: [] } } };
+    };
+    // Not supported: no Redo rates for a signature order, and no quote asked for
+    expect(await getRedoRates(db, from, to, [box(3)], "standard")).toEqual([]);
+    expect(queries.some((q) => q.includes("getShippingLabelQuotes(input:"))).toBe(false);
+    // Redo adds it: found, checked with a test quote, then used
+    supported = true;
+    resetRedoSignatureCache();
+    db.DB.raw.exec("DELETE FROM settings WHERE key = 'redo_signature_option'");
+    queries = [];
+    const rates = await getRedoRates(db, from, to, [box(3)], "standard");
+    expect(rates.map((r) => r.total)).toEqual([25.53]);
+    const quotes = queries.filter((q) => q.includes("getShippingLabelQuotes(input:"));
+    expect(quotes).toHaveLength(2); // the test quote, then the order's
+    expect(quotes[1]).toContain("options: {signature: SIGNATURE}");
+    queries = [];
+    await getRedoRates(db, from, to, [box(3)], "adult");
+    expect(queries.filter((q) => q.includes("__schema"))).toHaveLength(0); // remembered
+    expect(queries[0]).toContain("options: {signature: ADULT_SIGNATURE}");
   });
 });

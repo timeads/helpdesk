@@ -4,7 +4,7 @@ import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrd
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
-import { getRedoRates, redoConfigured, type SignatureWatch } from "../lib/redo";
+import { getRedoRates, redoConfigured, redoSignatureOption, type SignatureWatch } from "../lib/redo";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles, type Customs } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
@@ -192,10 +192,14 @@ const VIEWS: Record<string, (o: Described) => boolean> = {
   all: () => true,
 };
 
-shipping.get("/status", async (c) =>
-  c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), redo: redoConfigured(c.env),
-    redoSignature: redoConfigured(c.env) ? await getSetting<SignatureWatch | null>(c.env, "redo_signature_watch", null) : null, shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) }),
-);
+shipping.get("/status", async (c) => {
+  const redoSig = redoConfigured(c.env) ? await redoSignatureOption(c.env).catch(() => null) : null;
+  return c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), redo: redoConfigured(c.env),
+    redoSignature: redoConfigured(c.env) ? await getSetting<SignatureWatch | null>(c.env, "redo_signature_watch", null) : null,
+    // Redo labels carry the signature in the app (its API takes one and the app found where)
+    redoSignatureReady: !!redoSig, redoSignatureField: redoSig ? redoSig.path.map((p) => p.name).join(".") : null,
+    shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) });
+});
 
 /** The fulfillment queue: every open, unshipped order with its plan, plus per-view counts. */
 shipping.get("/queue", async (c) => {
@@ -513,10 +517,11 @@ shipping.post("/rates", async (c) => {
   const to = validAddress(body.to);
   const parcels = validParcels(body.parcels);
   const signature = validSignature(body.signature);
-  // Orders that need a signature can't use Redo here; its best price without one is shown for comparison
+  // Until Redo's API takes a signature, its best price without one is shown for comparison on signature orders
+  const redoSigned = signature && redoConfigured(c.env) ? !!(await redoSignatureOption(c.env)) : false;
   const [rates, redo] = await Promise.all([
     getRates(c.env, from, to, parcels, signature, customs),
-    signature && redoConfigured(c.env)
+    signature && redoConfigured(c.env) && !redoSigned
       ? getRedoRates(c.env, from, to, parcels, undefined, customs).then((r) => r.sort((a, b) => a.total - b.total)[0] ?? null).catch(() => null)
       : Promise.resolve(null),
   ]);

@@ -4,7 +4,7 @@
 // one shipment per box, so split orders are quoted box by box and the prices added up.
 import type { Env } from "../env";
 import { carrierName } from "./easypost";
-import { normalizePhone, type Address, type Parcel, type Rate, type ShipResult } from "./ups";
+import { normalizePhone, type Address, type Parcel, type Rate, type ShipResult, type Signature } from "./ups";
 import type { Customs, CustomsItem } from "./customs";
 import { HttpError, randomId } from "./util";
 
@@ -122,14 +122,16 @@ function customsFor(c: Customs, boxes: Parcel[], split: boolean) {
 
 const domestic = (to: Address) => (to.country || "US").toUpperCase() === "US";
 
-function shipmentRequest(from: Address, to: Address, boxes: Parcel[], customs: Customs | undefined, split: boolean) {
+function baseRequest(from: Address, to: Address, boxes: Parcel[], customs: Customs | undefined, split: boolean, sig?: { option: SigOption; level: Signature }) {
   const intl = !domestic(to);
-  return {
+  const req: Record<string, unknown> = {
     fromAddress: address(from),
     toAddress: address(to),
     parcels: boxes.map(parcel),
     ...(intl && customs ? { customs: customsFor(customs, boxes, split), deliveredDutyPaid: customs.dutiesPaidBy === "sender" } : {}),
   };
+  if (sig && !intl) applySignature(req, sig.option, sig.level);
+  return req;
 }
 
 // ---------------------------------------------------------------- Rates
@@ -171,8 +173,12 @@ const toRate = (mode: "1" | "n", r: RedoRate, total: number, perBox?: number[]):
 
 const key = (r: RedoRate) => `${r.carrierAccountId}|${r.carrier}|${r.service}`;
 
-export async function getRedoRates(env: Env, from: Address, to: Address, parcels: Parcel[], _signature?: unknown, customs?: Customs): Promise<Rate[]> {
+export async function getRedoRates(env: Env, from: Address, to: Address, parcels: Parcel[], signature?: Signature, customs?: Customs): Promise<Rate[]> {
   if (!domestic(to) && !customs) return []; // abroad needs the customs list first
+  // A signature: only when Redo's API takes one (found by reading its schema); otherwise no Redo rates
+  const sig = signature && domestic(to) ? await signatureFor(env, signature) : undefined;
+  if (signature && domestic(to) && !sig) return [];
+  const shipmentRequest = (f: Address, t: Address, b: Parcel[], c: Customs | undefined, split: boolean) => baseRequest(f, t, b, c, split, sig);
   if (parcels.length === 1) return (await quote(env, shipmentRequest(from, to, parcels, customs, false))).map((r) => toRate("1", r, Number(r.rate.amount)));
   // Several boxes: one shipment for carriers that carry them together (UPS, FedEx), else box by box added up
   const [together, ...each] = await Promise.all([
@@ -228,10 +234,13 @@ async function download(env: Env, url: string): Promise<{ data: string; format: 
 /** Buys the label (or one per box). shipmentId is stored as "redo:<id>,<id>" for voiding. */
 export async function buyRedo(
   env: Env, from: Address, to: Address, parcels: Parcel[], serviceCode: string,
-  opts: { reference?: string; customs?: Customs },
+  opts: { reference?: string; customs?: Customs; signature?: Signature },
 ): Promise<ShipResult & { format: LabelFormat; carrier: string }> {
   const sel = parseRedoCode(serviceCode);
   if (!domestic(to) && !opts.customs) throw new HttpError(422, "International shipments need customs details");
+  const sig = opts.signature && domestic(to) ? await signatureFor(env, opts.signature) : undefined;
+  if (opts.signature && domestic(to) && !sig) throw new HttpError(422, "Redo can't add a signature to this label — pick another carrier, or set Delivery signature to “No signature”");
+  const shipmentRequest = (f: Address, t: Address, b: Parcel[], c: Customs | undefined, split: boolean) => baseRequest(f, t, b, c, split, sig);
   if (sel.mode === "1" && parcels.length > 5) throw new HttpError(422, "Redo carries at most 5 boxes in one shipment");
   const base = `${(opts.reference || "label").replace(/[^\w#-]/g, "").slice(0, 60)}-${randomId(9)}`;
   const groups = sel.mode === "1" ? [parcels] : parcels.map((p) => [p]);
@@ -276,7 +285,7 @@ export async function voidRedo(env: Env, shipmentId: string) {
 
 /** Settings → Connections test: a sample domestic quote. */
 export async function testRedo(env: Env, from: Address) {
-  const rates = await quote(env, shipmentRequest(from, { name: "Test", address1: "1600 Pennsylvania Ave NW", city: "Washington", state: "DC", zip: "20500", country: "US" }, [{ length: 10, width: 8, height: 4, weight: 2 }], undefined, false));
+  const rates = await quote(env, baseRequest(from, { name: "Test", address1: "1600 Pennsylvania Ave NW", city: "Washington", state: "DC", zip: "20500", country: "US" }, [{ length: 10, width: 8, height: 4, weight: 2 }], undefined, false));
   const carriers = [...new Set(rates.map((r) => carrierName(r.carrier)))];
   return { rates: rates.length, carriers };
 }
@@ -342,3 +351,141 @@ export async function redoSignatureWatch(env: Env, now = Date.now()): Promise<Si
   await setSetting(env, "redo_signature_watch", next);
   return next;
 }
+
+// ---------------------------------------------------------------- Signature confirmation
+
+/** One step of the path to the signature setting in a shipment request; `list` steps apply to every item (e.g. each parcel). */
+export interface SigStep { name: string; list: boolean }
+/** Where Redo takes a signature, read from its schema: an enum (with its signature / adult values) or a yes/no flag. */
+export interface SigOption { path: SigStep[]; kind: "enum" | "boolean" | "string"; standard: string | null; adult: string | null; adultPath?: SigStep[] }
+interface IType { name: string; kind: string; inputFields: { name: string; description: string | null; type: TypeRef }[] | null; enumValues: { name: string }[] | null }
+
+const hasList = (t: TypeRef | null | undefined): boolean => !!t && (t.kind === "LIST" || hasList(t.ofType));
+const SIG = /signat/i;
+
+/**
+ * Finds the signature setting inside a shipment request type (breadth first, a few levels deep): a field
+ * named for signatures (or a delivery-confirmation enum with a SIGNATURE value). Pure, for tests.
+ */
+export function findSignatureOption(root: string, types: Map<string, IType>): SigOption | null {
+  const queue: { type: string; path: SigStep[] }[] = [{ type: root, path: [] }];
+  const seen = new Set<string>();
+  while (queue.length) {
+    const { type, path } = queue.shift()!;
+    if (seen.has(type) || path.length > 4) continue;
+    seen.add(type);
+    const t = types.get(type);
+    for (const f of t?.inputFields ?? []) {
+      const base = baseName(f.type);
+      const bt = base ? types.get(base) : undefined;
+      const step = [...path, { name: f.name, list: hasList(f.type) }];
+      const named = SIG.test(f.name) || SIG.test(f.description ?? "");
+      if (bt?.kind === "ENUM") {
+        const values = (bt.enumValues ?? []).map((v) => v.name);
+        const sigValues = values.filter((v) => SIG.test(v) && !/^(NO|NONE)|NO_?SIGNATURE/i.test(v));
+        if ((named || /confirm/i.test(f.name)) && sigValues.length) {
+          return {
+            path: step, kind: "enum",
+            standard: sigValues.find((v) => !/ADULT|INDIRECT/i.test(v)) ?? sigValues.find((v) => !/ADULT/i.test(v)) ?? null,
+            adult: sigValues.find((v) => /ADULT/i.test(v)) ?? null,
+          };
+        }
+      } else if (base === "String" && SIG.test(f.name) && !/name|image|url|waive/i.test(f.name)) {
+        // Free text: the usual carrier words (checked with a test quote before it's used)
+        return { path: step, kind: "string", standard: "SIGNATURE", adult: "ADULT_SIGNATURE" };
+      } else if (base === "Boolean" && SIG.test(f.name) && !/adult|no_?sig|waive/i.test(f.name)) {
+        const adultField = (t?.inputFields ?? []).find((x) => baseName(x.type) === "Boolean" && /adult/i.test(x.name));
+        return { path: step, kind: "boolean", standard: "true", adult: adultField ? "true" : null, ...(adultField ? { adultPath: [...path, { name: adultField.name, list: false }] } : {}) };
+      } else if (bt?.kind === "INPUT_OBJECT") {
+        queue.push({ type: base!, path: step });
+      }
+    }
+  }
+  return null;
+}
+
+/** Puts the signature into a shipment request along the option's path (every parcel when the path runs through the list). */
+export function applySignature(req: Record<string, unknown>, opt: SigOption, level: Signature) {
+  const pick = (level === "adult" ? opt.adult ?? opt.standard : opt.standard)!;
+  const value = opt.kind === "enum" ? E(pick) : opt.kind === "string" ? pick : true;
+  const put = (path: SigStep[], v: unknown) => {
+    const go = (obj: any, i: number) => {
+      const st = path[i];
+      if (i === path.length - 1) {
+        if (st.list && Array.isArray(obj[st.name])) return; // a list of scalars isn't a setting we can fill
+        obj[st.name] = v;
+        return;
+      }
+      if (st.list) {
+        if (!Array.isArray(obj[st.name])) obj[st.name] = [{}];
+        for (const item of obj[st.name]) go(item, i + 1);
+      } else {
+        obj[st.name] ??= {};
+        go(obj[st.name], i + 1);
+      }
+    };
+    go(req, 0);
+  };
+  put(opt.path, value);
+  if (opt.kind === "boolean" && level === "adult" && opt.adultPath) put(opt.adultPath, true);
+}
+
+let sigCache: { at: number; option: SigOption | null } | null = null;
+/** Tests: forget the in-memory copy. */
+export const resetRedoSignatureCache = () => { sigCache = null; };
+
+/** Reads Redo's schema (cached for a day here and in settings) to find where a signature goes; null when it can't take one. */
+export async function redoSignatureOption(env: Env, now = Date.now()): Promise<SigOption | null> {
+  if (sigCache && now - sigCache.at < 6 * 3600_000) return sigCache.option;
+  const { getSetting, setSetting } = await import("./util");
+  const saved = await getSetting<{ at: number; option: SigOption | null } | null>(env, "redo_signature_option", null);
+  if (saved && now - saved.at < 24 * 3600_000) return (sigCache = saved).option;
+  try {
+    const top = await gql<{ __schema: { mutationType: { fields: { name: string; args: { name: string; type: TypeRef }[] }[] } | null } }>(env, () =>
+      `query { __schema { mutationType { fields { name args { name type { ${TYPE_REF} } } } } } }`);
+    const op = (top.__schema.mutationType?.fields ?? []).find((f) => f.name === "getShippingLabelQuotes");
+    const root = op ? baseName(op.args.find((a) => a.name === "input")?.type) : null;
+    let option: SigOption | null = null;
+    if (root) {
+      const types = new Map<string, IType>();
+      let queue = [root];
+      for (let depth = 0; depth < 5 && queue.length; depth++) {
+        const names = [...new Set(queue)].filter((n) => !types.has(n) && !/^(String|Int|Float|Boolean|ID)$/.test(n)).slice(0, 40);
+        if (!names.length) break;
+        const data = await gql<Record<string, IType | null>>(env, () =>
+          `query { ${names.map((n, i) => `t${i}: __type(name: ${JSON.stringify(n)}) { name kind inputFields { name description type { ${TYPE_REF} } } enumValues { name } }`).join(" ")} }`);
+        queue = [];
+        for (const t of Object.values(data)) {
+          if (!t) continue;
+          types.set(t.name, t);
+          for (const f of t.inputFields ?? []) { const b = baseName(f.type); if (b) queue.push(b); }
+        }
+      }
+      option = findSignatureOption(root, types);
+    }
+    // Make sure Redo takes it: one free test quote with a signature (no label is bought)
+    if (option) {
+      const sample: Address = { name: "Test", address1: "1600 Pennsylvania Ave NW", city: "Washington", state: "DC", zip: "20500", country: "US" };
+      try {
+        const origin: Address = { name: "Test", address1: "350 5th Ave", city: "New York", state: "NY", zip: "10118", country: "US" };
+        await quote(env, baseRequest(origin, sample, [{ length: 10, width: 8, height: 4, weight: 2 }], undefined, false, { option, level: "standard" }));
+      } catch (e) {
+        console.error("Redo rejected the signature option", option, e);
+        option = null;
+      }
+    }
+    sigCache = { at: now, option };
+    await setSetting(env, "redo_signature_option", sigCache);
+    return option;
+  } catch {
+    return saved?.option ?? null; // Redo's schema didn't answer: use what was found before
+  }
+}
+
+let sigPending: Promise<SigOption | null> | null = null;
+const signatureFor = async (env: Env, level: Signature) => {
+  // Many quotes at once (the queue) share one look at Redo's schema
+  sigPending ??= redoSignatureOption(env).finally(() => { sigPending = null; });
+  const option = await sigPending;
+  return option ? { option, level } : undefined;
+};

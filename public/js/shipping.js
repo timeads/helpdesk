@@ -127,7 +127,7 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     shipStatus = st;
     const n = [];
-    if (st.redoSignature?.found?.length) n.push(h("div", { class: "notice info" }, h("b", {}, "Redo labels can now require a signature. "), "Redo's API started offering it on ", new Date(st.redoSignature.foundAt).toLocaleDateString(), " (", st.redoSignature.found.join(", "), "). Ask Claude to wire it in so signature orders can use Redo rates."));
+    if (st.redoSignature?.found?.length && !st.redoSignatureReady) n.push(h("div", { class: "notice info" }, h("b", {}, "Redo labels can now require a signature. "), "Redo's API started offering it on ", new Date(st.redoSignature.foundAt).toLocaleDateString(), " (", st.redoSignature.found.join(", "), "), but the app couldn't tell where it goes yet — send this to Claude."));
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
     if (!st.ups && !st.usps && !st.redo) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
     else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Connections when ready."));
@@ -435,9 +435,11 @@ function renderQueue(root, params) {
         h("b", {}, "Orders that need a signature"),
         h("div", { class: "small muted" }, shipStatus && !shipStatus.redo
           ? "Connect Redo in Settings → Connections to compare its prices here."
-          : `Redo can't add a signature through the app yet. Under each quote is Redo's price with one added on its site (its price + about ${money(REDO_SIGNATURE_FEE, "USD")} for the signature). When that's ${money(REDO_SAVE_MIN, "USD")}+ cheaper (“save”), buy the label on Redo's site and add the signature there.`),
-        w ? h("div", { class: "small muted" }, w.found?.length ? "Redo now supports signatures — see the notice above." : `Checked Redo's API for signature support ${relTime(w.checkedAt)} ago — not yet (checked daily).`) : null),
-      h("div", { class: "row", style: { gap: "6px" } }, sort, h("a", { class: "btn sm", href: REDO_SITE, target: "_blank", rel: "noopener" }, "Open Redo", icon("ext")))));
+          : shipStatus?.redoSignatureReady
+            ? "Redo labels now include the signature: Redo rates show with the others on each order (marked “via Redo”), so you can buy them right here."
+            : `Redo can't add a signature through the app yet. Under each quote is Redo's price with one added on its site (its price + about ${money(REDO_SIGNATURE_FEE, "USD")} for the signature). When that's ${money(REDO_SAVE_MIN, "USD")}+ cheaper (“save”), buy the label on Redo's site and add the signature there.`),
+        w && !shipStatus?.redoSignatureReady ? h("div", { class: "small muted" }, w.found?.length ? "Redo now supports signatures — see the notice above." : `Checked Redo's API for signature support ${relTime(w.checkedAt)} ago — not yet (checked daily).`) : null),
+      h("div", { class: "row", style: { gap: "6px" } }, shipStatus?.redoSignatureReady ? null : sort, h("a", { class: "btn sm", href: REDO_SITE, target: "_blank", rel: "noopener" }, "Open Redo", icon("ext")))));
   }
 
   // ---- Ship together: orders to the same person and address (suggested, or picked by hand)
