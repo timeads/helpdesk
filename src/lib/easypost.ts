@@ -303,6 +303,40 @@ export async function testEasypost(env: Env) {
   await ep(env, "GET", "/shipments?page_size=1");
 }
 
+/**
+ * Why a carrier isn't quoting: the carrier accounts this API key can use, and a sample quote (no
+ * label is bought) with and without a signature, with EasyPost's message for every carrier that
+ * returned no rate. Creating a shipment to quote it is free.
+ */
+export async function easypostCarrierCheck(env: Env, from: Address) {
+  const accounts = ((await ep(env, "GET", "/carrier_accounts").catch(() => [])) as any[]) ?? [];
+  const to: Address = { name: "Sample Customer", company: "", phone: "2155550100", address1: "350 5th Ave", address2: "", city: "New York", state: "NY", zip: "10118", country: "US", residential: true };
+  const box: Parcel = { length: 12, width: 10, height: 8, weight: 4 };
+  const quote = async (signature: Signature) => {
+    const s = await ep(env, "POST", "/shipments", { shipment: { to_address: address(to), from_address: address(from), parcel: parcel(box), options: options(signature, "GIF") } });
+    const byCarrier = new Map<string, { carrier: string; services: string[]; cheapest: number | null }>();
+    type Row = { carrier: string; services: string[]; cheapest: number | null };
+    for (const r of (s.rates ?? []) as any[]) {
+      const k = r.carrier_account_id ?? r.carrier;
+      const cur: Row = byCarrier.get(k) ?? { carrier: r.carrier, services: [], cheapest: null };
+      cur.services.push(r.service);
+      cur.cheapest = cur.cheapest === null ? Number(r.rate) : Math.min(cur.cheapest, Number(r.rate));
+      byCarrier.set(k, cur);
+    }
+    return {
+      rates: [...byCarrier.entries()].map(([account, v]) => ({ account, ...v })),
+      messages: ((s.messages ?? []) as any[]).map((m) => ({ carrier: m.carrier ?? "", account: m.carrier_account_id ?? "", message: String(m.message ?? "") })),
+    };
+  };
+  const [plain, signed] = await Promise.all([quote(undefined), quote("standard")]);
+  return {
+    testKey: (env.EASYPOST_API_KEY ?? "").startsWith("EZTK"),
+    accounts: accounts.map((a) => ({ id: a.id, type: a.type, description: a.description ?? "", reference: a.reference ?? "", readable: a.readable ?? a.type })),
+    plain,
+    signed,
+  };
+}
+
 export const uspsTrackingUrl = (n: string) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(n)}`;
 
 /** Kept for older callers and tests. */

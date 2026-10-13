@@ -232,6 +232,26 @@ function credentials(fields, inner) {
     };
     test.onclick = busy(test, runTest);
     // Redo: list what its shipping API accepts (signature confirmation and other options)
+    // EasyPost: which carrier accounts the key can use, and why a carrier (e.g. UPS) isn't quoting
+    const carriersBtn = g.id === "usps" ? h("button", { class: "btn ghost", type: "button" }, "Check EasyPost carriers") : null;
+    if (carriersBtn) carriersBtn.onclick = busy(carriersBtn, async () => {
+      const r = await api("/credentials/easypost/carriers");
+      const money = (n) => (n === null ? "—" : `$${Number(n).toFixed(2)}`);
+      const acctName = (id) => { const a = r.accounts.find((x) => x.id === id); return a ? `${a.readable}${a.description ? ` (${a.description})` : ""}` : id; };
+      const quote = (title, q) => h("div", { class: "stack", style: { gap: "4px" } }, h("b", {}, title),
+        q.rates.length ? h("ul", { style: { margin: 0, paddingLeft: "18px" } }, q.rates.map((x) => h("li", {}, `${x.carrier}: ${x.services.length} service${x.services.length === 1 ? "" : "s"}, from ${money(x.cheapest)}`, h("span", { class: "muted small" }, ` · ${acctName(x.account)}`)))) : h("div", { class: "muted small" }, "No rates at all."),
+        q.messages.length ? h("div", { class: "notice bad", style: { margin: 0 } }, h("b", {}, "Carriers that didn't quote:"),
+          h("ul", { style: { margin: "4px 0 0", paddingLeft: "18px" } }, q.messages.map((m) => h("li", {}, h("b", {}, `${m.carrier || acctName(m.account)}: `), m.message)))) : null);
+      const ups = r.accounts.filter((a) => /ups/i.test(a.type));
+      modal("EasyPost carriers", h("div", { class: "stack" },
+        r.testKey ? h("div", { class: "notice bad" }, h("b", {}, "This is a TEST API key. "), "It only sees test carrier accounts — save your production key (it starts with EZAK) to quote your real UPS account.") : null,
+        h("div", {}, h("b", {}, `Carrier accounts this key can use (${r.accounts.length})`),
+          r.accounts.length ? h("ul", { style: { margin: "4px 0 0", paddingLeft: "18px" } }, r.accounts.map((a) => h("li", {}, a.readable, a.description ? h("span", { class: "muted" }, ` · ${a.description}`) : null, h("span", { class: "muted small" }, ` · ${a.type}`)))) : h("div", { class: "muted small" }, "None returned.")),
+        !ups.length ? h("div", { class: "notice info" }, "No UPS account is linked to this API key. In EasyPost: Carrier Accounts → make sure the UPS account is added under the same mode (production vs test) as the key saved here.") : null,
+        quote("Sample quote: 4 lb box to New York (no signature)", r.plain),
+        quote("Same quote with signature required", r.signed),
+        h("p", { class: "small muted", style: { margin: 0 } }, "Nothing was bought — EasyPost quotes are free. Screenshot this and send it over if UPS is still missing.")));
+    });
     const explore = g.id === "redo" ? h("button", { class: "btn ghost", type: "button" }, "What can Redo labels do?") : null;
     if (explore) explore.onclick = busy(explore, async () => {
       const r = await api("/credentials/redo/schema");
@@ -249,7 +269,7 @@ function credentials(fields, inner) {
       h("h3", { class: "section", style: { margin: 0 } }, g.title),
       h("p", { class: "muted small", style: { margin: 0, fontFamily: "var(--read)" } }, g.desc),
       h("div", { class: "grid2 cred-grid" }, rows),
-      h("div", { class: "row" }, save, test, explore, result));
+      h("div", { class: "row" }, save, test, explore, carriersBtn, result));
   });
   return card("Credentials", "Paste the keys for each service here. They're encrypted before they're stored, and saved secrets are never shown again — only their last four characters.", ...sections);
 }

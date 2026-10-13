@@ -14,7 +14,7 @@ import { HttpError, deleteSetting, getSetting, setSetting } from "../lib/util";
 import { CREDENTIAL_FIELDS, describeCredentials, saveCredentials, withCredentials } from "../lib/credentials";
 import { shopify } from "../lib/shopify";
 import { testUps } from "../lib/ups";
-import { easypostConfigured, testEasypost } from "../lib/easypost";
+import { easypostCarrierCheck, easypostConfigured, testEasypost } from "../lib/easypost";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SUPPORT, RULE_ACTIONS, RULE_FIELDS, STATUSES, TRIGGERS, loadSupportRules, supportSettings, type SupportSettings } from "../lib/support";
 import { MACRO_VARIABLES } from "../lib/macros";
@@ -444,6 +444,13 @@ admin.put("/credentials", async (c) => {
 
 /** Checks the saved credentials for one service with a harmless read-only call. */
 /** What Redo's shipping API accepts (its own description of itself), to find options like signature confirmation. */
+/** EasyPost: which carrier accounts the key sees and why any carrier isn't quoting (nothing is bought). */
+admin.get("/credentials/easypost/carriers", async (c) => {
+  requireAdmin(c);
+  if (!easypostConfigured(c.env)) throw new HttpError(409, "Add your EasyPost API key first");
+  return c.json(await easypostCarrierCheck(c.env, await shipFrom(c.env)));
+});
+
 admin.get("/credentials/redo/schema", async (c) => {
   requireAdmin(c);
   if (!redoConfigured(c.env)) throw new HttpError(409, "Add the Redo store ID and API token first");
