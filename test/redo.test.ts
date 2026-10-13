@@ -262,4 +262,36 @@ describe("Redo signature confirmation", () => {
     expect(queries.filter((q) => q.includes("__schema"))).toHaveLength(0); // remembered
     expect(queries[0]).toContain("options: {signature: ADULT_SIGNATURE}");
   });
+
+  it("handles a signature Redo only takes when buying: estimated fee on quotes, set on the purchase", async () => {
+    resetRedoSignatureCache();
+    const db = { ...env, DB: testD1() };
+    answer = (q) => {
+      if (q.includes("__schema")) return { data: { __schema: { mutationType: { fields: [
+        { name: "getShippingLabelQuotes", args: [{ name: "input", type: { kind: "INPUT_OBJECT", name: "ShipReq", ofType: null } }] },
+        { name: "purchaseCarrierShipment", args: [{ name: "input", type: { kind: "INPUT_OBJECT", name: "BuyIn", ofType: null } }] },
+      ] } } } };
+      if (q.includes("__type")) {
+        const types: Record<string, any> = {
+          ShipReq: { name: "ShipReq", kind: "INPUT_OBJECT", enumValues: null, inputFields: [{ name: "toAddress", description: null, type: { kind: "SCALAR", name: "String", ofType: null } }] },
+          BuyIn: { name: "BuyIn", kind: "INPUT_OBJECT", enumValues: null, inputFields: [
+            { name: "request", description: null, type: { kind: "INPUT_OBJECT", name: "ShipReq", ofType: null } },
+            { name: "signatureRequired", description: null, type: { kind: "SCALAR", name: "Boolean", ofType: null } },
+          ] },
+        };
+        const names = [...q.matchAll(/__type\(name: "(\w+)"\)/g)].map((m) => m[1]);
+        return { data: Object.fromEntries(names.map((n, i) => [`t${i}`, types[n] ?? null])) };
+      }
+      if (q.includes("purchaseCarrierShipment(input:")) return { data: { purchaseCarrierShipment: { shipmentId: "sh_1", carrier: "UPS", service: "Ground", rate: { amount: "25.53", currency: "USD" }, shipmentPackages: [{ trackingNumber: "1Z1", labelUrl: "https://files.redo.example/l.pdf" }] } } };
+      return { data: { getShippingLabelQuotes: { rates: [rate("UPS", "Ground", "19.28", "ca_ups")], messages: [] } } };
+    };
+    const [r] = await getRedoRates(db, from, to, [box(3)], "standard");
+    expect(r.total).toBe(25.53); // 19.28 + the usual 6.25
+    expect(r.note).toMatch(/signature/);
+    queries = [];
+    await buyRedo(db, from, to, [box(3)], r.serviceCode, { signature: "standard" });
+    const buy = queries.find((q) => q.includes("purchaseCarrierShipment(input:"))!;
+    expect(buy).toContain("signatureRequired: true");
+    expect(buy).not.toMatch(/request: \{[^}]*signature/);
+  });
 });

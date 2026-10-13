@@ -130,7 +130,7 @@ function baseRequest(from: Address, to: Address, boxes: Parcel[], customs: Custo
     parcels: boxes.map(parcel),
     ...(intl && customs ? { customs: customsFor(customs, boxes, split), deliveredDutyPaid: customs.dutiesPaidBy === "sender" } : {}),
   };
-  if (sig && !intl) applySignature(req, sig.option, sig.level);
+  if (sig && !intl && sig.option.where !== "purchase") applySignature(req, sig.option, sig.level);
   return req;
 }
 
@@ -179,6 +179,21 @@ export async function getRedoRates(env: Env, from: Address, to: Address, parcels
   const sig = signature && domestic(to) ? await signatureFor(env, signature) : undefined;
   if (signature && domestic(to) && !sig) return [];
   const shipmentRequest = (f: Address, t: Address, b: Parcel[], c: Customs | undefined, split: boolean) => baseRequest(f, t, b, c, split, sig);
+  const rates = await redoQuotes(env, from, to, parcels, customs, shipmentRequest);
+  if (sig?.option.where !== "purchase") return rates;
+  // The signature only goes on when buying: Redo's quote leaves its fee out, so add Redo's usual fee per box
+  const fee = (n: number) => Math.round(n * REDO_SIGNATURE_FEE_EST * 100) / 100;
+  return rates.map((r) => ({
+    ...r,
+    total: Math.round((r.total + fee(parcels.length)) * 100) / 100,
+    listTotal: Math.round((r.listTotal + fee(parcels.length)) * 100) / 100,
+    ...(r.perBox ? { perBox: r.perBox.map((x) => Math.round((x + REDO_SIGNATURE_FEE_EST) * 100) / 100) } : {}),
+    note: `Includes about $${REDO_SIGNATURE_FEE_EST.toFixed(2)}${parcels.length > 1 ? " a box" : ""} for the signature (Redo adds it when the label is bought)`,
+  }));
+}
+
+async function redoQuotes(env: Env, from: Address, to: Address, parcels: Parcel[], customs: Customs | undefined,
+  shipmentRequest: (f: Address, t: Address, b: Parcel[], c: Customs | undefined, split: boolean) => Record<string, unknown>): Promise<Rate[]> {
   if (parcels.length === 1) return (await quote(env, shipmentRequest(from, to, parcels, customs, false))).map((r) => toRate("1", r, Number(r.rate.amount)));
   // Several boxes: one shipment for carriers that carry them together (UPS, FedEx), else box by box added up
   const [together, ...each] = await Promise.all([
@@ -201,9 +216,11 @@ export async function getRedoRates(env: Env, from: Address, to: Address, parcels
 
 interface Purchased { shipmentId: string; carrier: string; service: string; rate: { amount: string; currency: string }; shipmentPackages: { trackingNumber: string | null; labelUrl: string | null }[] }
 
-async function buyOne(env: Env, request: object, sel: ReturnType<typeof parseRedoCode>, idempotencyKey: string): Promise<Purchased> {
+async function buyOne(env: Env, request: object, sel: ReturnType<typeof parseRedoCode>, idempotencyKey: string, sig?: { option: SigOption; level: Signature }): Promise<Purchased> {
+  const input: Record<string, unknown> = { request, carrier: sel.carrier, service: sel.service, carrierAccountId: sel.carrierAccountId, idempotencyKey };
+  if (sig?.option.where === "purchase") applySignature(input, sig.option, sig.level);
   const data = await gql<{ purchaseCarrierShipment: Purchased }>(env, () =>
-    `mutation { purchaseCarrierShipment(input: ${literal({ request, carrier: sel.carrier, service: sel.service, carrierAccountId: sel.carrierAccountId, idempotencyKey })}) { shipmentId carrier service rate { amount currency } shipmentPackages { trackingNumber labelUrl } } }`);
+    `mutation { purchaseCarrierShipment(input: ${literal(input)}) { shipmentId carrier service rate { amount currency } shipmentPackages { trackingNumber labelUrl } } }`);
   return data.purchaseCarrierShipment;
 }
 
@@ -247,7 +264,7 @@ export async function buyRedo(
   const bought: Purchased[] = [];
   try {
     for (const [i, g] of groups.entries()) {
-      bought.push(await buyOne(env, shipmentRequest(from, to, g, opts.customs, parcels.length > 1), sel, `${base}-${i + 1}`));
+      bought.push(await buyOne(env, shipmentRequest(from, to, g, opts.customs, parcels.length > 1), sel, `${base}-${i + 1}`, sig));
     }
   } catch (e) {
     // Don't leave some boxes paid for when the rest failed
@@ -357,7 +374,13 @@ export async function redoSignatureWatch(env: Env, now = Date.now()): Promise<Si
 /** One step of the path to the signature setting in a shipment request; `list` steps apply to every item (e.g. each parcel). */
 export interface SigStep { name: string; list: boolean }
 /** Where Redo takes a signature, read from its schema: an enum (with its signature / adult values) or a yes/no flag. */
-export interface SigOption { path: SigStep[]; kind: "enum" | "boolean" | "string"; standard: string | null; adult: string | null; adultPath?: SigStep[] }
+export interface SigOption {
+  path: SigStep[]; kind: "enum" | "boolean" | "string"; standard: string | null; adult: string | null; adultPath?: SigStep[];
+  /** "request": part of the shipment (quotes include it); "purchase": only when buying, beside the request */
+  where?: "request" | "purchase";
+}
+/** Signature fee on Redo's site (\$19.28 → \$25.53 for one box): added to quotes when the signature can only go on at purchase. */
+export const REDO_SIGNATURE_FEE_EST = 6.25;
 interface IType { name: string; kind: string; inputFields: { name: string; description: string | null; type: TypeRef }[] | null; enumValues: { name: string }[] | null }
 
 const hasList = (t: TypeRef | null | undefined): boolean => !!t && (t.kind === "LIST" || hasList(t.ofType));
@@ -430,7 +453,8 @@ export function applySignature(req: Record<string, unknown>, opt: SigOption, lev
   if (opt.kind === "boolean" && level === "adult" && opt.adultPath) put(opt.adultPath, true);
 }
 
-let sigCache: { at: number; option: SigOption | null } | null = null;
+interface SigState { at: number; option: SigOption | null; reason?: string }
+let sigCache: SigState | null = null;
 /** Tests: forget the in-memory copy. */
 export const resetRedoSignatureCache = () => { sigCache = null; };
 
@@ -438,17 +462,20 @@ export const resetRedoSignatureCache = () => { sigCache = null; };
 export async function redoSignatureOption(env: Env, now = Date.now()): Promise<SigOption | null> {
   if (sigCache && now - sigCache.at < 6 * 3600_000) return sigCache.option;
   const { getSetting, setSetting } = await import("./util");
-  const saved = await getSetting<{ at: number; option: SigOption | null } | null>(env, "redo_signature_option", null);
+  const saved = await getSetting<SigState | null>(env, "redo_signature_option", null);
   if (saved && now - saved.at < 24 * 3600_000) return (sigCache = saved).option;
   try {
     const top = await gql<{ __schema: { mutationType: { fields: { name: string; args: { name: string; type: TypeRef }[] }[] } | null } }>(env, () =>
       `query { __schema { mutationType { fields { name args { name type { ${TYPE_REF} } } } } } }`);
-    const op = (top.__schema.mutationType?.fields ?? []).find((f) => f.name === "getShippingLabelQuotes");
-    const root = op ? baseName(op.args.find((a) => a.name === "input")?.type) : null;
+    const ops = top.__schema.mutationType?.fields ?? [];
+    const inputOf = (name: string) => { const op = ops.find((f) => f.name === name); return op ? baseName(op.args.find((a) => a.name === "input")?.type) : null; };
+    const root = inputOf("getShippingLabelQuotes");
+    const buyRoot = inputOf("purchaseCarrierShipment");
     let option: SigOption | null = null;
+    let reason = "";
     if (root) {
       const types = new Map<string, IType>();
-      let queue = [root];
+      let queue = [root, ...(buyRoot ? [buyRoot] : [])];
       for (let depth = 0; depth < 5 && queue.length; depth++) {
         const names = [...new Set(queue)].filter((n) => !types.has(n) && !/^(String|Int|Float|Boolean|ID)$/.test(n)).slice(0, 40);
         if (!names.length) break;
@@ -462,24 +489,59 @@ export async function redoSignatureOption(env: Env, now = Date.now()): Promise<S
         }
       }
       option = findSignatureOption(root, types);
-    }
+      if (option) option.where = "request";
+      else if (buyRoot) {
+        // Only on the purchase: search its own fields, not the request inside it (already searched)
+        const t = types.get(buyRoot);
+        if (t) {
+          const trimmed = new Map(types);
+          trimmed.set(buyRoot, { ...t, inputFields: (t.inputFields ?? []).filter((f) => f.name !== "request") });
+          option = findSignatureOption(buyRoot, trimmed);
+          if (option) option.where = "purchase";
+        }
+      }
+      if (!option) reason = "Redo's quote and purchase requests don't have a signature setting the app recognises";
+    } else reason = "Redo's API didn't list getShippingLabelQuotes";
     // Make sure Redo takes it: one free test quote with a signature (no label is bought)
-    if (option) {
+    if (option && option.where === "request") {
       const sample: Address = { name: "Test", address1: "1600 Pennsylvania Ave NW", city: "Washington", state: "DC", zip: "20500", country: "US" };
       try {
         const origin: Address = { name: "Test", address1: "350 5th Ave", city: "New York", state: "NY", zip: "10118", country: "US" };
         await quote(env, baseRequest(origin, sample, [{ length: 10, width: 8, height: 4, weight: 2 }], undefined, false, { option, level: "standard" }));
       } catch (e) {
         console.error("Redo rejected the signature option", option, e);
+        reason = `Redo rejected a test quote with ${option.path.map((p) => p.name).join(".")}: ${(e as Error).message.slice(0, 200)}`;
         option = null;
       }
     }
-    sigCache = { at: now, option };
+    sigCache = { at: now, option, ...(option ? {} : { reason }) };
     await setSetting(env, "redo_signature_option", sigCache);
     return option;
-  } catch {
+  } catch (e) {
+    if (!saved) sigCache = { at: now - 23 * 3600_000, option: null, reason: `Couldn't read Redo's API: ${(e as Error).message.slice(0, 200)}` }; // try again within the hour
     return saved?.option ?? null; // Redo's schema didn't answer: use what was found before
   }
+}
+
+/** What the app knows about Redo signatures, for the Shipping page (and why not, when it can't use them). */
+export async function redoSignatureStatus(env: Env): Promise<{ ready: boolean; field: string | null; where: string | null; reason: string | null; checkedAt: string | null }> {
+  const option = await redoSignatureOption(env).catch(() => null);
+  const st = sigCache;
+  return {
+    ready: !!option,
+    field: option ? option.path.map((p) => p.name).join(".") : null,
+    where: option?.where ?? null,
+    reason: option ? null : st?.reason ?? null,
+    checkedAt: st ? new Date(st.at).toISOString() : null,
+  };
+}
+
+/** "Look again": forget what was found so the next quote reads Redo's schema afresh. */
+export async function recheckRedoSignature(env: Env) {
+  sigCache = null;
+  const { deleteSetting } = await import("./util");
+  await deleteSetting(env, "redo_signature_option");
+  return redoSignatureStatus(env);
 }
 
 let sigPending: Promise<SigOption | null> | null = null;

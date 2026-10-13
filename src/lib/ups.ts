@@ -58,6 +58,8 @@ export interface Rate {
   days: number | null;
   perBox?: number[]; // multi-box shipments: what each box costs (adds up to total)
   alt?: string[]; // the same service's codes from other connections it stands in for (see dedupeRates)
+  /** A word on the price, e.g. an estimated surcharge that's added when the label is bought */
+  note?: string;
   /** Where the label is bought: TTW (our own UPS account), EasyPost or Redo (set by dedupeRates) */
   source?: RateSource;
   /** The same service from the other connections, dearer (or tied), for comparison */

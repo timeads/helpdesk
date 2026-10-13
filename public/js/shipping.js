@@ -127,7 +127,18 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     shipStatus = st;
     const n = [];
-    if (st.redoSignature?.found?.length && !st.redoSignatureReady) n.push(h("div", { class: "notice info" }, h("b", {}, "Redo labels can now require a signature. "), "Redo's API started offering it on ", new Date(st.redoSignature.foundAt).toLocaleDateString(), " (", st.redoSignature.found.join(", "), "), but the app couldn't tell where it goes yet — send this to Claude."));
+    if (st.redoSignature?.found?.length && !st.redoSignatureReady) {
+      const again = h("button", { class: "btn sm" }, icon("refresh"), "Look again");
+      again.onclick = busy(again, async () => {
+        const r = await api("/shipping/redo-signature/recheck", { method: "POST" });
+        toast(r.ready ? `Redo signatures are on (${r.field}) — reopen an order to see Redo rates` : `Still not usable: ${r.reason ?? "unknown"}`, !r.ready);
+        if (r.ready) location.reload();
+      });
+      n.push(h("div", { class: "notice info" }, h("b", {}, "Redo's API offers a signature option, but the app isn't using it yet. "),
+        "Found on ", new Date(st.redoSignature.foundAt).toLocaleDateString(), ": ", st.redoSignature.found.join(", "), ". ",
+        st.redoSignatureReason ? h("div", { class: "small", style: { marginTop: "4px" } }, "Why: ", st.redoSignatureReason) : null,
+        h("div", { class: "row", style: { marginTop: "6px", gap: "8px" } }, again, h("span", { class: "small muted" }, "If it still isn't usable, send this notice to Claude."))));
+    }
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
     if (!st.ups && !st.usps && !st.redo) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
     else if (st.ups && st.upsEnv !== "production") n.push(h("div", { class: "notice info" }, "UPS test mode: labels aren't billed. Switch Mode to production in Settings → Connections when ready."));
@@ -1599,6 +1610,7 @@ function buildLabelForm(root, o, presets, opts) {
               fastestDays !== null && r.days === fastestDays ? h("span", { class: "badge plain" }, "Fastest") : null,
               o?.requestedService && sameService(o.requestedService, r.serviceName) ? h("span", { class: "badge plain" }, "Customer's choice") : null,
               plan?.service && (plan.service === r.serviceCode || r.alt?.includes(plan.service)) ? h("span", { class: "badge plain" }, "By rule") : null),
+            r.note ? h("div", { class: "small muted", style: { marginTop: "2px" } }, r.note) : null,
             r.others?.length ? h("div", { class: "small muted", style: { marginTop: "2px" } }, "Also ", r.others.map((x, i) => [i ? " · " : "", `${VIA[x.source]?.label ?? x.source} ${money(x.total, r.currency)}`])) : null,
             split() && r.perBox?.length === s.parcels.length ? h("div", { class: "small muted per-box" }, r.perBox.map((x, i) => `Box ${i + 1} ${money(x, r.currency)}`).join(" · ")) : null),
           h("div", { class: "price-col" },
