@@ -17,7 +17,11 @@ export async function getAllRates(env: Env, from: Address, to: Address, parcels:
   if (redoConfigured(env)) jobs.push(getRedoRates(env, from, to, parcels, signature, customs));
   if (!jobs.length) throw new HttpError(409, "Connect UPS, EasyPost or Redo in Settings → Connections to get rates");
   const settled = await Promise.allSettled(jobs);
-  const rates = settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
+  let rates = settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
+  // USPS through EasyPost costs the same as through Redo: when Redo quoted USPS, leave EasyPost's out
+  // (it stays as the fallback when Redo didn't, e.g. Redo is down). EasyPost is for FedEx, DHL and the rest.
+  const redoUsps = rates.some((r) => isRedoCode(r.serviceCode) && r.carrier === "USPS");
+  if (redoUsps) rates = rates.filter((r) => !(isEasypostCode(r.serviceCode) && r.carrier === "USPS"));
   const errors = settled.filter((s): s is PromiseRejectedResult => s.status === "rejected").map((s) => s.reason);
   if (!rates.length && errors.length) throw errors[0];
   return dedupeRates(rates);
