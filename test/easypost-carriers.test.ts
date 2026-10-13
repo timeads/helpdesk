@@ -27,14 +27,13 @@ function mockFetch(handler: (url: string) => any) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("every EasyPost carrier", () => {
-  it("quotes all carriers with readable names, cheapest account per service", async () => {
+  it("quotes every carrier except UPS (that comes from our own account) with readable names, cheapest account per service", async () => {
     mockFetch(() => ({ id: "shp_1", rates }));
     const r = await getEasypostRates(env, from, to, [box]);
     expect(r.map((x) => [x.carrier, x.serviceCode, x.serviceName, x.total])).toEqual([
       ["OnTrac", "ep:OnTrac:GRND", "OnTrac Ground", 7.25],
       ["DHL eCommerce", "ep:DhlEcs:DHLParcelGround", "DHL eCommerce Parcel Ground", 7.9],
       ["FedEx", "ep:FedEx:FEDEX_GROUND", "FedEx Ground", 8.4],
-      ["UPS", "ep:UPSDAP:Ground", "UPS Ground · EasyPost", 8.7],
       ["USPS", "usps:GroundAdvantage", "USPS Ground Advantage", 9.1],
     ]);
   });

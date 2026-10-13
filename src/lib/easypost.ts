@@ -163,6 +163,8 @@ function toRates(raw: any[], shipments?: any[]): Rate[] {
   for (const r of raw ?? []) {
     if (!r?.carrier || !r?.service || !Number.isFinite(Number(r.rate))) continue;
     if (r.carrier === "USPS" && !USPS_SERVICES[r.service]) continue; // USPS extras (e.g. retail-only) aren't offered
+    // UPS through EasyPost is EasyPost's own UPS account, priced like ours: UPS comes from our account (and Redo) only
+    if (carrierName(r.carrier) === "UPS") continue;
     const code = codeFor(r.carrier, r.service);
     if (!best.has(code) || Number(r.rate) < Number(best.get(code).rate)) best.set(code, r);
   }
@@ -173,8 +175,7 @@ function toRates(raw: any[], shipments?: any[]): Rate[] {
       return {
         carrier,
         serviceCode: code,
-        // UPS also comes direct; mark the EasyPost one so the two can be told apart
-        serviceName: carrier === "UPS" ? `${name} · EasyPost` : name,
+        serviceName: name,
         total: Number(r.rate),
         listTotal: Number(r.retail_rate ?? r.list_rate ?? r.rate),
         currency: r.currency ?? "USD",
