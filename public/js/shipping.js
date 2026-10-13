@@ -127,17 +127,16 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     shipStatus = st;
     const n = [];
-    if (st.redoSignature?.found?.length && !st.redoSignatureReady) {
+    // Redo signature labels stopped working (Redo changed its API): say why, with a way to look again
+    if (st.redo && !st.redoSignatureReady && st.redoSignatureReason) {
       const again = h("button", { class: "btn sm" }, icon("refresh"), "Look again");
       again.onclick = busy(again, async () => {
         const r = await api("/shipping/redo-signature/recheck", { method: "POST" });
-        toast(r.ready ? `Redo signatures are on (${r.field}) — reopen an order to see Redo rates` : `Still not usable: ${r.reason ?? "unknown"}`, !r.ready);
+        toast(r.ready ? "Redo signature labels work again" : `Still not working: ${r.reason ?? "unknown"}`, !r.ready);
         if (r.ready) location.reload();
       });
-      n.push(h("div", { class: "notice info" }, h("b", {}, "Redo's API offers a signature option, but the app isn't using it yet. "),
-        "Found on ", new Date(st.redoSignature.foundAt).toLocaleDateString(), ": ", st.redoSignature.found.join(", "), ". ",
-        st.redoSignatureReason ? h("div", { class: "small", style: { marginTop: "4px" } }, "Why: ", st.redoSignatureReason) : null,
-        h("div", { class: "row", style: { marginTop: "6px", gap: "8px" } }, again, h("span", { class: "small muted" }, "If it still isn't usable, send this notice to Claude."))));
+      n.push(h("div", { class: "notice bad" }, h("b", {}, "Redo labels can't require a signature right now. "), st.redoSignatureReason,
+        h("div", { class: "row", style: { marginTop: "6px", gap: "8px" } }, again, h("span", { class: "small muted" }, "Signature orders use your UPS account and EasyPost meanwhile."))));
     }
     if (st.demo) n.push(h("div", { class: "notice info" }, "Demo data — Shopify isn't connected, so these are sample orders."));
     if (!st.ups && !st.usps && !st.redo) n.push(h("div", { class: "notice info" }, "No carrier connected yet. Add your UPS or EasyPost keys in Settings → Connections to get rates and buy labels."));
@@ -440,7 +439,6 @@ function renderQueue(root, params) {
     if (st.view !== "signature" || st.searchResults) return mount(sigEl);
     const sort = h("button", { class: "btn sm" + (st.redoSort ? " primary" : "") }, icon("down"), st.redoSort ? "Sorted by Redo savings" : "Sort by Redo savings");
     sort.onclick = () => { st.redoSort = !st.redoSort; draw(); };
-    const w = shipStatus?.redoSignature;
     mount(sigEl, h("div", { class: "card sig-bar" },
       h("div", { style: { minWidth: 0, flex: "1 1 320px" } },
         h("b", {}, "Orders that need a signature"),
@@ -449,7 +447,7 @@ function renderQueue(root, params) {
           : shipStatus?.redoSignatureReady
             ? "Redo labels now include the signature: Redo rates show with the others on each order (marked “via Redo”), so you can buy them right here."
             : `Redo can't add a signature through the app yet. Under each quote is Redo's price with one added on its site (its price + about ${money(REDO_SIGNATURE_FEE, "USD")} for the signature). When that's ${money(REDO_SAVE_MIN, "USD")}+ cheaper (“save”), buy the label on Redo's site and add the signature there.`),
-        w && !shipStatus?.redoSignatureReady ? h("div", { class: "small muted" }, w.found?.length ? "Redo now supports signatures — see the notice above." : `Checked Redo's API for signature support ${relTime(w.checkedAt)} ago — not yet (checked daily).`) : null),
+        null),
       h("div", { class: "row", style: { gap: "6px" } }, shipStatus?.redoSignatureReady ? null : sort, h("a", { class: "btn sm", href: REDO_SITE, target: "_blank", rel: "noopener" }, "Open Redo", icon("ext")))));
   }
 

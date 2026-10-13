@@ -4,7 +4,7 @@ import { remaining, cancelFulfillment, fulfillOrder, markReadyForPickup, findOrd
 import { upsConfigured, type Address, type Parcel, type Signature } from "../lib/ups";
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
-import { getRedoRates, recheckRedoSignature, redoConfigured, redoSignatureOption, redoSignatureStatus, type SignatureWatch } from "../lib/redo";
+import { getRedoRates, recheckRedoSignature, redoConfigured, redoSignatureOption, redoSignatureStatus } from "../lib/redo";
 import { checkAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles, type Customs } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
@@ -195,7 +195,6 @@ const VIEWS: Record<string, (o: Described) => boolean> = {
 shipping.get("/status", async (c) => {
   const redoSig = redoConfigured(c.env) ? await redoSignatureStatus(c.env).catch(() => null) : null;
   return c.json({ ups: upsConfigured(c.env), usps: easypostConfigured(c.env), redo: redoConfigured(c.env),
-    redoSignature: redoConfigured(c.env) ? await getSetting<SignatureWatch | null>(c.env, "redo_signature_watch", null) : null,
     // Redo labels carry the signature in the app (its API takes one and the app found where)
     redoSignatureReady: !!redoSig?.ready, redoSignatureField: redoSig?.field ?? null, redoSignatureReason: redoSig?.reason ?? null, redoSignatureCheckedAt: redoSig?.checkedAt ?? null,
     shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) });
