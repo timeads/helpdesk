@@ -315,7 +315,9 @@ const typeName = (t: TypeRef | null | undefined): string => (!t ? "?" : t.kind =
 const baseName = (t: TypeRef | null | undefined): string | null => (!t ? null : t.name ?? baseName(t.ofType));
 
 export interface SchemaField { name: string; type: string; description: string | null; values?: string[] }
-export interface SchemaReport { operations: { name: string; description: string | null; args: SchemaField[] }[]; types: { name: string; description: string | null; fields: SchemaField[] }[]; matches: string[] }
+export interface SchemaReport { operations: { name: string; description: string | null; args: SchemaField[] }[]; types: { name: string; description: string | null; fields: SchemaField[] }[]; matches: string[]; funding: string[] }
+/** Balance, funds and billing: what the API offers for the labels balance (adding money, reading it). */
+const FUNDING = /balance|fund|wallet|billing|payment|credit|top.?up|recharge|reload|deposit|invoice/i;
 
 /**
  * Asks Redo's GraphQL API to describe its shipping operations and every input they take (GraphQL introspection),
@@ -323,11 +325,16 @@ export interface SchemaReport { operations: { name: string; description: string 
  */
 export async function redoSchema(env: Env, look = /signat|confirm|adult|insur|option|service|extra|delivery/i): Promise<SchemaReport> {
   const top = await gql<{ __schema: { mutationType: { fields: { name: string; description: string | null; args: { name: string; description: string | null; type: TypeRef }[] }[] } | null; queryType: { fields: { name: string }[] } | null } }>(env, () =>
-    `query { __schema { mutationType { fields { name description args { name description type { ${TYPE_REF} } } } } queryType { fields { name } } } }`);
-  const ops = (top.__schema.mutationType?.fields ?? []).filter((f) => /ship|label|carrier|quote|rate/i.test(f.name));
+    `query { __schema { mutationType { fields { name description args { name description type { ${TYPE_REF} } } } } queryType { fields { name description args { name description type { ${TYPE_REF} } } } } } }`);
+  const queries = ((top.__schema.queryType?.fields ?? []) as any[]).filter((f) => f?.args);
+  const funding = [
+    ...(top.__schema.mutationType?.fields ?? []).filter((f) => FUNDING.test(`${f.name} ${f.description ?? ""}`)).map((f) => `mutation ${f.name}${f.description ? ` — ${f.description}` : ""}`),
+    ...queries.filter((f: any) => FUNDING.test(`${f.name} ${f.description ?? ""}`)).map((f: any) => `query ${f.name}${f.description ? ` — ${f.description}` : ""}`),
+  ];
+  const ops = [...(top.__schema.mutationType?.fields ?? []), ...queries].filter((f: any) => /ship|label|carrier|quote|rate/i.test(f.name) || FUNDING.test(f.name));
   const seen = new Set<string>();
   const types: SchemaReport["types"] = [];
-  let queue = ops.flatMap((o) => o.args.map((a) => baseName(a.type))).filter((n): n is string => !!n);
+  let queue = ops.flatMap((o: any) => o.args.map((a: any) => baseName(a.type))).filter((n): n is string => !!n);
   for (let depth = 0; depth < 5 && queue.length; depth++) {
     const names = [...new Set(queue)].filter((n) => !seen.has(n) && !/^(String|Int|Float|Boolean|ID)$/.test(n)).slice(0, 30);
     names.forEach((n) => seen.add(n));
@@ -345,7 +352,7 @@ export async function redoSchema(env: Env, look = /signat|confirm|adult|insur|op
     }
   }
   const matches = types.flatMap((t) => t.fields.filter((f) => look.test(`${f.name} ${f.description ?? ""} ${(f.values ?? []).join(" ")}`)).map((f) => `${t.name}.${f.name}${f.values ? `: ${f.values.join(", ")}` : ` (${f.type})`}`));
-  return { operations: ops.map((o) => ({ name: o.name, description: o.description, args: o.args.map((a) => ({ name: a.name, type: typeName(a.type), description: a.description })) })), types, matches };
+  return { operations: ops.map((o: any) => ({ name: o.name, description: o.description, args: o.args.map((a: any) => ({ name: a.name, type: typeName(a.type), description: a.description })) })), types, matches, funding };
 }
 
 // ---------------------------------------------------------------- Signature confirmation

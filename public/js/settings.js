@@ -258,6 +258,9 @@ function credentials(fields, inner) {
       const block = (title, fields) => h("div", { class: "schema-type" }, h("b", {}, title),
         h("ul", {}, fields.map((f) => h("li", {}, h("code", {}, f.name), " ", h("span", { class: "muted" }, f.values ? f.values.join(", ") : f.type), f.description ? h("div", { class: "small muted" }, f.description) : null))));
       modal("Redo shipping API", h("div", { class: "stack schema-report" },
+        h("div", { class: r.funding?.length ? "notice info" : "notice" }, r.funding?.length
+          ? [h("b", {}, "Balance & funds (adding money, reading the balance):"), h("ul", {}, r.funding.map((m) => h("li", {}, h("code", {}, m))))]
+          : "Nothing about the labels balance, adding funds or billing in Redo's API."),
         h("div", { class: r.matches.length ? "notice info" : "notice" }, r.matches.length
           ? [h("b", {}, "Options that look relevant (signature, delivery, insurance…):"), h("ul", {}, r.matches.map((m) => h("li", {}, h("code", {}, m))))]
           : "Nothing about signatures, delivery confirmation or insurance in what Redo's API accepts."),
