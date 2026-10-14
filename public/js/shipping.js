@@ -116,7 +116,7 @@ export function renderShipping(main) {
     icon("printer"), printSettings().labels === "zebra" ? "Zebra printer" : "Browser printing");
   const tabLink = (id, href, label) => h("a", { class: "tab" + (tab === id ? " active" : ""), href, "data-link": "" }, label);
   mount(main, h("div", { class: "page" },
-    h("header", { class: "page-head" }, h("div", { class: "inner" },
+    h("header", { class: "page-head ship-head" }, h("div", { class: "inner" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
         h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, labels from every carrier, packing slips and the packing station.")),
         h("div", { class: "row" }, printerChip, blank)),
@@ -284,7 +284,7 @@ function renderQueue(root, params) {
   const refresh = h("button", { class: "btn sm", title: "Get the latest orders from Shopify (also happens every few minutes)" }, icon("refresh"), "Refresh");
   refresh.onclick = busy(refresh, async () => { await load(); toast("Up to date with Shopify"); });
   mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips,
-    h("div", { class: "row", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
+    h("div", { class: "row queue-tools", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
     bulk, progress, sigEl, mergeEl, tableWrap);
 
   const load = async () => {

@@ -14,7 +14,7 @@ const VIEWS = [
   { id: "mine", label: "Your tickets", short: "Mine", icon: "user" },
   { id: "unassigned", label: "Unassigned", short: "Unassigned", icon: "question", desktopOnly: true },
   { id: "open", label: "Open", short: "Open", icon: "inbox" },
-  { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock" },
+  { id: "in_progress", label: "In progress", short: "Waiting", icon: "clock", desktopOnly: true }, // phones get Shipping in its place
   { id: "chats", label: "Live chats", short: "Chats", icon: "chat", desktopOnly: true },
   { id: "social", label: "Instagram & Facebook", short: "Social", icon: "instagram", desktopOnly: true },
   { id: "snoozed", label: "Snoozed", short: "Snoozed", icon: "moon", minor: true },
@@ -135,7 +135,7 @@ function renderNav() {
         vs.map((v) => item(`/?view=v:${v.id}`, v.name, v.name, "layers", inInbox && view === `v:${v.id}`, state.counts[`v:${v.id}`], " closed-view")),
       ]) : null),
     h("div", { class: "nav-label" }, "Store"),
-    item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), state.shipReady, " ship-view"),
+    item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), state.shipReady),
     item("/manual", "Repair manual", "Manual", "wrench", path.startsWith("/manual"), undefined, " ship-view"),
     item("/settings", "Settings", "Settings", "settings", path.startsWith("/settings")),
     h("div", { class: "spacer" }),

@@ -1498,3 +1498,58 @@ body.order-nav .op-menu { color: var(--ochre-text); }
 @media (max-width: 760px) { .op-menu { display: none; } body.order-nav .order-page { left: 0; } }
 .chose-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--select); color: var(--text); font-weight: 600; }
 .chose-chip svg { width: 13px; height: 13px; }
+
+/* ---- Shipping on a phone: the queue as cards, the header and tabs compact */
+@media (max-width: 760px) {
+  .ship-head .sub { display: none; }
+  .ship-head h1 { font-size: 22px; }
+  .tabs-line { overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+  .tabs-line::-webkit-scrollbar { display: none; }
+  .tabs-line .tab { white-space: nowrap; flex: none; }
+  .view-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; width: calc(100% + 32px); margin: 0 -16px; padding: 0 16px 2px; }
+  .view-chips::-webkit-scrollbar { display: none; }
+  .view-chips > * { flex: none; }
+  .queue-tools { margin-left: 0 !important; width: 100%; }
+  .queue-tools .search { min-width: 0 !important; flex: 1; }
+  .table-card { background: none; border: 0; box-shadow: none; padding: 0; }
+  .tbl.queue thead { display: none; }
+  .tbl.queue, .tbl.queue tbody { display: block; }
+  .tbl.queue tr {
+    display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 4px;
+    grid-template-areas: "chk order quote" "chk cust quote" "chk ship ship" "chk chose chose" "chk flags flags";
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px;
+  }
+  .tbl.queue tr.sel { border-color: var(--ochre); }
+  .tbl.queue td { display: block; padding: 0 !important; border: 0 !important; min-width: 0; }
+  .tbl.queue td:nth-child(1) { grid-area: chk; padding-top: 2px !important; }
+  .tbl.queue td:nth-child(2) { grid-area: order; }
+  .tbl.queue td:nth-child(3) { grid-area: cust; font-size: 14px; }
+  .tbl.queue td:nth-child(4), .tbl.queue td:nth-child(5), .tbl.queue td:nth-child(6), .tbl.queue td:nth-child(8) { display: none; }
+  .tbl.queue td:nth-child(7) { grid-area: chose; font-size: 13px; color: var(--muted); }
+  .tbl.queue td:nth-child(9) { grid-area: quote; text-align: right; max-width: 170px; }
+  .tbl.queue td:nth-child(10) { grid-area: ship; font-size: 13px; }
+  .tbl.queue td:nth-child(11) { grid-area: flags; display: flex; flex-wrap: wrap; gap: 4px; }
+  .tbl.queue td:nth-child(11):empty { display: none; }
+  .tbl.queue .q-line { flex-direction: column; align-items: flex-end; gap: 0; }
+  .bulk-bar { position: sticky; bottom: 0; z-index: 3; }
+}
+@media (max-width: 760px) {
+  .tbl.history thead { display: none; }
+  .tbl.history, .tbl.history tbody { display: block; }
+  .tbl.history tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 4px;
+    grid-template-areas: "order status" "cust total" "pay pay" "track track" "label label";
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px;
+  }
+  .tbl.history td { display: block; padding: 0 !important; border: 0 !important; min-width: 0; text-align: left; }
+  .tbl.history td:nth-child(1) { grid-area: order; }
+  .tbl.history td:nth-child(2) { grid-area: cust; font-size: 14px; }
+  .tbl.history td:nth-child(3) { display: none; }
+  .tbl.history td:nth-child(4) { grid-area: total; text-align: right; }
+  .tbl.history td:nth-child(5) { grid-area: pay; font-size: 13px; color: var(--muted); }
+  .tbl.history td:nth-child(6) { grid-area: status; text-align: right; }
+  .tbl.history td:nth-child(7) { grid-area: track; font-size: 13px; overflow-wrap: anywhere; }
+  .tbl.history td:nth-child(8) { grid-area: label; font-size: 13px; }
+  .tbl.history td:empty { display: none; }
+  .tbl-wrap:has(> .tbl.history), .tbl-wrap:has(> .tbl.queue) { overflow: visible; }
+}
