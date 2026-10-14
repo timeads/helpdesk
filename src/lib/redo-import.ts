@@ -153,6 +153,17 @@ export async function importRedoOrders(env: Env, orders: RedoOrder[], agentId: n
     const ref = `redo:${o.order}`;
     const sum = summarize(o, s, owners);
     if (!sum.shipped.length) { skipped++; continue; } // no label in Redo (not shipped, or shipped another way)
+    // Labels bought in this app (through Redo's API, or any carrier) are already recorded with their cost: leave them out
+    for (const b of [...sum.live]) {
+      const mine = await env.DB.prepare("SELECT order_name FROM shipments WHERE COALESCE(source, '') != 'redo' AND status = 'purchased' AND tracking_numbers LIKE ?")
+        .bind(`%"${b.tracking}"%`).first<{ order_name: string | null }>();
+      if (mine) {
+        sum.live.splice(sum.live.indexOf(b), 1);
+        sum.cost = round2(sum.cost - (b.rate ?? 0));
+        sum.notes.push(`${b.tracking} was bought in the helpdesk — already counted`);
+      }
+    }
+    if (!sum.live.length && sum.shipped.every((b) => sum.notes.some((n) => n.startsWith(`${b.tracking} was bought in the helpdesk`)))) { skipped++; continue; }
     // A tracking number already stored on a different imported order counts there
     for (const b of [...sum.live]) {
       const dup = await env.DB.prepare("SELECT order_name FROM shipments WHERE source = 'redo' AND source_ref != ? AND tracking_numbers LIKE ?")

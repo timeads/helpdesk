@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseSelection, redoDate, summarize, trackingOwners, type RedoOrder } from "../src/lib/redo-import";
+import { testD1 } from "./helpers/d1";
+import { importRedoOrders, parseSelection, redoDate, summarize, trackingOwners, type RedoOrder } from "../src/lib/redo-import";
 
 const box = (tracking: string, rate: number, paid: number, margin: number, extra: Partial<RedoOrder["boxes"][0]> = {}) => ({
   tracking, rate, paid, margin, status: "Delivered", shipped: "Sep 22, 2026", selection: `UPS® Ground - ${rate} - 4`, ...extra,
@@ -36,5 +37,22 @@ describe("Redo import", () => {
     expect(parseSelection("UPS 2nd Day Air® - 38.02 - 2")).toEqual({ carrier: "UPS", service: "UPS 2nd Day Air", code: "02" });
     expect(parseSelection("USPS Ground Advantage - 9.10 - 1").carrier).toBe("USPS");
     expect(redoDate("Oct 1, 2026")?.slice(0, 10)).toBe("2026-10-01");
+  });
+});
+
+describe("Redo import alongside labels bought in the helpdesk", () => {
+  it("leaves out labels the helpdesk already bought (and recorded), imports the ones bought on Redo's site", async () => {
+    const db = testD1();
+    db.raw.prepare("INSERT INTO agents (id, email, name) VALUES (1, 'tim@x.com', 'Tim')").run();
+    db.raw.prepare("INSERT INTO shipments (order_name, carrier, service_code, service_name, tracking_numbers, labels, label_format, cost, currency, packages, ship_to, status, agent_id) VALUES ('#2001', 'UPS', 'redo:1:ca:UPS:Ground', 'UPS Ground · Redo', '[\"1ZAPP\"]', '[]', 'PDF', 25.53, 'USD', '[]', '{}', 'purchased', 1)").run();
+    const env: any = { DB: db };
+    const orders: RedoOrder[] = [
+      { order: "#2001", customer: "A", orderDate: "Oct 10, 2026", boxes: [box("1ZAPP", 25.53, 20, -5.53)] },
+      { order: "#1990", customer: "B", orderDate: "Oct 1, 2026", boxes: [box("1ZSITE", 12.4, 15, 2.6)] },
+    ];
+    const r = await importRedoOrders(env, orders, 1);
+    expect(r.skipped).toBe(1);
+    const imported = db.raw.prepare("SELECT order_name, cost FROM shipments WHERE source = 'redo'").all();
+    expect(imported).toEqual([{ order_name: "#1990", cost: 12.4 }]);
   });
 });
