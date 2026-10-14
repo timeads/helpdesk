@@ -127,6 +127,10 @@ export function renderShipping(main) {
   api("/shipping/status").then((st) => {
     shipStatus = st;
     const n = [];
+    // Redo labels balance below the alert amount (auto-reload can lag behind a busy day)
+    if (st.redoBalance?.low) n.push(h("div", { class: "notice bad" }, h("b", {}, `Redo balance is low: ${money(st.redoBalance.balance, "USD")}`),
+      ` (alert below ${money(st.redoBalance.threshold, "USD")}). Auto-reload can take a while — top up on `, h("a", { href: REDO_SITE, target: "_blank", rel: "noopener" }, "Redo's site"),
+      " before buying several Redo labels, or use your UPS account meanwhile."));
     // Redo signature labels stopped working (Redo changed its API): say why, with a way to look again
     if (st.redo && !st.redoSignatureReady && st.redoSignatureReason) {
       const again = h("button", { class: "btn sm" }, icon("refresh"), "Look again");

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applySignature, buyRedo, findSignatureOption, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, resetRedoSignatureCache, sniffLabel, voidRedo } from "../src/lib/redo";
+import { applySignature, redoBalance, redoBalanceCandidates, buyRedo, findSignatureOption, getRedoRates, literal, parseRedoCode, redoSchema, redoServiceName, resetRedoSignatureCache, sniffLabel, voidRedo } from "../src/lib/redo";
 import { testD1 } from "./helpers/d1";
 import { getAllRates, purchase, voidLabel } from "../src/lib/carriers";
 
@@ -290,5 +290,48 @@ describe("Redo signature confirmation", () => {
     const buy = queries.find((q) => q.includes("purchaseCarrierShipment(input:"))!;
     expect(buy).toContain("signatureRequired: true");
     expect(buy).not.toMatch(/request: \{[^}]*signature/);
+  });
+});
+
+describe("Redo labels balance (low-balance alert)", () => {
+  const T = (kind: string, name: string | null, ofType: any = null) => ({ kind, name, ofType });
+  const types: Record<string, any> = {
+    BillConnection: { name: "BillConnection", kind: "OBJECT", fields: [{ name: "nodes", args: [], type: T("LIST", null, T("OBJECT", "Bill")) }] },
+    Bill: { name: "Bill", kind: "OBJECT", fields: [
+      { name: "id", args: [], type: T("SCALAR", "ID") },
+      { name: "balance", args: [], type: T("OBJECT", "Money") },
+      { name: "lineCount", args: [], type: T("SCALAR", "Int") },
+    ] },
+    Money: { name: "Money", kind: "OBJECT", fields: [{ name: "amount", args: [], type: T("SCALAR", "Decimal") }, { name: "currency", args: [], type: T("SCALAR", "String") }] },
+  };
+  beforeEach(() => {
+    answer = (q) => {
+      if (q.includes("__schema")) return { data: { __schema: { queryType: { fields: [
+        { name: "billingBills", args: [{ name: "first", type: T("SCALAR", "Int") }], type: T("OBJECT", "BillConnection") },
+        { name: "billingBill", args: [{ name: "id", type: T("NON_NULL", null, T("SCALAR", "ID")) }], type: T("OBJECT", "Bill") },
+        { name: "orders", args: [], type: T("OBJECT", "X") },
+      ] } } } };
+      if (q.includes("__type")) {
+        const names = [...q.matchAll(/__type\(name: "(\w+)"\)/g)].map((m) => m[1]);
+        return { data: Object.fromEntries(names.map((n, i) => [`t${i}`, types[n] ?? null])) };
+      }
+      return { data: { billingBills: { nodes: [{ balance: { amount: "42.10", currency: "USD" } }] } } };
+    };
+  });
+
+  it("lists the money figures Redo's billing queries return, with today's value", async () => {
+    const c = await redoBalanceCandidates(env);
+    expect(c).toEqual([{ path: ["billingBills", "nodes", "balance", "amount"], label: "billingBills → nodes → balance → amount", value: 42.1, currency: "USD" }]);
+    expect(queries.some((q) => q.includes("billingBills(first: 1) { nodes { balance { amount } } nodes { balance { currency } } }"))).toBe(true);
+  });
+
+  it("reads the picked figure and says when it's under the alert amount", async () => {
+    const db = { ...env, DB: testD1() };
+    expect(await redoBalance(db)).toBeNull(); // nothing picked yet
+    db.DB.raw.prepare("INSERT INTO settings (key, value) VALUES ('redo_balance', ?)").run(JSON.stringify({ path: ["billingBills", "nodes", "balance", "amount"], threshold: 50 }));
+    expect(await redoBalance(db, true)).toMatchObject({ balance: 42.1, threshold: 50, low: true });
+    queries = [];
+    expect(await redoBalance(db)).toMatchObject({ balance: 42.1, low: true });
+    expect(queries).toHaveLength(0); // reused for 10 minutes
   });
 });

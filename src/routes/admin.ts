@@ -3,7 +3,7 @@ import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { createFolder, deleteFolder, listFolders, renameFolder } from "../lib/folders";
 import { graph, metaConfigured } from "../lib/meta";
-import { redoConfigured, redoSchema, testRedo } from "../lib/redo";
+import { redoBalance, redoBalanceCandidates, redoConfigured, redoSchema, testRedo } from "../lib/redo";
 import { shipFrom } from "../lib/fulfillment";
 import { DEFAULT_RULES, getMailbox, runBackfill, type BackfillJob, type MailRules } from "../lib/gmail";
 import { shopifyConfigured } from "../lib/shopify";
@@ -449,6 +449,24 @@ admin.get("/credentials/easypost/carriers", async (c) => {
   requireAdmin(c);
   if (!easypostConfigured(c.env)) throw new HttpError(409, "Add your EasyPost API key first");
   return c.json(await easypostCarrierCheck(c.env, await shipFrom(c.env)));
+});
+
+/** Redo low-balance alert: the balance-like figures Redo's billing API has (to pick the labels balance), and the saved choice. */
+admin.get("/credentials/redo/balance", async (c) => {
+  requireAdmin(c);
+  if (!redoConfigured(c.env)) throw new HttpError(409, "Add the Redo store ID and API token first");
+  const [candidates, settings] = await Promise.all([redoBalanceCandidates(c.env), getSetting(c.env, "redo_balance", null)]);
+  return c.json({ candidates, settings });
+});
+
+admin.put("/credentials/redo/balance", async (c) => {
+  requireAdmin(c);
+  const body = await c.req.json<{ path?: string[] | null; threshold?: number; label?: string }>();
+  const path = Array.isArray(body.path) && body.path.every((p) => typeof p === "string" && /^\w+$/.test(p)) ? body.path.slice(0, 8) : null;
+  const threshold = Math.max(0, Number(body.threshold) || 0);
+  await setSetting(c.env, "redo_balance", { path, threshold, label: String(body.label ?? "").slice(0, 120) });
+  await c.env.DB.prepare("DELETE FROM settings WHERE key = 'redo_balance_last'").run();
+  return c.json({ ok: true, now: path ? await redoBalance(c.env, true) : null });
 });
 
 admin.get("/credentials/redo/schema", async (c) => {

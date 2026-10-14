@@ -541,3 +541,115 @@ const signatureFor = async (env: Env, level: Signature) => {
   const option = await sigPending;
   return option ? { option, level } : undefined;
 };
+// ---------------------------------------------------------------- Labels balance (low-balance alert)
+
+/** A balance-like number Redo's billing API returns: where it is (field path) and its value now. */
+export interface BalanceCandidate { path: string[]; label: string; value: number | null; currency: string | null }
+export interface BalanceSettings { path: string[] | null; threshold: number; label?: string }
+interface OType { name: string; kind: string; fields: { name: string; args?: { name: string; type: TypeRef }[]; type: TypeRef }[] | null }
+
+const BALANCE_ROOTS = /^billing|balance|wallet|credit|funds?$/i;
+const MONEYISH = /balance|available|remaining|amount|due|total|credit|funds?/i;
+
+/** The GraphQL selection for one path, e.g. billingBills(first: 1) { nodes { balance { amount } } }. */
+function selectionFor(path: string[], rootArgs: string) {
+  return path.reduceRight((inner, name, i) => `${name}${i === 0 ? rootArgs : ""}${inner ? ` { ${inner} }` : ""}`, "");
+}
+const firstValue = (v: any): any => (Array.isArray(v) ? firstValue(v[0]) : v);
+function valueAt(data: any, path: string[]) {
+  let v: any = data;
+  for (const k of path) { v = firstValue(v); if (v == null) return null; v = v[k]; }
+  return firstValue(v);
+}
+const toNumber = (v: unknown) => { const n = typeof v === "number" ? v : Number(String(v ?? "").replace(/[$,]/g, "")); return Number.isFinite(n) ? n : null; };
+
+/**
+ * Every balance-like figure in Redo's billing queries (read from its schema), with today's value, so the
+ * one matching the labels balance on Redo's site can be picked. Read-only.
+ */
+export async function redoBalanceCandidates(env: Env): Promise<BalanceCandidate[]> {
+  const top = await gql<{ __schema: { queryType: { fields: { name: string; args: { name: string; type: TypeRef }[]; type: TypeRef }[] } | null } }>(env, () =>
+    `query { __schema { queryType { fields { name args { name type { ${TYPE_REF} } } type { ${TYPE_REF} } } } } }`);
+  const roots = (top.__schema.queryType?.fields ?? []).filter((f) => BALANCE_ROOTS.test(f.name)
+    && !f.args.some((a) => a.type.kind === "NON_NULL")); // only queries that need no arguments
+  const types = new Map<string, OType>();
+  const load = async (names: string[]) => {
+    const want = [...new Set(names)].filter((n) => n && !types.has(n) && !/^(String|Int|Float|Boolean|ID|Decimal|DateTime|Date|JSON)$/.test(n)).slice(0, 40);
+    if (!want.length) return;
+    const data = await gql<Record<string, OType | null>>(env, () =>
+      `query { ${want.map((n, i) => `t${i}: __type(name: ${JSON.stringify(n)}) { name kind fields { name args { name type { ${TYPE_REF} } } type { ${TYPE_REF} } } }`).join(" ")} }`);
+    for (const t of Object.values(data)) if (t) types.set(t.name, t);
+  };
+  const out: BalanceCandidate[] = [];
+  for (const root of roots.slice(0, 6)) {
+    const paths: { path: string[]; currencyPath?: string[] }[] = [];
+    const walk = async (typeName: string, path: string[], depth: number) => {
+      if (depth > 3 || paths.length > 12) return;
+      await load([typeName]);
+      const t = types.get(typeName);
+      if (!t?.fields) return;
+      await load(t.fields.map((f) => baseName(f.type) ?? ""));
+      for (const f of t.fields) {
+        if (f.args?.some((a) => a.type.kind === "NON_NULL")) continue;
+        const base = baseName(f.type) ?? "";
+        const ft = types.get(base);
+        const p = [...path, f.name];
+        if ((!ft || ft.kind === "SCALAR") && /^(Float|Int|Decimal|String|BigDecimal|Money)$/.test(base) && MONEYISH.test(f.name) && !/id$|count|percent|rate/i.test(f.name)) {
+          const cur = t.fields.find((x) => /currency/i.test(x.name) && baseName(x.type) === "String");
+          paths.push({ path: p, ...(cur ? { currencyPath: [...path, cur.name] } : {}) });
+        } else if (ft && ft.kind === "OBJECT" && (MONEYISH.test(f.name) || /^(nodes|edges|node|items|bills|data)$/i.test(f.name) || depth === 0)) {
+          await walk(base, p, depth + 1);
+        }
+      }
+    };
+    await walk(baseName(root.type) ?? "", [], 0);
+    if (!paths.length) continue;
+    const rootArgs = root.args.some((a) => a.name === "first") ? "(first: 1)" : root.args.some((a) => a.name === "limit") ? "(limit: 1)" : "";
+    const sels = paths.flatMap((x) => [x.path, ...(x.currencyPath ? [x.currencyPath] : [])]);
+    let data: any = null;
+    try {
+      data = (await gql<any>(env, () => `query { ${root.name}${rootArgs} { ${sels.map((p) => selectionFor(p, "")).join(" ")} } }`))[root.name];
+    } catch { /* this query didn't answer: leave its values empty */ }
+    for (const x of paths) {
+      out.push({
+        path: [root.name, ...x.path],
+        label: `${root.name} → ${x.path.join(" → ")}`,
+        value: data == null ? null : toNumber(valueAt(data, x.path)),
+        currency: x.currencyPath && data != null ? String(valueAt(data, x.currencyPath) ?? "") || null : null,
+      });
+    }
+  }
+  return out;
+}
+
+/** The labels balance now, read from the field picked in Settings (null when none is picked or it can't be read). */
+export async function redoBalance(env: Env, fresh = false): Promise<{ balance: number | null; threshold: number; low: boolean; label: string | null; checkedAt: string } | null> {
+  if (!redoConfigured(env)) return null;
+  const { getSetting } = await import("./util");
+  const s = await getSetting<BalanceSettings | null>(env, "redo_balance", null);
+  if (!s?.path?.length) return null;
+  // Reused for 10 minutes (the Shipping page asks on every load)
+  const { setSetting } = await import("./util");
+  const last = await getSetting<{ at: number; balance: number | null; key: string } | null>(env, "redo_balance_last", null);
+  const key = s.path.join(".");
+  if (!fresh && last && last.key === key && Date.now() - last.at < 10 * 60_000) {
+    return { balance: last.balance, threshold: s.threshold, low: last.balance !== null && last.balance < s.threshold, label: s.label ?? null, checkedAt: new Date(last.at).toISOString() };
+  }
+  const [root, ...rest] = s.path;
+  let balance: number | null = null;
+  try {
+    const args = await rootArgsFor(env, root);
+    const data = (await gql<any>(env, () => `query { ${selectionFor(s.path!, args)} }`))[root];
+    balance = toNumber(valueAt(data, rest));
+  } catch { balance = null; }
+  await setSetting(env, "redo_balance_last", { at: Date.now(), balance, key });
+  return { balance, threshold: s.threshold, low: balance !== null && balance < s.threshold, label: s.label ?? null, checkedAt: new Date().toISOString() };
+}
+
+let rootArgCache: Record<string, string> = {};
+async function rootArgsFor(env: Env, root: string) {
+  if (root in rootArgCache) return rootArgCache[root];
+  const top = await gql<{ __schema: { queryType: { fields: { name: string; args: { name: string }[] }[] } | null } }>(env, () => `query { __schema { queryType { fields { name args { name } } } } }`);
+  const f = (top.__schema.queryType?.fields ?? []).find((x) => x.name === root);
+  return (rootArgCache[root] = f?.args.some((a) => a.name === "first") ? "(first: 1)" : f?.args.some((a) => a.name === "limit") ? "(limit: 1)" : "");
+}

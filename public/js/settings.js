@@ -232,6 +232,38 @@ function credentials(fields, inner) {
     };
     test.onclick = busy(test, runTest);
     // Redo: list what its shipping API accepts (signature confirmation and other options)
+    // Redo: warn on the Shipping page when the labels balance is low (auto-reload can lag)
+    const balanceBtn = g.id === "redo" ? h("button", { class: "btn ghost", type: "button" }, "Low-balance alert") : null;
+    if (balanceBtn) balanceBtn.onclick = busy(balanceBtn, async () => {
+      const r = await api("/credentials/redo/balance");
+      const cur = r.settings ?? {};
+      const fmt = (c) => (c.value === null ? "no value now" : `${c.value.toLocaleString("en-US", { style: "currency", currency: c.currency && /^[A-Z]{3}$/.test(c.currency) ? c.currency : "USD" })}`);
+      let pick = cur.path ? cur.path.join(".") : "";
+      const threshold = h("input", { class: "input", type: "number", min: "0", step: "1", value: cur.threshold ?? 50, style: { width: "120px" } });
+      const list = r.candidates.length
+        ? h("div", { class: "stack", style: { gap: "6px" } }, r.candidates.map((c) => {
+            const key = c.path.join(".");
+            const radio = h("input", { type: "radio", name: "redo-bal", checked: key === pick });
+            radio.onchange = () => (pick = key);
+            return h("label", { class: "check" }, radio, h("span", {}, h("b", {}, fmt(c)), h("span", { class: "muted small" }, ` · ${c.label}`)));
+          }))
+        : h("div", { class: "notice" }, "Redo's billing API doesn't return any balance figures this app can read.");
+      const saveBtn = h("button", { class: "btn primary" }, "Save alert");
+      const off = h("button", { class: "btn ghost" }, "Turn off");
+      const dlg = modal("Redo low-balance alert", h("div", { class: "stack" },
+        h("p", { class: "small muted", style: { margin: 0 } }, "These are the money figures Redo's billing API returns right now. Pick the one that matches your labels balance on Redo's site; the Shipping page warns when it drops below the amount you set."),
+        list,
+        r.candidates.length ? h("label", { class: "field" }, "Warn when the balance is below ($)", threshold) : null,
+        h("div", { class: "row" }, r.candidates.length ? saveBtn : null, cur.path ? off : null)));
+      saveBtn.onclick = busy(saveBtn, async () => {
+        if (!pick) return toast("Pick the figure that matches your Redo labels balance", true);
+        const c = r.candidates.find((x) => x.path.join(".") === pick);
+        const res = await api("/credentials/redo/balance", { method: "PUT", body: { path: c.path, threshold: Number(threshold.value) || 0, label: c.label } });
+        toast(res.now?.balance != null ? `Alert on — Redo balance is ${fmt({ value: res.now.balance, currency: null })} now` : "Alert saved, but the balance couldn't be read just now", res.now?.balance == null);
+        dlg?.close?.(); document.querySelector(".modal")?.remove();
+      });
+      off.onclick = busy(off, async () => { await api("/credentials/redo/balance", { method: "PUT", body: { path: null, threshold: 0 } }); toast("Low-balance alert off"); document.querySelector(".modal")?.remove(); });
+    });
     // EasyPost: which carrier accounts the key can use, and why a carrier (e.g. UPS) isn't quoting
     const carriersBtn = g.id === "usps" ? h("button", { class: "btn ghost", type: "button" }, "Check EasyPost carriers") : null;
     if (carriersBtn) carriersBtn.onclick = busy(carriersBtn, async () => {
@@ -272,7 +304,7 @@ function credentials(fields, inner) {
       h("h3", { class: "section", style: { margin: 0 } }, g.title),
       h("p", { class: "muted small", style: { margin: 0, fontFamily: "var(--read)" } }, g.desc),
       h("div", { class: "grid2 cred-grid" }, rows),
-      h("div", { class: "row" }, save, test, explore, carriersBtn, result));
+      h("div", { class: "row" }, save, test, explore, balanceBtn, carriersBtn, result));
   });
   return card("Credentials", "Paste the keys for each service here. They're encrypted before they're stored, and saved secrets are never shown again — only their last four characters.", ...sections);
 }
