@@ -354,7 +354,16 @@ function activityLog(data) {
 
 // Conversational mail reads best as text in the app's colors; designed emails need their white sheet.
 const isRichHtml = (html) => /<(table|img)\b/i.test(html) || /background(-color)?\s*:/i.test(html);
-const QUOTE_RE = /^(On .{5,200}wrote:\s*$|-{2,} ?Original Message ?-{2,}|From: .+\nSent: )/m;
+// Where the earlier thread starts in a plain-text reply. "On … wrote:" is often wrapped over two lines
+// ("… Support <" / "support@… wrote:"), so it may span a line break (not a blank line).
+const QUOTE_RE = /^(On (?:(?!\n\s*\n)[\s\S]){5,300}?wrote:[ \t]*$|-{2,} ?Original Message ?-{2,}|From: .+\n(?:Sent|Date): |_{10,}\s*\nFrom: )/m;
+/** Index where the quoted earlier messages begin (-1 if none): the reply header, or else the first run of "> " lines. */
+export function quoteStart(text) {
+  const i = text.search(QUOTE_RE);
+  if (i > 0) return i;
+  const run = /^(?:>.*\n){2,}/m.exec(text);
+  return run && run.index > 0 ? run.index : -1;
+}
 const hasFormatting = (html) => /<(b|strong|i|em|u|ul|ol|a)\b/i.test(html);
 
 function renderMessage(t, m) {
@@ -391,7 +400,7 @@ body:not(.show-quotes) #divRplyFwdMsg, body:not(.show-quotes) .yahoo_quoted { di
     body.append(frame);
   } else {
     const text = m.body_text || "";
-    const idx = text.search(QUOTE_RE);
+    const idx = quoteStart(text);
     const main = idx > 0 ? text.slice(0, idx).trimEnd() : text;
     const pre = h("pre", {}, main);
     body.append(pre);
