@@ -1099,9 +1099,11 @@ body.order-open { overflow: hidden; }
 .op-buy.done { padding: 0; overflow: hidden; position: static; box-shadow: none; }
 .op-buy.done .success-card { padding: 18px 20px; border-radius: inherit; }
 .op-buy-main { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
-.op-buy-stat { min-width: 0; }
-.op-buy-stat .lbl { font-size: 11.5px; color: var(--text-3); font-weight: 600; }
-.op-buy-stat b { font-size: 15px; }
+/* Every figure in the same three rows (label · amount · note), so the amounts line up across the card */
+.op-buy-stat { min-width: 0; display: grid; grid-template-rows: 18px 24px 20px; align-items: center; }
+.op-buy-stat .lbl { font-size: 11.5px; color: var(--text-3); font-weight: 600; align-self: end; white-space: nowrap; }
+.op-buy-stat b { font-size: 15px; white-space: nowrap; }
+.op-buy-stat > :nth-child(3) { align-self: start; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .op-buy-btn { margin-left: auto; height: 40px; padding: 0 18px; }
 .op-buy-btn kbd { opacity: .65; }
 .op-buy-opts { display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
