@@ -243,15 +243,15 @@ export function renderScan(root, { openSlideout }) {
     const go = h("button", { "data-auto": "go", class: verified ? "btn primary big" : multi && boxVerified() ? "btn big" : "btn primary big" }, icon("printer"),
       multi ? (verified ? `Verify & print ${st.boxes.length} labels` : `Print all ${st.boxes.length} labels now`) : verified ? "Verify & print label" : "Print label anyway");
     const missing = () => o.lineItems.nodes.filter((l) => scannedTotal(l) < l.quantity).map((l) => `${l.quantity - scannedTotal(l)} × ${l.title}`);
-    const shipPart = !verified && scannedAny() ? h("button", { class: "btn big", title: "Out of stock? Ship the scanned items now; the rest of the order goes on hold" }, "Ship what's scanned") : null;
+    const shipPart = !verified && scannedAny() ? h("button", { class: "btn big", title: "Out of stock? Ship the scanned items now; the rest of the order goes on hold" }, "Ship what's scanned, rest later") : null;
     const buy = async (btn, partial) => {
       btn.disabled = true;
       const win = reserveWindow();
       try {
-        const qty = partial ? (l) => st.counts.get(l.id) : (l) => l.quantity;
+        const qty = partial ? (l) => Math.min(l.quantity, scannedTotal(l)) : (l) => l.quantity; // every box scanned so far
         // Counts filled in by hand don't count as checked with the scanner
         const body = { orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: verified && !st.manual };
-        if (partial) body.partial = o.lineItems.nodes.map((l) => ({ id: l.id, qty: st.counts.get(l.id) }));
+        if (partial) body.partial = o.lineItems.nodes.map((l) => ({ id: l.id, qty: qty(l) }));
         // The box on screen (when changed, or for a partial shipment with only the scanned items in it)
         if (st.box && (st.box.changed || partial)) {
           body.parcels = [parcelFor(partial ? qty : null, partial ? o.lineItems.nodes.filter((l) => qty(l) > 0).map((l) => ({ id: l.id, title: l.title, qty: qty(l) })) : undefined)];
@@ -271,6 +271,8 @@ export function renderScan(root, { openSlideout }) {
         beep(false);
         toast(e.message, true);
         btn.disabled = false;
+        // No weight known for just these items: finish it on the order page, scanned quantities filled in
+        if (partial && e.status === 422 && /weight/i.test(e.message)) openSlideout(o, { shipQty: Object.fromEntries(o.lineItems.nodes.map((l) => [l.id, qty(l)])) });
       }
       focus();
     };
@@ -309,8 +311,8 @@ export function renderScan(root, { openSlideout }) {
       buy(go, false);
     };
     if (shipPart) shipPart.onclick = () => {
-      if (!st.box) return openSlideout(o, { shipQty: Object.fromEntries(o.lineItems.nodes.map((l) => [l.id, scannedTotal(l)])) }); // several boxes: choose on the order page
-      if (!confirm(`Ship only what's been scanned?\n\nHeld back (the order goes on hold):\n${missing().join("\n")}\n\nShopify marks only the shipped items fulfilled.`)) return;
+      // Several planned boxes: the server re-plans the boxes for just the scanned items
+      if (!confirm(`Ship only what's been scanned?\n\nLeft for later:\n${missing().join("\n")}\n\nShopify marks only the shipped items fulfilled. The rest stays on the order in Shipping (on hold, "waiting on" these items) — release the hold when they're in stock.`)) return;
       buy(shipPart, true);
     };
     const blocked = o.hasLabel && !(st.boxN && st.shipmentId) ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending && !st.payOk?.has(o.id) ? "Payment is still pending." : null;
@@ -322,12 +324,25 @@ export function renderScan(root, { openSlideout }) {
           draw();
           focus();
         } }, "Ship before payment") : null;
+    // The rest of a partly shipped order waits on hold: release it here once the missing items are in
+    const release = o.hold && !o.hasLabel
+      ? h("button", { class: "btn sm", style: { marginLeft: "10px" }, onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            await api("/shipping/holds", { method: "POST", body: { orders: [{ id: o.id, name: o.name }], hold: false } });
+            o.hold = null;
+            toast(`${o.name} released — pack the rest`);
+            draw();
+            requote();
+          } catch (err) { toast(err.message, true); e.target.disabled = false; }
+          focus();
+        } }, "Release hold") : null;
     mount(area, h("div", { class: "card" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
         h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name, st.boxN ? h("span", { class: "badge plain", style: { marginLeft: "8px", fontSize: "13px" } }, `Box ${st.boxN} of ${st.boxes.length}`) : null), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.marketplace ? `${o.marketplace} · ` : ""}${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`),
           o.shipBy ? h("div", { style: { marginTop: "4px" } }, shipByChip(o, false)) : null),
         h("button", { class: "btn sm", onclick: () => openSlideout(o) }, "Open label builder")),
-      blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked, shipUnpaid) : null,
+      blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked, shipUnpaid, release) : null,
       st.boxN ? boxStrip() : null,
       boxVerified() ? null : h("div", { class: "row scan-fill" },
         h("span", { class: "small muted" }, `${shown().reduce((n, l) => n + target(l), 0)} items${st.boxN ? ` in box ${st.boxN}` : ""} · ${shown().reduce((n, l) => n + Math.min(st.counts.get(l.id), target(l)), 0)} packed`),
