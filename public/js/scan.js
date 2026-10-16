@@ -313,13 +313,21 @@ export function renderScan(root, { openSlideout }) {
       if (!confirm(`Ship only what's been scanned?\n\nHeld back (the order goes on hold):\n${missing().join("\n")}\n\nShopify marks only the shipped items fulfilled.`)) return;
       buy(shipPart, true);
     };
-    const blocked = o.hasLabel && !(st.boxN && st.shipmentId) ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending ? "Payment is still pending." : null;
+    const blocked = o.hasLabel && !(st.boxN && st.shipmentId) ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending && !st.payOk?.has(o.id) ? "Payment is still pending." : null;
+    // Net-30 and other invoiced orders ship before they're paid: let the packer say so
+    const shipUnpaid = blocked && !o.hasLabel && !o.hold && o.paymentPending
+      ? h("button", { class: "btn sm", style: { marginLeft: "10px" }, onclick: () => {
+          if (!confirm(`${o.name} hasn't been paid yet. Ship it anyway (e.g. net 30 / invoiced)?`)) return;
+          (st.payOk ??= new Set()).add(o.id);
+          draw();
+          focus();
+        } }, "Ship before payment") : null;
     mount(area, h("div", { class: "card" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
         h("div", {}, h("h2", { style: { fontSize: "20px" } }, o.name, st.boxN ? h("span", { class: "badge plain", style: { marginLeft: "8px", fontSize: "13px" } }, `Box ${st.boxN} of ${st.boxes.length}`) : null), h("div", { class: "small muted" }, `${o.shippingAddress?.name ?? ""} · ${o.marketplace ? `${o.marketplace} · ` : ""}${o.requestedService || "—"} · paid ${money(o.shippingPaid, "USD")}`),
           o.shipBy ? h("div", { style: { marginTop: "4px" } }, shipByChip(o, false)) : null),
         h("button", { class: "btn sm", onclick: () => openSlideout(o) }, "Open label builder")),
-      blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked) : null,
+      blocked ? h("div", { class: "notice bad", style: { marginTop: "12px" } }, blocked, shipUnpaid) : null,
       st.boxN ? boxStrip() : null,
       boxVerified() ? null : h("div", { class: "row scan-fill" },
         h("span", { class: "small muted" }, `${shown().reduce((n, l) => n + target(l), 0)} items${st.boxN ? ` in box ${st.boxN}` : ""} · ${shown().reduce((n, l) => n + Math.min(st.counts.get(l.id), target(l)), 0)} packed`),
