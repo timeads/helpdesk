@@ -307,14 +307,16 @@ shipping.get("/scan/:code", async (c) => {
   if (demo(c.env)) order = demoOrders().find((o) => o.name.replace("#", "").toLowerCase() === code.replace("#", "").toLowerCase());
   else order = await findOrderByName(c.env, code);
   if (!order) throw new HttpError(404, `No order ${code}`);
+  const bought = await c.env.DB.prepare("SELECT id, tracking_numbers, printed_boxes FROM shipments WHERE order_id = ? AND status = 'purchased' AND COALESCE(partial, 0) = 0 ORDER BY id DESC LIMIT 1")
+    .bind(order.id).first<{ id: number; tracking_numbers: string; printed_boxes: string }>();
+  // Once its label is bought Shopify counts the order as fulfilled, so pack it from the whole order, not just what's left
+  if (bought) order = { ...order, lineItems: { ...order.lineItems, nodes: order.lineItems.nodes.map((l) => ({ ...l, unfulfilledQuantity: undefined })) } };
   const [d] = await describe(c.env, [order]);
   // Every box of the order (from the bought shipment, else the planned boxes), so each slip can be packed on its own
   const slips = await slipsFor(c.env, [d]);
   const boxes = slips.filter((x) => x.box).map((x) => ({ n: x.box!.n, of: x.box!.of, name: x.box!.name, tracking: x.box!.tracking, qty: x.box!.qty }));
   const n = boxMatch ? Number(boxMatch[2]) : null;
   if (n && boxes.length && !boxes.some((b) => b.n === n)) throw new HttpError(404, `${d.name} doesn't have a box ${n} any more — its boxes changed. Reprint its packing slips.`);
-  const bought = await c.env.DB.prepare("SELECT id, tracking_numbers, printed_boxes FROM shipments WHERE order_id = ? AND status = 'purchased' AND COALESCE(partial, 0) = 0 ORDER BY id DESC LIMIT 1")
-    .bind(d.id).first<{ id: number; tracking_numbers: string; printed_boxes: string }>();
   return c.json({ order: d, boxes, box: n && boxes.length ? n : null, shipmentId: bought?.id ?? null, printedBoxes: bought ? Object.keys(printedBoxes(bought)).map(Number) : [] });
 });
 

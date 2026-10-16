@@ -116,7 +116,7 @@ export function renderScan(root, { openSlideout }) {
       return;
     }
     st.counts.set(line.id, n + 1);
-    if (st.boxN && shown().every((l) => st.counts.get(l.id) >= target(l))) st.packed.add(st.boxN);
+    if (st.boxN && boxVerified()) st.packed.add(st.boxN);
     beep(true);
     draw();
     autoPrintIfDone();
@@ -135,7 +135,7 @@ export function renderScan(root, { openSlideout }) {
 
   /** The whole order checked: every box packed (split orders), or every item scanned. */
   const allVerified = () => st.order && (st.boxes.length && st.boxN ? st.boxes.every((b) => st.packed.has(b.n)) : st.order.lineItems.nodes.every((l) => st.counts.get(l.id) >= l.quantity));
-  const boxVerified = () => st.order && shown().every((l) => st.counts.get(l.id) >= target(l));
+  const boxVerified = () => st.order && shown().length > 0 && shown().every((l) => st.counts.get(l.id) >= target(l));
   const scannedAny = () => st.order && st.order.lineItems.nodes.some((l) => scannedTotal(l) > 0);
   const weightsKnown = () => st.order.lineItems.nodes.every((l) => lineLb(l) !== null);
   const tare = () => presetsCache?.find((p) => String(p.id) === String(st.box?.presetId))?.weight ?? 0;
@@ -331,6 +331,7 @@ export function renderScan(root, { openSlideout }) {
           draw();
           focus();
         } }, icon("check"), st.boxN ? `Mark all of box ${st.boxN} packed` : "Mark all packed")),
+      shown().length ? null : h("div", { class: "notice bad" }, `Nothing on file goes in ${st.boxN ? `box ${st.boxN}` : "this order"} — its boxes may have changed. Reprint the packing slips.`),
       h("div", { class: "scan-items" }, shown().map((l) => {
         const n = st.counts.get(l.id);
         const done = n >= target(l);
