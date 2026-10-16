@@ -20,6 +20,7 @@ import { demoAllOrders, demoOrders } from "../lib/demo";
 import { HISTORY_FILTERS, historyRow, shipStatus, type LabelInfo } from "../lib/history";
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
+import { stateForZip } from "../lib/zip-state";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
@@ -198,7 +199,8 @@ shipping.get("/status", async (c) => {
     // Redo labels carry the signature in the app (its API takes one and the app found where)
     redoBalance: redoConfigured(c.env) ? await redoBalance(c.env).catch(() => null) : null,
     redoSignatureReady: !!redoSig?.ready, redoSignatureField: redoSig?.field ?? null, redoSignatureReason: redoSig?.reason ?? null, redoSignatureCheckedAt: redoSig?.checkedAt ?? null,
-    shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env) });
+    shopify: shopifyConfigured(c.env), upsEnv: c.env.UPS_ENV, demo: demo(c.env),
+    fromZip: (await getSetting<Address | null>(c.env, "ship_from", null))?.zip?.slice(0, 5) ?? null });
 });
 
 /** Redo signatures: forget what was found and look at Redo's API again now. */
@@ -493,9 +495,25 @@ shipping.post("/verify-address", async (c) => {
 });
 
 // ---- Rates and labels
+
+/** The rate calculator's ZIPs as addresses: the state comes from the ZIP, no street or city. */
+function quickAddresses(q: { fromZip?: string; toZip: string; residential?: boolean }) {
+  const zip = (z: string, what: string) => {
+    const clean = String(z ?? "").trim().slice(0, 5);
+    const state = stateForZip(clean);
+    if (!state) throw new HttpError(400, `Enter a 5-digit US ZIP code for ${what}`);
+    return { zip: clean, state };
+  };
+  const to: Address = { name: "Rate quote", address1: "", city: "", ...zip(q.toZip, "where it's going"), country: "US", residential: q.residential ?? true };
+  return { to, fromZip: q.fromZip?.trim() ? zip(q.fromZip, "where it ships from") : null };
+}
+
 shipping.post("/rates", async (c) => {
-  const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string; customs?: unknown }>();
+  const body = await c.req.json<{ to: Address; parcels: Parcel[]; signature?: string; customs?: unknown; quick?: { fromZip?: string; toZip: string; residential?: boolean } }>();
   const customs = cleanCustoms(body.customs);
+  // Rate calculator: ZIP to ZIP, no street address (carriers price by ZIP)
+  const quick = body.quick ? quickAddresses(body.quick) : null;
+  if (quick) body.to = quick.to;
   if (demo(c.env) && !anyCarrier(c.env)) {
     // Local preview only: plausible made-up prices so the screens can be tried without UPS keys
     const lb = validParcels(body.parcels).reduce((n, p) => n + Math.max(p.weight, (p.length * p.width * p.height) / 139), 0);
@@ -521,8 +539,9 @@ shipping.post("/rates", async (c) => {
     ];
     return c.json({ rates: rates.sort((a, b) => a.total - b.total) });
   }
-  const from = await shipFrom(c.env);
-  const to = validAddress(body.to);
+  const home = await shipFrom(c.env);
+  const from = quick?.fromZip && quick.fromZip.zip !== home.zip.slice(0, 5) ? { ...home, address1: "", address2: "", city: "", ...quick.fromZip } : home;
+  const to = quick ? quick.to : validAddress(body.to);
   const parcels = validParcels(body.parcels);
   const signature = validSignature(body.signature);
   // Until Redo's API takes a signature, its best price without one is shown for comparison on signature orders

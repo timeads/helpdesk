@@ -107,7 +107,7 @@ const newBatchId = () => `B${new Date().toISOString().slice(2, 10).replace(/-/g,
 export function renderShipping(main) {
   const path = location.pathname;
   const params = new URLSearchParams(location.search);
-  const tab = path.startsWith("/shipping/scan") ? "scan" : path.startsWith("/shipping/all") ? "all" : path.startsWith("/shipping/batches") || params.get("tab") === "history" ? "batches" : "queue";
+  const tab = path.startsWith("/shipping/scan") ? "scan" : path.startsWith("/shipping/rates") ? "rates" : path.startsWith("/shipping/all") ? "all" : path.startsWith("/shipping/batches") || params.get("tab") === "history" ? "batches" : "queue";
 
   const body = h("div");
   const notices = h("div");
@@ -121,7 +121,7 @@ export function renderShipping(main) {
         h("div", {}, h("h1", {}, "Shipping"), h("p", { class: "sub" }, "Orders waiting to ship, labels from every carrier, packing slips and the packing station.")),
         h("div", { class: "row" }, printerChip, blank)),
       h("nav", { class: "tabs-line", "aria-label": "Shipping" },
-        tabLink("queue", "/shipping", "To ship"), tabLink("all", "/shipping/all", "All orders"), tabLink("scan", "/shipping/scan", "Scan & pack"), tabLink("batches", "/shipping/batches", "Label batches")))),
+        tabLink("queue", "/shipping", "To ship"), tabLink("all", "/shipping/all", "All orders"), tabLink("scan", "/shipping/scan", "Scan & pack"), tabLink("batches", "/shipping/batches", "Label batches"), tabLink("rates", "/shipping/rates", "Rate calculator")))),
     h("div", { class: "page-inner wide" }, notices, body)));
 
   api("/shipping/status").then((st) => {
@@ -151,6 +151,7 @@ export function renderShipping(main) {
   const cleanups = [];
   if (tab === "scan") cleanups.push(renderScan(body, { openSlideout: (o, extra = {}) => openOrderPage(o, { list: [], ...extra }) }));
   else if (tab === "batches") renderBatches(body);
+  else if (tab === "rates") renderRateCalc(body);
   else if (tab === "all") renderHistory(body, params);
   else cleanups.push(renderQueue(body, params));
 
@@ -1810,6 +1811,81 @@ function orderDetails(o) {
     h("div", { class: "row", style: { justifyContent: "flex-end" } },
       o.adminUrl ? h("a", { class: "btn", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Open in Shopify", icon("ext")) : null));
   modal(o.name, body, { width: 640 });
+}
+
+/** Rate calculator: ZIP to ZIP, a weight and a box — every carrier's price, nothing bought. */
+async function renderRateCalc(root) {
+  const inp = (attrs) => h("input", { class: "input", ...attrs });
+  const fromZip = inp({ inputmode: "numeric", maxlength: 5, placeholder: "Ship-from ZIP", "aria-label": "From ZIP" });
+  const toZip = inp({ inputmode: "numeric", maxlength: 5, placeholder: "e.g. 90210", "aria-label": "To ZIP" });
+  const lb = inp({ type: "number", min: 0, step: "0.1", inputmode: "decimal", placeholder: "lb", "aria-label": "Pounds", style: { width: "90px" } });
+  const oz = inp({ type: "number", min: 0, max: 15.9, step: "0.1", inputmode: "decimal", placeholder: "oz", "aria-label": "Ounces", style: { width: "80px" } });
+  const dim = (label) => inp({ type: "number", min: 1, step: "0.5", inputmode: "decimal", placeholder: label, "aria-label": label, style: { width: "80px" } });
+  const L = dim("L"), W = dim("W"), H = dim("H");
+  const box = h("select", { class: "input", "aria-label": "Box" }, h("option", { value: "" }, "Custom size"));
+  const resi = h("input", { type: "checkbox", checked: true });
+  const sig = h("select", { class: "input", "aria-label": "Signature" }, h("option", { value: "" }, "No signature"), h("option", { value: "standard" }, "Signature required"), h("option", { value: "adult" }, "Adult signature"));
+  const go = h("button", { class: "btn primary", type: "submit" }, "Get rates");
+  const out = h("div", { style: { marginTop: "16px" } });
+  const field = (label, ...el) => h("label", { class: "field" }, label, h("div", { class: "row", style: { gap: "6px" } }, ...el));
+  mount(root, h("section", { class: "card" },
+    h("h2", {}, "Rate calculator"),
+    h("p", { class: "small muted", style: { marginTop: 0 } }, "Quote a package from one ZIP to another. Prices are what you'd pay on each connection — nothing is bought."),
+    h("form", { class: "stack", style: { gap: "12px" }, onsubmit: (e) => { e.preventDefault(); quote(); } },
+      h("div", { class: "row", style: { gap: "12px", flexWrap: "wrap", alignItems: "flex-end" } },
+        field("From ZIP", fromZip), field("To ZIP", toZip), field("Weight", lb, oz)),
+      h("div", { class: "row", style: { gap: "12px", flexWrap: "wrap", alignItems: "flex-end" } },
+        field("Box", box), field("Size (in)", L, W, H), field("Signature", sig),
+        h("label", { class: "check", style: { marginBottom: "8px" } }, resi, " Residential")),
+      h("div", {}, go)),
+    out));
+  const setBox = (p) => { if (p) { L.value = p.length; W.value = p.width; H.value = p.height; } };
+  let presets = [];
+  Promise.all([api("/shipping/presets").catch(() => ({ presets: [] })), api("/shipping/status").catch(() => ({}))]).then(([pr, st]) => {
+    presets = pr.presets ?? [];
+    for (const p of presets) box.append(h("option", { value: p.id }, `${p.name} · ${p.length}×${p.width}×${p.height}`));
+    const def = presets.find((p) => p.is_default) ?? presets[0];
+    if (def) { box.value = def.id; setBox(def); }
+    if (st.fromZip) fromZip.placeholder = st.fromZip;
+  });
+  box.onchange = () => setBox(presets.find((p) => String(p.id) === box.value));
+  for (const el of [L, W, H]) el.oninput = () => { box.value = ""; };
+  toZip.focus();
+
+  async function quote() {
+    const weight = (+lb.value || 0) + (+oz.value || 0) / 16;
+    if (!/^\d{5}$/.test(toZip.value.trim())) return toast("Enter the 5-digit ZIP it's going to", true);
+    if (!(weight > 0)) return toast("Enter the weight", true);
+    if (!(+L.value > 0 && +W.value > 0 && +H.value > 0)) return toast("Pick a box or enter its size", true);
+    const preset = presets.find((p) => String(p.id) === box.value);
+    // A chosen box's own weight counts too
+    const parcel = { length: +L.value, width: +W.value, height: +H.value, weight: Math.round((weight + (preset?.weight ?? 0)) * 100) / 100, ...(preset ? { presetId: preset.id, box: preset.name } : {}) };
+    mount(out, h("div", { class: "row small muted" }, spinner(), "Getting rates…"));
+    go.disabled = true;
+    try {
+      const r = await api("/shipping/rates", { method: "POST", body: { parcels: [parcel], signature: sig.value || null, quick: { fromZip: fromZip.value.trim() || undefined, toZip: toZip.value.trim(), residential: resi.checked } } });
+      const rates = [...(r.rates ?? [])].sort((a, b) => a.total - b.total);
+      if (!rates.length) return mount(out, h("p", { class: "muted" }, "No rates came back for that — check the ZIPs and size."));
+      const cheapest = rates[0].total;
+      const fastest = Math.min(...rates.map((x) => x.days ?? 99));
+      mount(out,
+        h("p", { class: "small muted" }, `${fromZip.value.trim() || fromZip.placeholder || "Ship-from"} → ${toZip.value.trim()} · ${parcel.weight} lb${preset ? ` incl. the box` : ""} · ${parcel.length}×${parcel.width}×${parcel.height} in`),
+        h("div", { class: "rates" }, rates.map((x) => h("div", { class: "rate", style: { cursor: "default" } },
+          carrierMark(x),
+          h("div", { style: { minWidth: 0 } },
+            h("div", { style: { fontWeight: 700 } }, x.serviceName.replace(/ · Redo$/, ""), x.source ? viaChip(x.source) : null),
+            h("div", { class: "row", style: { gap: "6px", marginTop: "2px" } },
+              h("span", { class: "small muted" }, x.days ? `Est. ${x.days} business day${x.days > 1 ? "s" : ""}` : "Transit time varies"),
+              x.total === cheapest ? h("span", { class: "badge plain" }, "Cheapest") : null,
+              x.days && x.days === fastest ? h("span", { class: "badge plain" }, "Fastest") : null),
+            x.others?.length ? h("div", { class: "small muted", style: { marginTop: "2px" } }, "Also ", x.others.map((y, i) => [i ? " · " : "", `${VIA[y.source]?.label ?? y.source} ${money(y.total, x.currency)}`])) : null),
+          h("div", { class: "price-col" }, h("div", { class: "price" }, money(x.total, x.currency), x.listTotal > x.total ? h("span", { class: "list" }, money(x.listTotal, x.currency)) : null))))));
+    } catch (e) {
+      mount(out, h("div", { class: "notice bad" }, e.message));
+    } finally {
+      go.disabled = false;
+    }
+  }
 }
 
 async function renderBatches(root) {
