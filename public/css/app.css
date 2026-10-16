@@ -1209,8 +1209,7 @@ body.order-open { overflow: hidden; }
 .settings-body { min-width: 0; max-width: 880px; }
 @media (max-width: 900px) {
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  .settings-pages { position: static; display: flex; overflow-x: auto; gap: 6px; padding-bottom: 4px; scrollbar-width: none; margin: 0 -4px; padding-inline: 4px; }
-  .settings-pages::-webkit-scrollbar { display: none; }
+  .settings-pages { position: static; display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
   .settings-pages a { flex: none; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; background: var(--surface); }
   .settings-pages a.active { background: var(--teal); color: var(--on-teal); border-color: transparent; padding: 6px 12px; }
   .settings-pages a svg { display: none; }
@@ -1505,9 +1504,9 @@ body.order-nav .op-menu { color: var(--ochre-text); }
 @media (max-width: 760px) {
   .ship-head .sub { display: none; }
   .ship-head h1 { font-size: 22px; }
-  .tabs-line { overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
-  .tabs-line::-webkit-scrollbar { display: none; }
-  .tabs-line .tab { white-space: nowrap; flex: none; }
+  /* Phones: tabs wrap onto a second line rather than hiding off the edge */
+  .tabs-line { flex-wrap: wrap; column-gap: 0; row-gap: 2px; margin: 0 -6px; }
+  .tabs-line .tab { white-space: nowrap; flex: none; padding: 8px 10px 9px; }
   .view-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; width: calc(100% + 32px); margin: 0 -16px; padding: 0 16px 2px; }
   .view-chips::-webkit-scrollbar { display: none; }
   .view-chips > * { flex: none; }
