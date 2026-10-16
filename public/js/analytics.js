@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import { h, mount, money, toast, skeletonRows } from "./ui.js";
 import { rateCheckCard } from "./ratecheck.js";
 
-const PERIODS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], ["ytd", "Year to date"], [365, "12 months"]];
+const PERIODS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], ["mtd", "Month to date"], ["ytd", "Year to date"]];
 const SVG = "http://www.w3.org/2000/svg";
 const s = (tag, attrs = {}, ...kids) => {
   const el = document.createElementNS(SVG, tag);
@@ -213,7 +213,7 @@ function teamCard(rows) {
 
 export function renderAnalytics(main) {
   const params = new URLSearchParams(location.search);
-  let days = params.get("days") === "ytd" ? "ytd" : Number(params.get("days")) || 30;
+  let days = ["ytd", "mtd"].includes(params.get("days")) ? params.get("days") : Number(params.get("days")) || 30;
   const body = h("div", { class: "stack", style: { gap: "16px" } }, h("div", { class: "card" }, skeletonRows(4)));
   const chips = h("div", { class: "view-chips" });
   let checkCard = null; // kept across period changes (it has its own period)
@@ -229,7 +229,7 @@ export function renderAnalytics(main) {
     let a;
     try {
       a = await api(`/analytics?days=${days}`);
-      compareLabel = a.ytd ? "vs last year" : "vs prior";
+      compareLabel = a.ytd ? "vs last year" : a.mtd ? "vs last month" : "vs prior";
     } catch (e) {
       return mount(body, h("div", { class: "notice bad" }, e.message));
     }
@@ -255,7 +255,7 @@ export function renderAnalytics(main) {
             h("tbody", {}, a.states.map((r) => h("tr", {}, h("td", {}, r.state), h("td", {}, r.labels), h("td", { class: "num" }, usd(r.avg_cost))))))) : h("p", { class: "muted" }, "No labels in this period."))),
       h("h2", { class: "analytics-h" }, "Support"),
       h("div", { class: "kpis" },
-        tile("New tickets", String(sp.created), a.ytd ? "this year" : `in the last ${days} days`),
+        tile("New tickets", String(sp.created), a.ytd ? "this year" : a.mtd ? "this month" : `in the last ${days} days`),
         tile("Closed", String(sp.closed), "tickets closed"),
         tile("Open now", String(sp.open), `${sp.inProgress} in progress · ${sp.snoozed} snoozed`),
         tile("First reply", hours(sp.medianFirstReplyHours), `median, ${sp.replied} replied`),

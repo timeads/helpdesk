@@ -18,11 +18,30 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
+/** Midnight on the 1st of a month in store time (Philadelphia), as epoch ms — EDT or EST as the date has it. */
+export function monthStartNY(y: number, m: number): number {
+  const edt = Date.UTC(y, m - 1, 1, 4); // midnight EDT
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hourCycle: "h23" }).format(new Date(edt)));
+  return hour === 0 ? edt : edt + 3600_000; // EST: an hour later
+}
+
 /** Shipping cost vs what customers paid, fulfillment speed, and support volume for a period. */
 analytics.get("/", async (c) => {
   const ytd = c.req.query("days") === "ytd";
+  const mtd = c.req.query("days") === "mtd";
   let days: number, since: string, prevSince: string, prevUntil: string;
-  if (ytd) {
+  if (mtd) {
+    // Month to date in store time, compared with the same stretch of last month
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "numeric" }).formatToParts(new Date());
+    const y = Number(parts.find((x) => x.type === "year")!.value);
+    const m = Number(parts.find((x) => x.type === "month")!.value);
+    const start = monthStartNY(y, m);
+    const prevStart = m === 1 ? monthStartNY(y - 1, 12) : monthStartNY(y, m - 1);
+    since = new Date(start).toISOString();
+    prevSince = new Date(prevStart).toISOString();
+    prevUntil = new Date(Math.min(start, prevStart + (Date.now() - start))).toISOString();
+    days = Math.max(1, Math.ceil((Date.now() - start) / 86400_000));
+  } else if (ytd) {
     // Year to date in store time (Philadelphia), compared with the same stretch of last year
     const year = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric" }).format(new Date()));
     const jan1 = (y: number) => new Date(`${y}-01-01T05:00:00Z`).getTime(); // midnight EST
@@ -129,6 +148,7 @@ analytics.get("/", async (c) => {
   return c.json({
     days,
     ytd,
+    mtd,
     shipping: { current: cur.results[0], previous: prev.results[0], voided: (voided.results[0] as any).n },
     weekly: weekly.results,
     services: services.results,
