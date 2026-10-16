@@ -1505,8 +1505,9 @@ body.order-nav .op-menu { color: var(--ochre-text); }
   .ship-head .sub { display: none; }
   .ship-head h1 { font-size: 22px; }
   /* Phones: tabs wrap onto a second line rather than hiding off the edge */
-  .tabs-line { flex-wrap: wrap; column-gap: 0; row-gap: 2px; margin: 0 -6px; }
-  .tabs-line .tab { white-space: nowrap; flex: none; padding: 8px 10px 9px; }
+  .tabs-line { flex-wrap: wrap; gap: 6px; padding: 10px 0 12px; }
+  .tabs-line .tab { white-space: nowrap; flex: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+  .tabs-line .tab.active { background: var(--teal); color: var(--on-teal); border-color: transparent; }
   .view-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; width: calc(100% + 32px); margin: 0 -16px; padding: 0 16px 2px; }
   .view-chips::-webkit-scrollbar { display: none; }
   .view-chips > * { flex: none; }
