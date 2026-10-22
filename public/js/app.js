@@ -106,7 +106,9 @@ function renderNav() {
       count ? h("span", { class: "count" }, count) : null,
     );
   mount(navEl,
-    h("a", { class: "brand", href: "/", "data-link": "", "aria-label": "Tuft the World support desk" }, h("img", { class: "brand-logo", src: "/img/logo.png", alt: "Tuft the World" }), h("span", { class: "sub" }, "Support desk")),
+    h("button", { class: "brand", type: "button", "aria-haspopup": "true", "aria-expanded": "false", "aria-label": "Tuft the World Support desk. Switch app", onclick: (e) => toggleApps(e.currentTarget) },
+      h("img", { class: "brand-logo", src: "/img/logo.png", alt: "" }),
+      h("span", { class: "sub" }, h("span", { class: "sub-text" }, "Support desk"), icon("chevron"))),
     item("/dashboard", "Dashboard", "Dashboard", "chart", isDash, undefined, " dash-item"),
     h("div", { class: "nav-scroll" },
       h("div", { class: "nav-label" }, "Tickets"),
@@ -138,6 +140,8 @@ function renderNav() {
     item("/shipping", "Shipping", "Ship", "truck", path.startsWith("/shipping"), state.shipReady),
     item("/manual", "Repair manual", "Manual", "wrench", path.startsWith("/manual"), undefined, " ship-view"),
     item("/settings", "Settings", "Settings", "settings", path.startsWith("/settings")),
+    h("button", { class: "nav-item apps-tab", type: "button", "aria-haspopup": "true", "aria-expanded": "false", onclick: (e) => toggleApps(e.currentTarget) },
+      icon("grid"), h("span", { class: "label-long" }, "Apps"), h("span", { class: "label-short" }, "Apps")),
     h("div", { class: "spacer" }),
     h("div", { class: "me" },
       h("div", { class: "avatar" }, initials(state.me.name)),
@@ -153,6 +157,62 @@ function renderNav() {
   // Keep the open folder or view in sight when the list is taller than the sidebar
   const active = navEl.querySelector(".nav-scroll .nav-item.active");
   if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+// The other Tuft Life apps, matching the switcher in tuft-ui's <tuft-rail>.
+const TUFT_APPS = [
+  { name: "Home", sub: "Tuft Life", host: "tuftlife.com", icon: "home" },
+  { name: "Support desk", host: "help.tuftlife.com", icon: "chat", current: true },
+  { name: "Stock", host: "stock.tuftlife.com", icon: "package" },
+  { name: "Finance", host: "finance.tuftlife.com", icon: "chart" },
+  { name: "Social", host: "social.tuftlife.com", icon: "megaphone" },
+  { name: "Bookings", host: "booking.tuftlife.com", icon: "calendar" },
+];
+let appsMenu = null;
+
+function closeApps() {
+  if (!appsMenu) return;
+  appsMenu.trigger.setAttribute("aria-expanded", "false");
+  appsMenu.el.remove();
+  document.removeEventListener("pointerdown", appsMenu.outside, true);
+  document.removeEventListener("keydown", appsMenu.esc, true);
+  window.removeEventListener("resize", closeApps);
+  const { trigger, viaKey } = appsMenu;
+  appsMenu = null;
+  if (viaKey) trigger.focus();
+}
+
+function toggleApps(trigger) {
+  if (appsMenu) { const same = appsMenu.trigger === trigger; closeApps(); if (same) return; }
+  const el = h("div", { class: "app-switcher", role: "dialog", "aria-label": "Switch app" },
+    h("div", { class: "app-switcher-head" }, "Tuft Life apps"),
+    TUFT_APPS.map((a) => h("a", { class: "app-switcher-item", href: a.current ? "/" : `https://${a.host}/`, "aria-current": a.current ? "page" : null },
+      h("span", { class: "app-switcher-icon" }, icon(a.icon)),
+      h("span", { class: "app-switcher-name" }, a.name, a.sub ? h("small", {}, a.sub) : null),
+      a.current ? icon("check") : null)),
+  );
+  document.body.append(el);
+  const r = trigger.getBoundingClientRect();
+  const phone = matchMedia("(max-width: 760px)").matches;
+  if (phone) {
+    el.classList.add("sheet");
+  } else if (r.width > 120) {
+    // full rail: drop down under the logo
+    el.style.left = `${r.left + 8}px`;
+    el.style.top = `${r.bottom - 12}px`;
+  } else {
+    // icon rail: open beside it
+    el.style.left = `${r.right + 8}px`;
+    el.style.top = `${r.top}px`;
+  }
+  trigger.setAttribute("aria-expanded", "true");
+  const outside = (e) => { if (!el.contains(e.target) && !trigger.contains(e.target)) closeApps(); };
+  const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); appsMenu.viaKey = true; closeApps(); } };
+  appsMenu = { el, trigger, outside, esc, viaKey: false };
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", esc, true);
+  window.addEventListener("resize", closeApps);
+  el.querySelector("a")?.focus({ preventScroll: true });
 }
 
 function viewGroups() {
