@@ -24,6 +24,7 @@ import {
 } from "../lib/support";
 import { HttpError, base64UrlDecodeBytes, getSetting, nowIso, splitAddressList } from "../lib/util";
 import { fileTicket } from "../lib/folders";
+import { attachmentHeaders } from "../lib/attachment-headers";
 
 const tickets = new Hono<AppEnv>();
 
@@ -858,14 +859,7 @@ tickets.get("/:id{[0-9]+}/messages/:mid{[0-9]+}/attachments/:aid", async (c) => 
       : await getAttachment(c.env, m.gmail_message_id, meta.id);
   const inline = /^(image\/|video\/|application\/pdf)/.test(meta.mimeType) && c.req.query("download") === undefined;
   const bytes = base64UrlDecodeBytes(data);
-  const headers: Record<string, string> = {
-    "content-type": meta.mimeType,
-    "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.filename)}`,
-    "cache-control": "private, max-age=3600",
-    "x-content-type-options": "nosniff",
-    "content-security-policy": "sandbox",
-    "accept-ranges": "bytes",
-  };
+  const headers = attachmentHeaders(meta, inline);
   // Videos play in the repair manual; Safari asks for byte ranges
   const range = /^bytes=(\d*)-(\d*)$/.exec(c.req.header("range") ?? "");
   if (range && (range[1] || range[2])) {
