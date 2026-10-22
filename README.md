@@ -120,6 +120,10 @@ In the Worker's **Settings → Build**:
 
 Every deploy then uploads those three to the running app (`scripts/write-secrets.mjs` → `wrangler deploy --secrets-file`), so a deploy can never leave the app without them. The build log lists the *names* of the secrets it included, never the values.
 
+### Tuft Life hub summary
+
+The hub at tuftlife.com shows a few good-news cards from the desk (tickets solved this week, typical first email reply, live chats answered this month, shipping labels bought this week). Its Worker calls `GET /api/hub-summary` through a service binding with `Authorization: Bearer <token>`; no sign-in is involved. Set the same random value as `HUB_SUMMARY_TOKEN` here (a Worker secret, or a Build variable so `write-secrets.mjs` carries it on every deploy) and in the hub. Until it's set the route answers 503; a wrong token gets 401.
+
 ## Shipping day to day
 
 - **Shipping → Orders** lists every open, unshipped Shopify order (oldest first) with saved views: Ready to ship, Priority, Payment pending, On hold, International, All open. Tick orders to **buy labels in bulk** (by rule, cheapest, fastest or a specific UPS service), **print packing slips**, or **hold / release**. The **UPS quote · margin** column fills in by itself (hover it to see every service), and the bulk bar shows the estimated spend and margin for the selected orders. Click an order for the full label builder: UPS rates load automatically and refresh as you change the box, weight or address, each service shows your margin (shipping paid − label), and the Buy button shows the margin of the service you picked.

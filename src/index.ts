@@ -16,6 +16,7 @@ import chatPublicRoutes from "./routes/chat-public";
 import chatRoutes from "./routes/chat";
 import kbRoutes from "./routes/kb";
 import socialRoutes from "./routes/social";
+import { hubSummary } from "./routes/hub-summary";
 import { handleWebhook, validSignature, verifyToken } from "./lib/meta";
 import { sweepChats } from "./lib/chat";
 import { dailyRefresh } from "./lib/site-knowledge";
@@ -57,6 +58,10 @@ app.get("/kb/img/:id{[0-9]+}", async (c) => {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Response(bytes, { headers: { "content-type": r.mime, "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" } });
 });
+
+// Tuft Life hub's mini dashboard: server-to-server with a bearer token (HUB_SUMMARY_TOKEN), so no agent session
+app.get("/api/hub-summary", hubSummary);
+app.all("/api/hub-summary", (c) => c.json({ error: "Method not allowed" }, 405, { allow: "GET" }));
 
 const api = new Hono<AppEnv>();
 api.use("*", requireAgent);

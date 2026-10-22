@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { usageReport } from "../lib/usage";
+import { median, monthStartNY } from "../lib/hub-summary";
 
 const analytics = new Hono<AppEnv>();
 
@@ -11,19 +12,8 @@ analytics.get("/ai-usage", async (c) => {
   return c.json(await usageReport(c.env));
 });
 
-const median = (xs: number[]) => {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
-
-/** Midnight on the 1st of a month in store time (Philadelphia), as epoch ms — EDT or EST as the date has it. */
-export function monthStartNY(y: number, m: number): number {
-  const edt = Date.UTC(y, m - 1, 1, 4); // midnight EDT
-  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hourCycle: "h23" }).format(new Date(edt)));
-  return hour === 0 ? edt : edt + 3600_000; // EST: an hour later
-}
+// Store-time month start lives with the other store-time helpers
+export { monthStartNY };
 
 /** Shipping cost vs what customers paid, fulfillment speed, and support volume for a period. */
 analytics.get("/", async (c) => {
