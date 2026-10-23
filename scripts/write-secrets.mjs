@@ -17,6 +17,8 @@ const NAMES = [
   "UPS_ACCOUNT_NUMBER",
   "ANTHROPIC_API_KEY",
   "EASYPOST_API_KEY",
+  // Optional — lets the Tuft Life hub read GET /api/hub-summary
+  "HUB_SUMMARY_TOKEN",
 ];
 const REQUIRED = ["SESSION_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"];
 
