@@ -1258,7 +1258,7 @@ function buildLabelForm(root, o, presets, opts) {
       return h("div", { class: "pack-box" + (split() ? " multi" : "") },
         h("div", { class: "pack-box-head" },
           h("b", {}, split() ? `Box ${i + 1}` : "Box"),
-          lines.length && split() ? h("span", { class: "small muted" }, `${n} item${n === 1 ? "" : "s"}`) : null,
+          lines.length && split() ? (n ? h("span", { class: "small muted" }, `${n} item${n === 1 ? "" : "s"}`) : h("span", { class: "small neg" }, "Empty — move items in below")) : null,
           split() ? h("b", { class: "box-cost", "data-box": i }, boxCostText(i)) : null,
           split() ? h("button", { class: "btn ghost sm icon-only", style: { marginLeft: "auto" }, "aria-label": `Remove box ${i + 1}`, title: "Remove this box (its items go to another box)", onclick: () => removeBox(i) }, icon("x")) : null),
         presetSel,
@@ -1365,7 +1365,7 @@ function buildLabelForm(root, o, presets, opts) {
     const last = s.parcels.at(-1) ?? {};
     s.parcels.push({ preset: last.preset ?? "", length: last.length, width: last.width, height: last.height, weight: "", alloc: Object.fromEntries(lines.map((l) => [l.id, 0])), auto: weightsKnown });
     if (s.parcels.length === 2 && weightsKnown) s.parcels[0].auto = true;
-    if (lines.length) splitEvenly();
+    // The new box starts empty and the other boxes keep what's in them: move items in, or press "Split evenly"
     changed();
   };
   const removeBox = (i) => {
@@ -1538,6 +1538,8 @@ function buildLabelForm(root, o, presets, opts) {
     if (lines.length && lines.every((l) => l.qty === 0)) { toast("Nothing is set to ship now", true); return; }
     if (split() && lines.some((l) => l.qty !== s.parcels.reduce((n, p) => n + (p.alloc[l.id] || 0), 0))
       && !confirm("Some items aren't assigned to a box. Buy the labels anyway?")) return;
+    const emptyBoxes = split() && lines.length ? s.parcels.map((p, i) => (inBox(p) ? null : i + 1)).filter(Boolean) : [];
+    if (emptyBoxes.length && !confirm(`${emptyBoxes.length === 1 ? `Box ${emptyBoxes[0]} has` : `Boxes ${emptyBoxes.join(", ")} have`} nothing in it. Buy a label for ${emptyBoxes.length === 1 ? "it" : "them"} anyway?`)) return;
     const win = reserveWindow();
     try {
       const r = await api("/shipping/labels", {
