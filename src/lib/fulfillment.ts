@@ -1,4 +1,5 @@
 // Shared fulfillment logic: what box/weight/service an order should get, and buying its label.
+import { isManualId } from "./manual-orders";
 import type { Agent, Env } from "../env";
 import type { ShopifyOrder } from "./shopify";
 import { fulfillOrder } from "./shopify";
@@ -352,6 +353,8 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
     ? input.partial.filter((x) => x.qty > 0)
     : null;
   const o = input.order;
+  // A saved blank-label order has no sale: record it like a blank label (no paid/margin in the dashboard)
+  const sale = o && !isManualId(o.id) ? o : null;
   const result = await purchase(env, await shipFrom(env), input.to, input.parcels, input.rate.serviceCode, {
     reference: o?.name,
     labelFormat: input.labelFormat,
@@ -374,15 +377,15 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
       o?.id ?? null, o?.name ?? null, input.ticketId ?? null, input.rate.serviceCode, input.rate.serviceName, result.shipmentId,
       JSON.stringify(result.trackingNumbers), JSON.stringify(result.labels), result.format, result.cost, result.currency,
       JSON.stringify(input.parcels.map((p, i) => (perBox ? { ...p, cost: perBox[i] } : p))), JSON.stringify(input.to), agent.id, input.signature ?? null, input.batchId ?? null,
-      o ? shippingPaid(o) : null, o ? Number(o.totalPriceSet.shopMoney.amount) : null, o?.createdAt ?? null,
-      o ? requestedService(o) : null, input.rate.listTotal ?? null, o ? itemCount(o) : null, input.to.state || null,
+      sale ? shippingPaid(sale) : null, sale ? Number(sale.totalPriceSet.shopMoney.amount) : null, o?.createdAt ?? null,
+      sale ? requestedService(sale) : null, input.rate.listTotal ?? null, sale ? itemCount(sale) : null, input.to.state || null,
       input.to.country || null, input.scanVerified ? 1 : 0, partialList ? 1 : 0,
     )
     .first<{ id: number }>();
 
   // Remember how this was packed for the next order with the same items (single or multi-box)
   // Remember how this was packed (not for partial shipments: the box held only some of the items)
-  if (o && !partialList) await learnPacking(env, o, input.parcels, input.presetId ?? null).catch((e) => console.error("learn packing", e));
+  if (o && !partialList && o.lineItems.nodes.length) await learnPacking(env, o, input.parcels, input.presetId ?? null).catch((e) => console.error("learn packing", e));
   // The sidebar's "ready to ship" count is one fewer now: recount on its next check
   await env.DB.prepare("DELETE FROM settings WHERE key = 'ready_count'").run().catch(() => {});
   if (input.customs) {
@@ -399,11 +402,11 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
   } else if (o) await env.DB.prepare("DELETE FROM order_holds WHERE order_id = ?").bind(o.id).run();
 
   let fulfillError: string | null = null;
-  if (input.fulfill && o && result.trackingNumbers[0]) {
+  if (input.fulfill && sale && result.trackingNumbers[0]) {
     try {
       // Every box's tracking number goes on the one fulfillment, so the customer's email lists them all
       const numbers = result.trackingNumbers;
-      const f = await fulfillOrder(env, o.id, { company: result.carrier, numbers, urls: numbers.map((n) => trackingUrlFor(result.carrier, n)) }, input.notifyCustomer, partialList ?? undefined);
+      const f = await fulfillOrder(env, sale.id, { company: result.carrier, numbers, urls: numbers.map((n) => trackingUrlFor(result.carrier, n)) }, input.notifyCustomer, partialList ?? undefined);
       await env.DB.prepare("UPDATE shipments SET fulfilled = 1, fulfillment_id = ? WHERE id = ?").bind(f?.id ?? null, row!.id).run();
     } catch (e) {
       fulfillError = (e as Error).message;

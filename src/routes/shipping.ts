@@ -21,6 +21,7 @@ import { HISTORY_FILTERS, historyRow, shipStatus, type LabelInfo } from "../lib/
 import { importRedoOrders, type RedoOrder } from "../lib/redo-import";
 import { escapeHtml } from "../lib/mime";
 import { stateForZip } from "../lib/zip-state";
+import { createManualOrder, getManualOrder, isManualId, openManualOrders, setManualStatus } from "../lib/manual-orders";
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
@@ -125,6 +126,18 @@ async function idMap(env: Env, sql: string, ids: string[]) {
   return out;
 }
 
+/** An order by id: a saved blank-label order ("manual:…"), a demo order, or one from Shopify. */
+async function loadOrder(env: Env, id: string): Promise<ShopifyOrder | null> {
+  if (isManualId(id)) return getManualOrder(env, id);
+  return demo(env) ? demoAllOrders().find((o) => o.id === id) ?? null : getOrder(env, id);
+}
+
+/** The orders waiting to ship: Shopify's, plus labels saved as orders on the blank-label page. */
+async function toShip(env: Env) {
+  const [shop, manual] = await Promise.all([demo(env) ? demoOrders() : queueOrders(env), openManualOrders(env)]);
+  return [...shop, ...manual];
+}
+
 const dueSoon = (shipBy: string | null | undefined) => !!shipBy && Date.parse(shipBy) - Date.now() < 36 * 3600_000;
 
 /** Everything the queue and slideout need about an order, computed once on the server. */
@@ -211,8 +224,7 @@ shipping.post("/redo-signature/recheck", async (c) => {
 
 /** The fulfillment queue: every open, unshipped order with its plan, plus per-view counts. */
 shipping.get("/queue", async (c) => {
-  const orders = demo(c.env) ? demoOrders() : await queueOrders(c.env);
-  const described = await describe(c.env, orders);
+  const described = await describe(c.env, await toShip(c.env));
   const counts = Object.fromEntries(Object.entries(VIEWS).map(([k, f]) => [k, described.filter(f).length]));
   await setSetting(c.env, "ready_count", { n: counts.ready, at: Date.now() });
   return c.json({ orders: described, counts, merges: mergeSuggestions(described, await dismissedMerges(c.env)) });
@@ -224,7 +236,7 @@ shipping.get("/ready-count", async (c) => {
   const cached = await getSetting<{ n: number; at: number } | null>(c.env, "ready_count", null);
   if (cached && Date.now() - cached.at < 120_000 && c.req.query("fresh") === undefined) return c.json({ ready: cached.n });
   try {
-    const described = await describe(c.env, demo(c.env) ? demoOrders() : await queueOrders(c.env));
+    const described = await describe(c.env, await toShip(c.env));
     const n = described.filter(VIEWS.ready).length;
     await setSetting(c.env, "ready_count", { n, at: Date.now() });
     return c.json({ ready: n });
@@ -278,7 +290,7 @@ shipping.get("/history", async (c) => {
 
 shipping.get("/orders/:id", async (c) => {
   const id = decodeURIComponent(c.req.param("id"));
-  const order = demo(c.env) ? demoAllOrders().find((o) => o.id === id) : await getOrder(c.env, id);
+  const order = await loadOrder(c.env, id);
   if (!order) throw new HttpError(404, "Order not found");
   const [d] = await describe(c.env, [order]);
   return c.json({ order: d });
@@ -287,7 +299,7 @@ shipping.get("/orders/:id", async (c) => {
 // ---- Choices saved from the order page (boxes, split, service, address) until a label is bought
 shipping.put("/drafts/:id", async (c) => {
   const id = decodeURIComponent(c.req.param("id"));
-  if (!id.startsWith("gid://shopify/Order/") && !id.startsWith("merge:gid://shopify/Order/")) throw new HttpError(400, "Unknown order");
+  if (!id.startsWith("gid://shopify/Order/") && !id.startsWith("merge:gid://shopify/Order/") && !isManualId(id)) throw new HttpError(400, "Unknown order");
   const draft = cleanDraft(await c.req.json());
   if (!draft) throw new HttpError(400, "Nothing to save");
   await saveDraft(c.env, id, draft);
@@ -320,6 +332,27 @@ shipping.get("/scan/:code", async (c) => {
   const n = boxMatch ? Number(boxMatch[2]) : null;
   if (n && boxes.length && !boxes.some((b) => b.n === n)) throw new HttpError(404, `${d.name} doesn't have a box ${n} any more — its boxes changed. Reprint its packing slips.`);
   return c.json({ order: d, boxes, box: n && boxes.length ? n : null, shipmentId: bought?.id ?? null, printedBoxes: bought ? Object.keys(printedBoxes(bought)).map(Number) : [] });
+});
+
+// ---- Saved label orders: set up a label on one computer, buy and print it at the one with the printer
+shipping.post("/manual-orders", async (c) => {
+  const body = await c.req.json<{ draft?: unknown; note?: string }>();
+  const draft = cleanDraft(body.draft);
+  if (!draft?.to) throw new HttpError(400, "Fill in the ship-to address first");
+  const to = validAddress(draft.to);
+  const order = await createManualOrder(c.env, c.get("agent").id, to, String(body.note ?? "").trim());
+  await saveDraft(c.env, order.id, draft);
+  await c.env.DB.prepare("DELETE FROM settings WHERE key = 'ready_count'").run().catch(() => {});
+  return c.json({ id: order.id, name: order.name });
+});
+
+shipping.delete("/manual-orders/:id", async (c) => {
+  const id = decodeURIComponent(c.req.param("id"));
+  if (!isManualId(id)) throw new HttpError(400, "Only saved label orders can be deleted here");
+  await setManualStatus(c.env, id, "deleted");
+  await deleteDraft(c.env, id);
+  await c.env.DB.prepare("DELETE FROM settings WHERE key = 'ready_count'").run().catch(() => {});
+  return c.json({ ok: true });
 });
 
 // ---- Holds
@@ -579,7 +612,7 @@ shipping.post("/labels", async (c) => {
   // Shipping orders together: the combined order (oldest first) holds every item; the rest ride along on its label
   const group = body.orderId && Array.isArray(body.mergeIds) && body.mergeIds.length ? (await mergeGroup(c.env, [body.orderId, ...body.mergeIds])).orders : null;
   if (group && (body as any).partial) throw new HttpError(400, "Ship part of an order isn't available when shipping orders together");
-  const found = group ? combineOrders(group) : body.orderId ? (demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) ?? null : await getOrder(c.env, body.orderId)) : null;
+  const found = group ? combineOrders(group) : body.orderId ? await loadOrder(c.env, body.orderId) : null;
   const order = found ? (group ? found : remaining(found)) : null;
   const partial = cleanPartial((body as any).partial, order);
   const to = validAddress(body.to);
@@ -603,12 +636,13 @@ shipping.post("/labels", async (c) => {
     },
     signature: validSignature(body.signature),
     labelFormat: labelFormat(body.labelFormat),
-    fulfill: !!body.fulfill && !!order,
+    fulfill: !!body.fulfill && !!order && !isManualId(order.id), // a saved label order has no Shopify order to fulfill
     notifyCustomer: body.notifyCustomer ?? true,
     batchId: body.batchId ?? null,
     scanVerified: !!body.scanVerified,
     partial,
   });
+  if (order && isManualId(order.id)) await setManualStatus(c.env, order.id, "shipped");
   if (!group) return c.json(r);
   const names = group.map((o) => o.name).join(" + ");
   await c.env.DB.prepare("UPDATE shipments SET order_name = ? WHERE id = ?").bind(names.slice(0, 200), r.id).run();
@@ -624,7 +658,7 @@ shipping.post("/labels", async (c) => {
  */
 shipping.post("/labels/auto", async (c) => {
   const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown }>();
-  const found = demo(c.env) ? demoOrders().find((o) => o.id === body.orderId) : await getOrder(c.env, body.orderId);
+  const found = await loadOrder(c.env, body.orderId);
   if (!found) throw new HttpError(404, "Order not found");
   const order = remaining(found);
   const partial = cleanPartial(body.partial, order);
@@ -671,13 +705,14 @@ shipping.post("/labels/auto", async (c) => {
     rate,
     signature: plan.signature,
     labelFormat: labelFormat(body.labelFormat),
-    fulfill: true,
+    fulfill: !isManualId(order.id),
     notifyCustomer: body.notifyCustomer ?? true,
     batchId: body.batchId ?? null,
     scanVerified: !!body.scanVerified,
     customs,
     partial,
   });
+  if (isManualId(order.id)) await setManualStatus(c.env, order.id, "shipped");
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });
 });
 
@@ -773,6 +808,7 @@ shipping.post("/labels/:id{[0-9]+}/fulfill", async (c) => {
     .first<{ order_id: string | null; carrier: string | null; tracking_numbers: string; status: string; fulfilled: number }>();
   if (!s || !s.order_id) throw new HttpError(404, "Label not found");
   if (s.status !== "purchased") throw new HttpError(409, "This label was voided");
+  if (isManualId(s.order_id)) throw new HttpError(409, "This label isn't for a Shopify order");
   if (s.fulfilled) return c.json({ ok: true, already: true });
   const numbers = JSON.parse(s.tracking_numbers || "[]") as string[];
   const carrier = s.carrier ?? "UPS";
@@ -1057,6 +1093,7 @@ shipping.post("/labels/:id{[0-9]+}/void", async (c) => {
     }
   }
   if (riders.length) await c.env.DB.prepare("DELETE FROM merged_orders WHERE shipment_id = ?").bind(id).run();
+  if (isManualId(s.order_id)) await setManualStatus(c.env, s.order_id!, "open"); // a saved label order goes back to To ship
   const refunded = s.shipment_id.startsWith("ep:") || s.shipment_id.startsWith("redo:");
   return c.json({ ok: true, carrier: s.carrier ?? (s.shipment_id.startsWith("ep:") ? "USPS" : "UPS"), refund: refunded ? "requested" : "voided", via: s.shipment_id.startsWith("redo:") ? "Redo" : s.shipment_id.startsWith("ep:") ? "EasyPost" : "UPS", shopify, merged: riders.length });
 });

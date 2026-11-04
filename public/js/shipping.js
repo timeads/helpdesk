@@ -359,7 +359,7 @@ function renderQueue(root, params) {
           h("td", { class: "chk" }, box),
           h("td", { class: "nowrap" }, h("b", {}, o.name), h("div", { class: "small muted", title: fullTime(o.createdAt) }, ago(o.createdAt))),
           h("td", {}, a.name || o.email || "—"),
-          h("td", {}, o.itemCount),
+          h("td", {}, o.manual ? h("span", { class: "badge plain", title: o.manualNote || "Saved from the blank-label page" }, "Saved label") : o.itemCount),
           h("td", { class: "nowrap" + (o.plan.weightKnown ? "" : " muted") }, o.plan.weightKnown ? lbOz(o.plan.totalWeight ?? o.plan.parcel.weight) : "Needs weight"),
           h("td", {}, h("div", { class: "cell-box", title: (o.plan.boxes ?? []).map((b) => b.preset?.name ?? "Custom").join(" + ") },
               (o.plan.boxes?.length ?? 1) > 1 ? `${o.plan.boxes.length} boxes` : o.plan.preset?.name ?? "Custom"),
@@ -367,13 +367,14 @@ function renderQueue(root, params) {
           h("td", {}, o.marketplace ? h("span", { class: "badge plain", style: { marginRight: "6px" } }, o.marketplace) : null, o.requestedService || "—",
             o.priority && !o.shipBy ? h("span", { class: "badge warn plain", style: { marginLeft: "6px" } }, "Priority") : null,
             o.shipBy ? h("div", { style: { marginTop: "3px" } }, shipByChip(o)) : null),
-          h("td", { class: "num" }, money(o.shippingPaid, "USD")),
+          h("td", { class: "num" }, o.manual ? h("span", { class: "muted", title: "Saved label — no sale" }, "—") : money(o.shippingPaid, "USD")),
           quoteCell(o),
           h("td", {}, h("div", {}, [a.city, a.provinceCode].filter(Boolean).join(", "), o.international ? h("span", { class: "badge plain", style: { marginLeft: "6px" } }, a.countryCodeV2) : null), addrCell(o)),
           h("td", { class: "flags" },
             o.hold ? h("span", { class: "badge bad", title: o.hold }, o.holdUntil ? `Hold · until ${holdDate(o.holdUntil)}` : "On hold") : null,
             !o.hold && o.holdEnded && !o.hasLabel ? h("span", { class: "badge good plain", title: `Was on hold until ${holdDate(o.holdEnded)}` }, "Back from hold") : null,
             o.paymentPending ? h("span", { class: "badge warn" }, "Payment pending") : null,
+            o.manual ? h("span", { class: "badge plain", title: o.manualNote || "Saved from the blank-label page" }, "Saved label") : null,
             o.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
             o.pickup ? (o.pickupReadyAt ? h("span", { class: "badge good", title: `Marked ready ${fullTime(o.pickupReadyAt)}` }, "Ready for pickup") : h("span", { class: "badge warn plain" }, "Pickup")) : null,
             o.slipPrinted ? h("span", { class: "badge plain", title: o.slipPrintedAt ? `Packing slip printed ${fullTime(o.slipPrintedAt)}` : "Packing slip printed" }, "Slip printed") : null,
@@ -412,7 +413,7 @@ function renderQueue(root, params) {
     const save = o.plan.signature ? redoSaving(r, q.redo) : null;
     mount(td, h("div", { class: "q-line" }, h("span", { class: "small q-service" }, carrierMark(r, true), r.serviceName.replace(/ · Redo$/, "").replace(/^USPS Priority Mail Express$/, "USPS Express").replace(/^USPS Priority Mail$/, "USPS Priority"),
       r.source ? h("span", { class: "muted", title: VIA[r.source]?.title ?? "" }, ` · ${VIA[r.source]?.label ?? r.source}`) : null), h("b", {}, money(r.total, "USD"))),
-      h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`),
+      o.manual ? null : h("div", { class: "margin " + (m >= 0 ? "pos" : "neg") }, `${marginText(m)} margin`),
       q.redo && o.plan.signature ? h("div", { class: "redo-line small", title: `${q.redo.serviceName.replace(/ · Redo$/, "")} on Redo: ${money(q.redo.total, "USD")} + about ${money(REDO_SIGNATURE_FEE, "USD")} to add the signature on Redo's site` },
         `Redo ~${money(redoWithSig(q.redo), "USD")}`,
         save >= REDO_SAVE_MIN ? h("span", { class: "badge warn", style: { marginLeft: "6px" } }, `save ${money(save, "USD")}`) : h("span", { class: "muted" }, save > 0 ? ` (−${money(save, "USD")})` : " (not cheaper)")) : null);
@@ -483,7 +484,7 @@ function renderQueue(root, params) {
     policy.onchange = () => { st.policy = policy.value; for (const o of visible()) fillQuote(o); drawBulk(visible()); };
     const quoted = picked.map((o) => [o, pickRate(quoteCache.get(quoteKey(o))?.rates, st.policy, o.plan)]).filter(([, r]) => r);
     const est = quoted.reduce((n, [, r]) => n + r.total, 0);
-    const estMargin = quoted.reduce((n, [o, r]) => n + (o.shippingPaid - r.total), 0);
+    const estMargin = quoted.filter(([o]) => !o.manual).reduce((n, [o, r]) => n + (o.shippingPaid - r.total), 0);
     const buy = h("button", { class: "btn primary" }, icon("printer"), `Buy ${picked.length} label${picked.length > 1 ? "s" : ""}`);
     buy.onclick = () => bulkBuy(picked, policy.value);
     const slips = h("button", { class: "btn" }, "Packing slips");
@@ -971,7 +972,7 @@ function buildLabelForm(root, o, presets, opts) {
     if (queueApi) queueApi.stale = true;
     openOrderPage(order, opts);
   };
-  const paid = o ? o.shippingPaid : null;
+  const paid = o && !o.manual ? o.shippingPaid : null; // a saved label order has no sale behind it
   const split = () => s.parcels.length > 1;
   const boxWeight = (p) => presets.find((b) => String(b.id) === String(p.preset))?.weight ?? 0;
   /** Box weight + items allocated to it (only when every product has a Shopify weight). */
@@ -1442,7 +1443,7 @@ function buildLabelForm(root, o, presets, opts) {
         h("label", { class: "field", style: { minWidth: "200px" } }, "Delivery signature", sigSel, sigWhy(plan)))));
 
   const packages = h("section", { class: "card op-card" },
-    h("div", { class: "op-card-head" }, h("h3", {}, o ? `${o.pickup ? "Items" : "Items & boxes"} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}` : "Packages"), packHeadEl),
+    h("div", { class: "op-card-head" }, h("h3", {}, o && !o.manual ? `${o.pickup ? "Items" : "Items & boxes"} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"}` : "Packages"), packHeadEl),
     boxesEl,
     itemsEl);
 
@@ -1451,7 +1452,25 @@ function buildLabelForm(root, o, presets, opts) {
   const noteCard = o?.note ? h("section", { class: "card op-card" }, h("h3", {}, "Order note"), h("p", { class: "op-note" }, o.note)) : null;
 
   const a = o?.shippingAddress || {};
-  const aside = o ? h("aside", { class: "op-aside" },
+  const aside = o?.manual ? h("aside", { class: "op-aside" },
+    h("section", { class: "card op-card" },
+      h("h3", {}, "Saved label"),
+      h("p", { class: "small muted", style: { marginTop: 0 } }, "Made on the blank-label page — no Shopify order. Buy & print its label here; nothing is marked shipped in Shopify."),
+      kv("Order", o.name),
+      kv("Saved", fullTime(o.createdAt)),
+      kv("Ship to", a.name || null),
+      o.manualNote ? kv("Note", o.manualNote) : null,
+      h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
+        holdBtn,
+        h("button", { class: "btn sm danger", onclick: async () => {
+          if (!confirm(`Delete ${o.name}? Nothing has been bought for it.`)) return;
+          try {
+            await api(`/shipping/manual-orders/${encodeURIComponent(o.id)}`, { method: "DELETE" });
+            toast(`${o.name} deleted`);
+            queueApi?.reload();
+            closeOrderPage();
+          } catch (e) { toast(e.message, true); }
+        } }, icon("trash"), "Delete")))) : o ? h("aside", { class: "op-aside" },
     h("section", { class: "card op-card" },
       h("h3", {}, "Order summary"),
       kv("Order", o.name),
@@ -1488,7 +1507,7 @@ function buildLabelForm(root, o, presets, opts) {
           o?.international ? h("span", { class: "badge plain" }, `International · ${a.countryCodeV2}`) : null,
           o?.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
           o?.pickup ? h("span", { class: "badge warn plain" }, "In-store pickup") : null),
-        h("div", { class: "small muted" }, o ? [`${shortDate(o.createdAt)} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"} · ${money(o.totalPriceSet.shopMoney.amount, cur)}`,
+        h("div", { class: "small muted" }, o ? [o.manual ? `Saved label · ${shortDate(o.createdAt)}${o.manualNote ? ` · ${o.manualNote}` : ""}` : `${shortDate(o.createdAt)} · ${o.itemCount} item${o.itemCount === 1 ? "" : "s"} · ${money(o.totalPriceSet.shopMoney.amount, cur)}`,
           o.requestedService ? [" · ", h("span", { class: "chose-chip", title: "Shipping option picked at checkout" }, icon("truck"), `${o.requestedService} · ${money(o.shippingPaid ?? 0, "USD")}`)] : null] : "Not linked to an order — for replacements, samples, etc."))),
     h("div", { class: "op-grid" + (aside ? "" : " solo") },
       h("div", { class: "op-main" },
@@ -1524,9 +1543,25 @@ function buildLabelForm(root, o, presets, opts) {
         m !== null ? h("div", { class: "op-buy-stat" }, h("div", { class: "lbl" }, "Margin"), h("b", { class: "margin " + (m >= 0 ? "pos" : "neg") }, marginText(m))) : null,
         buy),
       h("div", { class: "op-buy-opts" },
-        o ? h("label", { class: "check" }, fulfill, "Mark fulfilled in Shopify") : null,
-        o ? h("label", { class: "check" }, notify, "Email the customer their tracking") : null,
+        o && !o.manual ? h("label", { class: "check" }, fulfill, "Mark fulfilled in Shopify") : null,
+        o && !o.manual ? h("label", { class: "check" }, notify, "Email the customer their tracking") : null,
+        o ? null : saveAsOrder(),
         h("span", { class: "small muted", style: { marginLeft: "auto" } }, printSettings().labels === "zebra" ? "Prints to your Zebra printer" : "Opens the 4×6 label to print")));
+  }
+
+  /** Blank label: keep it as an order in To ship, to buy and print later (e.g. at the computer with the label printer). */
+  function saveAsOrder() {
+    const note = s.noteInput ??= h("input", { class: "input", placeholder: "Note (optional)", maxlength: 200, "aria-label": "Note for this order", style: { width: "180px" } });
+    const btn = h("button", { class: "btn", title: "Nothing is bought now. It waits in Shipping → To ship; open it there to buy & print the label." }, icon("plus"), "Save as order");
+    btn.onclick = busy(btn, async () => {
+      if (!s.to?.name?.trim() || !s.to?.address1?.trim() || !s.to?.zip?.trim()) { toast("Fill in the ship-to name and address first", true); return; }
+      const r = await api("/shipping/manual-orders", { method: "POST", body: { draft: { ...draftNow(), to: s.to }, note: note.value } });
+      s.bought = true; // nothing more to do on this page
+      toast(`Saved as ${r.name} — it's in Shipping → To ship`);
+      queueApi?.reload();
+      closeOrderPage();
+    });
+    return h("span", { class: "row", style: { gap: "6px" } }, note, btn);
   }
 
   async function purchase(fulfill, notify) {
