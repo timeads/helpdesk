@@ -282,8 +282,16 @@ async function boot() {
   mainEl = h("main", { class: "main" });
   mount(root, navEl, mainEl);
   route();
+  // Sidebar counts every 20 s while the tab is in view; a tab in the background checks once a minute
+  // (still soon enough for the "customer waiting in chat" alert) to go easy on the database
+  let countsAt = Date.now();
   refreshCounts();
-  setInterval(refreshCounts, 20000);
+  setInterval(() => {
+    if (document.hidden && Date.now() - countsAt < 60_000) return;
+    countsAt = Date.now();
+    refreshCounts();
+  }, 20000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - countsAt > 20_000) { countsAt = Date.now(); refreshCounts(); } });
   refreshShipReady();
   setInterval(refreshShipReady, 120000);
 }

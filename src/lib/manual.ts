@@ -5,7 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
 import { recordUsage } from "./usage";
-import { HttpError, sniffImageType } from "./util";
+import { HttpError, getSetting, setSetting, sniffImageType } from "./util";
 import { getAttachment } from "./gmail";
 
 const REPAIR_WORDS = [
@@ -39,13 +39,38 @@ function candidateSql(countOnly: boolean, scope: ScanScope = "all") {
       AND EXISTS (SELECT 1 FROM messages o WHERE o.ticket_id = t.id AND o.direction = 'out')
       AND (t.ai_type = 'REPAIR' OR t.tags LIKE '%"Repairs"%' OR ${words}
            OR EXISTS (SELECT 1 FROM messages m WHERE m.ticket_id = t.id AND m.direction = 'in' AND (${bodyWords})))
-    ${countOnly ? "" : "ORDER BY t.created_at DESC LIMIT ?"}`;
+    ${countOnly ? "" : "ORDER BY t.last_message_at DESC LIMIT ?"}`;
 }
 const params = (scope: ScanScope) => [...(scope === "all" ? [] : [newSince()]), ...[...REPAIR_WORDS, ...REPAIR_WORDS].map((w) => `%${w}%`)];
 
 export async function pendingCount(env: Env, scope: ScanScope = "all"): Promise<number> {
   const r = await env.DB.prepare(candidateSql(true, scope)).bind(...params(scope)).first<{ n: number }>();
   return r?.n ?? 0;
+}
+
+/**
+ * How many conversations are left to read, new and archive. Counting means reading every archived email's
+ * text, which is heavy on the database, so it's counted at most every 15 minutes and kept up to date as
+ * batches are read in between.
+ */
+type Pending = { new: number; archive: number; at: number };
+const PENDING_KEY = "manual_pending";
+export async function pendingCounts(env: Env): Promise<Pending> {
+  const cached = await getSetting<Pending | null>(env, PENDING_KEY, null);
+  if (cached && Date.now() - cached.at < 15 * 60_000) return cached;
+  const fresh = { new: await pendingCount(env, "new"), archive: await pendingCount(env, "archive"), at: Date.now() };
+  await setSetting(env, PENDING_KEY, fresh);
+  return fresh;
+}
+async function countDown(env: Env, scope: ScanScope, read: number, done: boolean): Promise<number> {
+  const p = await getSetting<Pending | null>(env, PENDING_KEY, null);
+  if (!p) return done ? 0 : read; // not counted yet: keep the loop going until a batch comes back empty
+  const next = { ...p };
+  if (scope === "new" || scope === "archive") next[scope] = done ? 0 : Math.max(0, p[scope] - read);
+  else { next.new = 0; next.archive = done ? 0 : Math.max(0, p.archive - read); }
+  await setSetting(env, PENDING_KEY, next);
+  // Never report 0 while a batch was full: there may be more than the estimate said
+  return scope === "new" ? next.new : scope === "archive" ? next.archive : next.new + next.archive || (done ? 0 : 1);
 }
 
 interface TicketRow { id: number; subject: string; customer_name: string | null; customer_email: string; created_at: string; closed_at: string | null }
@@ -170,9 +195,15 @@ interface Classified {
 
 /** Reads the next few repair conversations into the manual: new ones, the archive, or all of them. */
 export async function scanBatch(env: Env, size = 4, scope: ScanScope = "all"): Promise<ScanResult> {
-  const { results: batch } = await env.DB.prepare(candidateSql(false, scope)).bind(...params(scope), Math.max(1, Math.min(6, size))).all<TicketRow>();
-  if (!batch.length) return { read: 0, repairs: 0, topics: [], remaining: 0 };
-  return readTickets(env, batch, scope);
+  const n = Math.max(1, Math.min(6, size));
+  const { results: batch } = await env.DB.prepare(candidateSql(false, scope)).bind(...params(scope), n).all<TicketRow>();
+  if (!batch.length) {
+    await countDown(env, scope, 0, true);
+    return { read: 0, repairs: 0, topics: [], remaining: 0 };
+  }
+  const r = await readTickets(env, batch, scope);
+  // A batch smaller than asked for means nothing is left
+  return { ...r, remaining: await countDown(env, scope, batch.length, batch.length < n) };
 }
 
 /**
@@ -197,7 +228,7 @@ export async function scanTicket(env: Env, ticketId: number): Promise<ScanResult
   return r;
 }
 
-async function readTickets(env: Env, batch: TicketRow[], scope: ScanScope): Promise<ScanResult> {
+async function readTickets(env: Env, batch: TicketRow[], _scope: ScanScope): Promise<ScanResult> {
   // Reading old conversations is the one-time backlog; new repairs (the last 45 days) are everyday use
   const newest = Math.max(...batch.map((t) => Date.parse(t.closed_at ?? t.created_at) || 0));
   const feature = Date.now() - newest > 45 * 86400_000 ? BACKLOG_FEATURE : "Repair manual";
@@ -323,7 +354,7 @@ Keep it practical and specific to the product. Merge duplicate advice. Don't men
   for (const t of batch) stmts.push(env.DB.prepare("INSERT OR REPLACE INTO manual_scanned (ticket_id, result) VALUES (?, ?)").bind(t.id, repairIds.has(t.id) ? "repair" : "not_repair"));
   await env.DB.batch(stmts);
 
-  return { read: batch.length, repairs: repairIds.size, topics: touched.filter((x): x is NonNullable<typeof x> => !!x), remaining: await pendingCount(env, scope) };
+  return { read: batch.length, repairs: repairIds.size, topics: touched.filter((x): x is NonNullable<typeof x> => !!x), remaining: 0 }; // scanBatch fills this in
 }
 
 /** Published topics, for AI reply drafts. */

@@ -113,6 +113,7 @@ export function renderManual(main) {
         job.topicsChanged = r.topics.length > 0;
         show();
         if (!r.read || !r.remaining) break;
+        await new Promise((ok) => setTimeout(ok, 1500)); // a breather between batches, easier on the database
       }
       toast(job.stop ? "Stopped — pick up where you left off any time" : "The manual is up to date");
     } catch (e) {

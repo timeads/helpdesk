@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../env";
+import { getSetting, setSetting } from "../lib/util";
 import { buildHubCards, HUB_APP, hubAuthStatus, hubPeriods, type HubPeriods, type HubStats } from "../lib/hub-summary";
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -51,9 +52,14 @@ export async function hubSummary(c: Context<AppEnv>) {
   if (status === 503) return c.json({ error: "not configured" }, 503, headers);
   if (status === 401) return c.json({ error: "unauthorized" }, 401, headers);
   try {
+    // The hub may ask often; these aggregates read a lot, so one answer is reused for 10 minutes
+    const cached = await getSetting<{ at: number; body: unknown } | null>(c.env, "hub_summary_cache", null);
+    if (cached && Date.now() - cached.at < 10 * 60_000) return c.json(cached.body, 200, headers);
     const now = Date.now();
     const cards = buildHubCards(await loadHubStats(c.env.DB, hubPeriods(now)));
-    return c.json({ app: HUB_APP, generatedAt: new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z"), cards }, 200, headers);
+    const body = { app: HUB_APP, generatedAt: new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z"), cards };
+    await setSetting(c.env, "hub_summary_cache", { at: now, body });
+    return c.json(body, 200, headers);
   } catch (e) {
     console.error("Hub summary failed", e);
     return c.json({ error: "summary unavailable" }, 500, headers);

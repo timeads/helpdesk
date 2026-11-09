@@ -152,6 +152,25 @@ const LIST_COLUMNS = `t.id, t.subject, t.customer_email, t.customer_name, t.stat
 
 const withTags = <T extends { tags?: string }>(r: T) => ({ ...r, tags: parseTags(r.tags) });
 
+/**
+ * Sidebar counts for the custom views. A view can search message text, which reads every email, so each
+ * agent's view counts are reused for a minute (per Worker instance) instead of recounted on every poll.
+ */
+const viewCountCache = new Map<number, { at: number; counts: Record<string, number> }>();
+async function viewCounts(env: Env, me: number) {
+  const hit = viewCountCache.get(me);
+  if (hit && Date.now() - hit.at < 60_000) return hit.counts;
+  const { results: views } = await env.DB.prepare("SELECT id, filters FROM views").all<{ id: number; filters: string }>();
+  const counts: Record<string, number> = {};
+  for (const v of views) {
+    const w = whereFor(JSON.parse(v.filters || "{}"), me);
+    const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM tickets t WHERE ${w.sql}`).bind(...w.args).first<{ n: number }>();
+    counts[`v:${v.id}`] = r?.n ?? 0;
+  }
+  viewCountCache.set(me, { at: Date.now(), counts });
+  return counts;
+}
+
 tickets.get("/counts", async (c) => {
   const me = c.get("agent").id;
   const row = await c.env.DB.prepare(
@@ -170,13 +189,7 @@ tickets.get("/counts", async (c) => {
   )
     .bind(me)
     .first<Record<string, number>>();
-  const { results: views } = await c.env.DB.prepare("SELECT id, filters FROM views").all<{ id: number; filters: string }>();
-  const custom: Record<string, number> = {};
-  for (const v of views) {
-    const w = whereFor(JSON.parse(v.filters || "{}"), me);
-    const r = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM tickets t WHERE ${w.sql}`).bind(...w.args).first<{ n: number }>();
-    custom[`v:${v.id}`] = r?.n ?? 0;
-  }
+  const custom: Record<string, number> = { ...(await viewCounts(c.env, me)) };
   // Folders: how many are filed there, and how many have something new from the customer
   const { results: folders } = await c.env.DB.prepare(
     "SELECT folder_id AS id, COUNT(*) AS n, SUM(unread) AS unread FROM tickets WHERE folder_id IS NOT NULL AND status IN ('open','in_progress','snoozed') GROUP BY folder_id",

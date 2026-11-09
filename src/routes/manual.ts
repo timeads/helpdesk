@@ -4,7 +4,7 @@ import type { AppEnv } from "../env";
 import { requireAdmin } from "../lib/auth";
 import { HttpError } from "../lib/util";
 import { aiConfigured } from "../lib/ai";
-import { NEW_DAYS, pendingCount, scanBatch, scanTicket } from "../lib/manual";
+import { NEW_DAYS, pendingCounts, scanBatch, scanTicket } from "../lib/manual";
 import { copyTopicFor } from "../lib/manual-copy";
 
 const manual = new Hono<AppEnv>();
@@ -18,7 +18,7 @@ manual.get("/", async (c) => {
      FROM manual_topics t ORDER BY t.product COLLATE NOCASE, cases DESC, t.title COLLATE NOCASE`,
   ).all();
   const scanned = await c.env.DB.prepare("SELECT COUNT(*) AS n, SUM(result = 'repair') AS repairs FROM manual_scanned").first<{ n: number; repairs: number | null }>();
-  const [pendingNew, pendingArchive] = await Promise.all([pendingCount(c.env, "new"), pendingCount(c.env, "archive")]);
+  const { new: pendingNew, archive: pendingArchive } = await pendingCounts(c.env);
   return c.json({ topics: results, pending: pendingNew + pendingArchive, pendingNew, pendingArchive, newDays: NEW_DAYS, scanned: scanned?.n ?? 0, repairs: scanned?.repairs ?? 0, ai: aiConfigured(c.env) });
 });
 
