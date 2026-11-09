@@ -25,7 +25,7 @@ import { createManualOrder, getManualOrder, isManualId, openManualOrders, setMan
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
-import { addressKey, combineOrders, dismissMerge, dismissedMerges, mergeDraftKey, mergeSuggestions } from "../lib/merge";
+import { addressKey, combineOrders, dismissMerge, dismissedMerges, liveSavedMerges, mergeDraftKey, mergeSuggestions, saveMerge, savedMerges, unsaveMerge } from "../lib/merge";
 
 const shipping = new Hono<AppEnv>();
 const demo = (env: Env) => !shopifyConfigured(env) && env.DEMO_DATA === "1";
@@ -227,7 +227,11 @@ shipping.get("/queue", async (c) => {
   const described = await describe(c.env, await toShip(c.env));
   const counts = Object.fromEntries(Object.entries(VIEWS).map(([k, f]) => [k, described.filter(f).length]));
   await setSetting(c.env, "ready_count", { n: counts.ready, at: Date.now() });
-  return c.json({ orders: described, counts, merges: mergeSuggestions(described, await dismissedMerges(c.env)) });
+  const saved = liveSavedMerges(await savedMerges(c.env), described);
+  const inSaved = new Set(saved.flatMap((m) => m.orderIds));
+  // Orders already saved in a group aren't suggested again
+  const merges = mergeSuggestions(described.filter((o) => !inSaved.has(o.id)), await dismissedMerges(c.env));
+  return c.json({ orders: described, counts, merges, savedMerges: saved });
 });
 
 /** The sidebar's Shipping bubble: orders ready to ship. Asking Shopify is slow, so it's reused for a couple of minutes. */
@@ -648,6 +652,7 @@ shipping.post("/labels", async (c) => {
   await c.env.DB.prepare("UPDATE shipments SET order_name = ? WHERE id = ?").bind(names.slice(0, 200), r.id).run();
   const errors = [...(r.fulfillError ? [`${group[0].name}: ${r.fulfillError}`] : []), ...(await fulfillRiders(c.env, r, group.slice(1), body.notifyCustomer ?? true, !!body.fulfill))];
   await c.env.DB.prepare("DELETE FROM order_drafts WHERE order_id IN (?, ?)").bind(mergeDraftKey(group.map((o) => o.id)), group[0].id).run();
+  await unsaveMerge(c.env, group.map((o) => o.id));
   return c.json({ ...r, orderName: names, fulfillError: errors.length ? errors.join("; ") : null });
 });
 
@@ -743,6 +748,20 @@ async function mergeGroup(env: Env, orderIds: unknown) {
   if (keys.size > 1 || keys.has(null)) throw new HttpError(409, "These orders don't go to the same name and address — fix the addresses first, or ship them separately");
   return { orders: orders.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), described };
 }
+
+/** Keep a ship-together group (its boxes are in its draft) to buy the label later, maybe on another computer. */
+shipping.post("/merge/save", async (c) => {
+  const { ids } = await c.req.json<{ ids?: unknown }>();
+  const { orders } = await mergeGroup(c.env, ids);
+  await saveMerge(c.env, orders.map((o) => o.id));
+  return c.json({ ok: true });
+});
+
+shipping.post("/merge/unsave", async (c) => {
+  const { ids } = await c.req.json<{ ids?: unknown }>();
+  await unsaveMerge(c.env, Array.isArray(ids) ? ids.map(String) : []);
+  return c.json({ ok: true });
+});
 
 /** Orders shipping together as one order for the order page: every item, boxes to adjust, one label. */
 shipping.get("/merge/order", async (c) => {

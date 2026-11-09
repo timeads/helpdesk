@@ -73,3 +73,37 @@ export function combineOrders(orders: ShopifyOrder[]): ShopifyOrder {
 
 /** Where the box and item choices for a group are saved while it's being packed. */
 export const mergeDraftKey = (ids: string[]) => `merge:${[...ids].sort().join(",")}`;
+
+/** Orders saved to ship together (boxes picked, label not bought yet), so the group can be finished on another computer. */
+export interface SavedMerge { ids: string[]; savedAt: string }
+
+export const savedMerges = (env: Env) => getSetting<SavedMerge[]>(env, "merge_saved", []);
+
+export async function saveMerge(env: Env, ids: string[]) {
+  const key = mergeDraftKey(ids);
+  // An order is in one saved group at a time: a new group replaces any that shares an order with it
+  const list = (await savedMerges(env)).filter((m) => mergeDraftKey(m.ids) !== key && !m.ids.some((id) => ids.includes(id)));
+  await setSetting(env, "merge_saved", [...list, { ids: [...ids].sort(), savedAt: new Date().toISOString() }].slice(-200));
+}
+
+export async function unsaveMerge(env: Env, ids: string[]) {
+  const list = await savedMerges(env);
+  const next = list.filter((m) => !m.ids.some((id) => ids.includes(id)));
+  if (next.length !== list.length) await setSetting(env, "merge_saved", next);
+}
+
+/** Saved groups still waiting: every order still in the queue, none with a label. Shown on To ship. */
+export function liveSavedMerges(saved: SavedMerge[], orders: QueueOrder[]) {
+  const byId = new Map(orders.map((o) => [o.id, o]));
+  return saved
+    .filter((m) => m.ids.length > 1 && m.ids.every((id) => byId.get(id) && !byId.get(id)!.hasLabel))
+    .map((m) => {
+      const list = m.ids.map((id) => byId.get(id)!).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const a = list[0].shippingAddress ?? {};
+      return {
+        orderIds: list.map((o) => o.id), names: list.map((o) => o.name), customer: a.name ?? "",
+        address: [a.address1, a.address2, [a.city, a.provinceCode, a.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+        items: list.reduce((n, o) => n + o.itemCount, 0), savedAt: m.savedAt,
+      };
+    });
+}

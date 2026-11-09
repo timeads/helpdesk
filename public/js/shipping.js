@@ -299,6 +299,7 @@ function renderQueue(root, params) {
       st.counts = r.counts;
       setShipReady(r.counts.ready ?? 0);
       st.merges = r.merges ?? [];
+      st.savedMerges = r.savedMerges ?? [];
       st.loadedAt = Date.now();
       draw();
       tick();
@@ -375,6 +376,10 @@ function renderQueue(root, params) {
             !o.hold && o.holdEnded && !o.hasLabel ? h("span", { class: "badge good plain", title: `Was on hold until ${holdDate(o.holdEnded)}` }, "Back from hold") : null,
             o.paymentPending ? h("span", { class: "badge warn" }, "Payment pending") : null,
             o.manual ? h("span", { class: "badge plain", title: o.manualNote || "Saved from the blank-label page" }, "Saved label") : null,
+            (() => {
+              const g = (st.savedMerges ?? []).find((m) => m.orderIds.includes(o.id));
+              return g ? h("span", { class: "badge plain", title: `Saved to ship together: ${g.names.join(" + ")}` }, "Shipping together") : null;
+            })(),
             o.hasLabel ? h("span", { class: "badge good" }, "Label bought") : null,
             o.pickup ? (o.pickupReadyAt ? h("span", { class: "badge good", title: `Marked ready ${fullTime(o.pickupReadyAt)}` }, "Ready for pickup") : h("span", { class: "badge warn plain" }, "Pickup")) : null,
             o.slipPrinted ? h("span", { class: "badge plain", title: o.slipPrintedAt ? `Packing slip printed ${fullTime(o.slipPrintedAt)}` : "Packing slip printed" }, "Slip printed") : null,
@@ -459,9 +464,27 @@ function renderQueue(root, params) {
 
   // ---- Ship together: orders to the same person and address (suggested, or picked by hand)
   function drawMerges() {
-    const show = !st.searchResults && ["ready", "priority", "international", "all"].includes(st.view) && st.merges?.length;
+    const show = !st.searchResults && ["ready", "priority", "international", "all"].includes(st.view) && (st.merges?.length || st.savedMerges?.length);
     if (!show) return mount(mergeEl);
-    mount(mergeEl, st.merges.map((m) => {
+    // Groups saved to ship together (boxes picked on some computer): open one to buy the label
+    const saved = (st.savedMerges ?? []).map((m) => {
+      const go = h("button", { class: "btn primary sm" }, icon("printer"), "Open to buy label");
+      go.onclick = busy(go, () => shipTogether(m.orderIds));
+      const apart = h("button", { class: "btn ghost sm", title: "Stop shipping these together; each goes back to its own row" }, "Separate");
+      apart.onclick = busy(apart, async () => {
+        await api("/shipping/merge/unsave", { method: "POST", body: { ids: m.orderIds } });
+        st.savedMerges = st.savedMerges.filter((x) => x !== m);
+        drawMerges();
+        draw();
+      });
+      return h("div", { class: "card merge-sug saved" },
+        h("span", { class: "merge-ico" }, icon("check")),
+        h("div", { class: "merge-text" },
+          h("b", {}, `Saved to ship together: ${m.names.length} orders for ${m.customer}`),
+          h("div", { class: "small muted" }, `${m.names.join(" + ")} · ${m.items} item${m.items === 1 ? "" : "s"} · ${m.address} · saved ${ago(m.savedAt)}`)),
+        h("div", { class: "row", style: { gap: "6px", marginLeft: "auto" } }, apart, go));
+    });
+    mount(mergeEl, saved, (st.merges ?? []).map((m) => {
       const go = h("button", { class: "btn primary sm" }, icon("box"), "Ship together");
       go.onclick = busy(go, () => shipTogether(m.orderIds));
       const no = h("button", { class: "btn ghost sm" }, "Not now");
@@ -1546,7 +1569,23 @@ function buildLabelForm(root, o, presets, opts) {
         o && !o.manual ? h("label", { class: "check" }, fulfill, "Mark fulfilled in Shopify") : null,
         o && !o.manual ? h("label", { class: "check" }, notify, "Email the customer their tracking") : null,
         o ? null : saveAsOrder(),
+        merge ? saveMergeForLater() : null,
         h("span", { class: "small muted", style: { marginLeft: "auto" } }, printSettings().labels === "zebra" ? "Prints to your Zebra printer" : "Opens the 4×6 label to print")));
+  }
+
+  /** Orders shipping together: keep the group and its boxes to buy the label later (e.g. at the computer with the printer). */
+  function saveMergeForLater() {
+    const btn = h("button", { class: "btn", title: "Nothing is bought now. The group and its boxes wait in Shipping → To ship; open it there to buy & print." }, icon("check"), "Save for later");
+    btn.onclick = busy(btn, async () => {
+      clearTimeout(saveTimer);
+      await api(`/shipping/drafts/${encodeURIComponent(draftId)}`, { method: "PUT", body: draftNow() });
+      await api("/shipping/merge/save", { method: "POST", body: { ids: merge.ids } });
+      s.bought = true; // nothing more to do on this page
+      toast(`Saved — ${merge.names.join(" + ")} wait in To ship, ready to buy`);
+      queueApi?.reload();
+      closeOrderPage();
+    });
+    return btn;
   }
 
   /** Blank label: keep it as an order in To ship, to buy and print later (e.g. at the computer with the label printer). */

@@ -1458,6 +1458,7 @@ a.view-chip { text-decoration: none; }
 .merge-sugs { display: grid; gap: 8px; margin-bottom: 12px; }
 .merge-sugs:empty { display: none; }
 .merge-sug { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-left: 3px solid var(--ochre); flex-wrap: wrap; }
+.merge-sug.saved { border-left-color: var(--teal); }
 .merge-ico { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--select); color: var(--ochre); flex: none; }
 .merge-text { min-width: 0; flex: 1 1 260px; }
 .merge-text .small { margin-top: 2px; }
