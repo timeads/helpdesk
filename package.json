@@ -11,7 +11,7 @@
     "seed:demo": "wrangler d1 execute helpdesk --local --file=scripts/demo-seed.sql",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "deploy:ci": "node scripts/write-secrets.mjs && wrangler d1 migrations apply helpdesk --remote && wrangler deploy --secrets-file .secrets.json"
+    "deploy:ci": "node scripts/write-secrets.mjs && wrangler d1 migrations apply helpdesk --remote && (wrangler deploy --secrets-file .secrets.json || (echo 'Deploy failed, retrying in 20 s' && sleep 20 && wrangler deploy --secrets-file .secrets.json) || (echo 'Deploy failed again, retrying in 40 s' && sleep 40 && wrangler deploy --secrets-file .secrets.json))"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.1",
