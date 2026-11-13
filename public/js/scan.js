@@ -1,6 +1,6 @@
 // Packing station: scan the packing slip, scan each item to check it off, then verify & print.
 import { api } from "./api.js";
-import { h, mount, icon, money, toast, spinner } from "./ui.js";
+import { h, mount, icon, money, toast, spinner, modal } from "./ui.js";
 import { labelFormat, openPackingSlips, printLabels, reserveWindow } from "./printing.js";
 import { shipByChip } from "./deadline.js";
 
@@ -243,15 +243,16 @@ export function renderScan(root, { openSlideout }) {
     const go = h("button", { "data-auto": "go", class: verified ? "btn primary big" : multi && boxVerified() ? "btn big" : "btn primary big" }, icon("printer"),
       multi ? (verified ? `Verify & print ${st.boxes.length} labels` : `Print all ${st.boxes.length} labels now`) : verified ? "Verify & print label" : "Print label anyway");
     const missing = () => o.lineItems.nodes.filter((l) => scannedTotal(l) < l.quantity).map((l) => `${l.quantity - scannedTotal(l)} × ${l.title}`);
-    const shipPart = !verified && scannedAny() ? h("button", { class: "btn big", title: "Out of stock? Ship the scanned items now; the rest of the order goes on hold" }, "Ship what's scanned, rest later") : null;
-    const buy = async (btn, partial) => {
+    const shipPart = !verified && scannedAny() ? h("button", { class: "btn big", title: "Ship the scanned items now: the rest goes in another box today, or waits on hold if it's out of stock" }, "Ship what's scanned") : null;
+    // rest: what happens to the items not in this box — "ship" (another box today, back in To ship) or "hold" (out of stock)
+    const buy = async (btn, partial, rest = "hold") => {
       btn.disabled = true;
       const win = reserveWindow();
       try {
         const qty = partial ? (l) => Math.min(l.quantity, scannedTotal(l)) : (l) => l.quantity; // every box scanned so far
         // Counts filled in by hand don't count as checked with the scanner
         const body = { orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: verified && !st.manual };
-        if (partial) body.partial = o.lineItems.nodes.map((l) => ({ id: l.id, qty: qty(l) }));
+        if (partial) { body.partial = o.lineItems.nodes.map((l) => ({ id: l.id, qty: qty(l) })); body.rest = rest; }
         // The box on screen (when changed, or for a partial shipment with only the scanned items in it)
         if (st.box && (st.box.changed || partial)) {
           body.parcels = [parcelFor(partial ? qty : null, partial ? o.lineItems.nodes.filter((l) => qty(l) > 0).map((l) => ({ id: l.id, title: l.title, qty: qty(l) })) : undefined)];
@@ -263,7 +264,9 @@ export function renderScan(root, { openSlideout }) {
         const left = partial ? missing() : [];
         st.order = null;
         mount(area, h("div", { class: "card success-card fade-in" }, h("h2", {}, partial ? `${o.name} partly shipped` : `${o.name} done`), h("p", {}, `${r.serviceName} · ${money(r.cost, r.currency)} · ${r.trackingNumbers[0] ?? ""}`),
-          partial ? h("p", {}, `On hold until it can ship: ${left.join(", ")}.`) : null,
+          partial && rest === "hold" ? h("p", {}, `On hold until it can ship: ${left.join(", ")}.`) : null,
+          partial && rest === "ship" ? h("p", {}, `Still to ship today: ${left.join(", ")} — it's back in To ship.`) : null,
+          partial && rest === "ship" ? h("button", { class: "btn primary", onclick: () => loadOrder(o.name.replace(/^#/, "")) }, icon("box"), "Pack the rest now") : null,
           partial ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, icon("printer"), "Packing slip for this box") : null,
           r.fulfillError ? h("div", { class: "notice bad" }, r.fulfillError) : null, h("p", { class: "small", style: { opacity: 0.8 } }, "Scan the next packing slip.")));
       } catch (e) {
@@ -312,8 +315,17 @@ export function renderScan(root, { openSlideout }) {
     };
     if (shipPart) shipPart.onclick = () => {
       // Several planned boxes: the server re-plans the boxes for just the scanned items
-      if (!confirm(`Ship only what's been scanned?\n\nLeft for later:\n${missing().join("\n")}\n\nShopify marks only the shipped items fulfilled. The rest stays on the order in Shipping (on hold, "waiting on" these items) — release the hold when they're in stock.`)) return;
-      buy(shipPart, true);
+      // Didn't fit (ship the rest today in another box) or out of stock (hold it)?
+      const left = missing();
+      const today = h("button", { class: "btn primary" }, icon("box"), "Ship the rest today in another box");
+      const hold = h("button", { class: "btn" }, "Hold the rest — out of stock");
+      const m = modal("Ship what's scanned", h("div", { class: "stack", style: { gap: "12px" } },
+        h("p", { style: { margin: 0 } }, "This label covers only what's been scanned. Not in this box:"),
+        h("ul", { style: { margin: 0 } }, left.map((x) => h("li", {}, x))),
+        h("p", { class: "small muted", style: { margin: 0 } }, "Shopify marks only the shipped items fulfilled. “Today” puts the rest straight back in To ship to pack in another box; “Hold” keeps it waiting until it's in stock."),
+        h("div", { class: "row", style: { gap: "8px", flexWrap: "wrap" } }, today, hold)), { width: 480 });
+      today.onclick = () => { m.close(); buy(shipPart, true, "ship"); };
+      hold.onclick = () => { m.close(); buy(shipPart, true, "hold"); };
     };
     const blocked = o.hasLabel && !(st.boxN && st.shipmentId) ? "This order already has a label." : o.hold ? `On hold: ${o.hold}` : o.paymentPending && !st.payOk?.has(o.id) ? "Payment is still pending." : null;
     // Net-30 and other invoiced orders ship before they're paid: let the packer say so

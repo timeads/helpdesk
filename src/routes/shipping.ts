@@ -662,7 +662,7 @@ shipping.post("/labels", async (c) => {
  * inside Cloudflare's per-request limits and progress can be shown.
  */
 shipping.post("/labels/auto", async (c) => {
-  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown }>();
+  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown; rest?: string }>();
   const found = await loadOrder(c.env, body.orderId);
   if (!found) throw new HttpError(404, "Order not found");
   const order = remaining(found);
@@ -716,6 +716,7 @@ shipping.post("/labels/auto", async (c) => {
     scanVerified: !!body.scanVerified,
     customs,
     partial,
+    holdRest: body.rest !== "ship", // "ship": the rest goes in another box today, so it stays in To ship
   });
   if (isManualId(order.id)) await setManualStatus(c.env, order.id, "shipped");
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });

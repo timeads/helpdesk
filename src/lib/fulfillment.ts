@@ -334,6 +334,8 @@ export interface BuyInput {
   customs?: Customs;
   /** Ship only these line items/quantities now; the rest of the order waits, on hold. */
   partial?: { id: string; qty: number }[] | null;
+  /** Partial shipment: put the rest on hold (out of stock, the default) or leave it ready to ship (another box today). */
+  holdRest?: boolean;
 }
 
 /** "1 × Primary Tufting Cloth, 2 × Yarn" for what a partial shipment leaves behind. */
@@ -392,7 +394,7 @@ export async function buyLabel(env: Env, agent: Agent, input: BuyInput) {
     await env.DB.prepare("UPDATE shipments SET customs = ? WHERE id = ?").bind(JSON.stringify(input.customs), row!.id).run();
     await saveProfiles(env, input.customs).catch((e) => console.error("customs profiles", e));
   }
-  if (o && partialList) {
+  if (o && partialList && input.holdRest !== false) {
     // Redo-style: the rest of the order waits on hold until it can ship
     const note = `Partial shipment — waiting on: ${leftBehind(o, partialList)}`.slice(0, 500);
     await env.DB.prepare(
