@@ -331,7 +331,7 @@ shipping.get("/scan/:code", async (c) => {
   const first = await byName(parts[0]);
   const groupIds = parts.length > 1
     ? (await Promise.all(parts.map(byName))).map((o) => o.id)
-    : (await savedMerges(c.env)).find((m) => m.ids.includes(first.id))?.ids ?? null;
+    : await knownGroupOf(c.env, first.id);
   if (groupIds) {
     const { order: g, shipment: groupShipment } = await groupView(c.env, groupIds);
     const slips = await slipsFor(c.env, [g]);
@@ -810,6 +810,19 @@ async function groupView(env: Env, ids: string[]) {
   const [d] = await describe(env, [combineOrders(orders)], key);
   const merge = { ids: orders.map((o) => o.id), names: orders.map((o) => o.name), key };
   return { orders, key, shipment, order: { ...d, name: orders.map((o) => o.name).join(" + "), merge }, slipOrder: { ...d, name: `#${orders.map((o) => o.name.replace(/^#/, "")).join("+")}`, merge } };
+}
+
+/** The ship-together group an order belongs to: saved to ship together, or OK'd as the same address (not shipped yet). */
+async function knownGroupOf(env: Env, id: string): Promise<string[] | null> {
+  const saved = (await savedMerges(env)).find((m) => m.ids.includes(id));
+  if (saved) return saved.ids;
+  for (const key of [...(await approvedMerges(env))].reverse()) {
+    const ids = key.replace(/^merge:/, "").split(",");
+    if (!ids.includes(id)) continue;
+    // Still waiting together (none shipped on its own since): otherwise it's just this order
+    try { await mergeGroup(env, ids); return ids; } catch { return null; }
+  }
+  return null;
 }
 
 /** A teammate checked: these orders do go to the same place, so they can ship together after all. */
@@ -1315,7 +1328,13 @@ shipping.post("/packing-slips/printed", async (c) => {
  * ("1042+1055-TG") opens the whole group at the scan station. Printing it also saves the group.
  */
 async function groupSlipOrder(env: Env, ids: string[], merge: boolean) {
-  if (!merge || ids.length < 2) return null;
+  if (ids.length < 2) return null;
+  // Printed from anywhere (the queue, an older open tab): orders already saved or OK'd to ship together still get one slip
+  if (!merge) {
+    const key = mergeDraftKey(ids);
+    const known = (await savedMerges(env)).some((m) => mergeDraftKey(m.ids) === key) || (await approvedMerges(env)).has(key);
+    if (!known) return null;
+  }
   try {
     const g = await groupView(env, ids);
     if (!g.shipment) await saveMerge(env, g.orders.map((o) => o.id)); // scanning any one of their slips now opens the group

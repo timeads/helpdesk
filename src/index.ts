@@ -64,6 +64,12 @@ app.get("/api/hub-summary", hubSummary);
 app.all("/api/hub-summary", (c) => c.json({ error: "Method not allowed" }, 405, { allow: "GET" }));
 
 const api = new Hono<AppEnv>();
+// The deploy this answer came from: a tab still running older code sees it change and offers a reload
+api.use("*", async (c, next) => {
+  await next();
+  const v = c.env.CF_VERSION_METADATA?.id;
+  if (v) c.res.headers.set("x-app-version", v);
+});
 api.use("*", requireAgent);
 api.route("/tickets", ticketRoutes);
 api.route("/shipping", shippingRoutes);

@@ -33,6 +33,7 @@ export interface Env {
   HUB_SUMMARY_TOKEN?: string; // bearer the Tuft Life hub sends to GET /api/hub-summary
   DEV_LOGIN_EMAIL?: string;
   DEMO_DATA?: string;
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   RAW_ENV?: Env; // env before app-entered credentials were applied
 }
 

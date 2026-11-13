@@ -81,6 +81,18 @@ describe("shipping orders together from the order page", () => {
     expect((await call(`/merge/order?ids=${ids.join(",")}`)).json.order.merge.ids).toHaveLength(2);
   });
 
+  it("once OK'd as the same address, prints one slip and scans as the group even from an older tab (no merge flag)", async () => {
+    const ids = [JANE[0], "gid://shopify/Order/9050"];
+    await call("/merge/approve", { ids });
+    const data = (await (await app.request(`/packing-slips/data?ids=${ids.map(encodeURIComponent).join(",")}`, {}, env)).json()) as any;
+    expect(data.slips).toHaveLength(1);
+    expect(data.slips[0].html).toContain("1042+1050-TG");
+    const scanned = (await (await app.request("/scan/1050-TG", {}, env)).json()) as any;
+    expect(scanned.order.merge.ids.sort()).toEqual([...ids].sort());
+    // other orders still print their own slips
+    expect(((await (await app.request(`/packing-slips/data?ids=${encodeURIComponent(JANE[1])},${encodeURIComponent("gid://shopify/Order/9050")}`, {}, env)).json()) as any).slips).toHaveLength(2);
+  });
+
   it("buys one label with the boxes as packed, marks every order shipped, and voiding undoes them all", async () => {
     const parcels = [{ length: 16, width: 12, height: 10, weight: 5, contents: [{ id: "gid://shopify/LineItem/251", title: "Gun", qty: 1 }] }, { length: 12, width: 10, height: 6, weight: 4 }];
     const r = await call("/labels", { orderId: JANE[0], mergeIds: [JANE[1]], to, parcels, serviceCode: "03", serviceName: "UPS Ground", fulfill: true, notifyCustomer: true });

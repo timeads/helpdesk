@@ -38,6 +38,27 @@ function showSignInNotice() {
   document.getElementById("toasts")?.append(signInNotice);
 }
 
+// A new version of the support desk was deployed while this tab was open: its screens are out of date
+let appVersion = null;
+let updateNotice = null;
+function noteVersion(res) {
+  const v = res.headers.get("x-app-version");
+  if (!v) return;
+  if (!appVersion) { appVersion = v; return; }
+  if (v === appVersion || updateNotice?.isConnected) return;
+  const btn = document.createElement("button");
+  btn.className = "toast-action";
+  btn.textContent = "Reload";
+  btn.onclick = () => location.reload();
+  const msg = document.createElement("span");
+  msg.textContent = "The support desk was updated. Reload to use the latest version (drafts are saved).";
+  updateNotice = document.createElement("div");
+  updateNotice.className = "toast";
+  updateNotice.setAttribute("role", "status");
+  updateNotice.append(msg, btn);
+  document.getElementById("toasts")?.append(updateNotice);
+}
+
 export async function api(path, { method = "GET", body } = {}) {
   let res;
   try {
@@ -54,6 +75,7 @@ export async function api(path, { method = "GET", body } = {}) {
     }
     throw new ApiError(0, "Couldn't reach the support desk. Check your connection and try again");
   }
+  noteVersion(res);
   let data = null;
   try {
     data = await res.json();

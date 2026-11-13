@@ -20,6 +20,8 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Which deploy is running: open tabs compare it and offer a reload when a new version is out
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Request logs in the Cloudflare dashboard (Observability tab)
   "observability": { "enabled": true },
   // Pull new mail from Gmail every minute
