@@ -17,6 +17,14 @@ describe("shipping orders together", () => {
     expect(addressKey({ shippingAddress: null } as any)).toBeNull();
   });
 
+  it("ignores capitals, and an apartment on either address line", () => {
+    const k = addressKey({ shippingAddress: addr() });
+    expect(addressKey({ shippingAddress: addr({ name: "JANE DOE", address1: "12 OAK STREET", address2: "APT 3" }) })).toBe(k);
+    expect(addressKey({ shippingAddress: addr({ address1: "12 Oak St Apt 3", address2: null }) })).toBe(k);
+    expect(addressKey({ shippingAddress: addr({ address1: "12 Oak St, #3", address2: "" }) })).toBe(k);
+    expect(addressKey({ shippingAddress: addr({ address1: "12 North Oak Street" }) })).toBe(addressKey({ shippingAddress: addr({ address1: "12 N. Oak St" }) }));
+  });
+
   it("suggests 2+ shippable orders to one address, oldest first, and skips ones already handled", () => {
     const orders = [
       q("3", "2026-10-03", { itemCount: 2 }),

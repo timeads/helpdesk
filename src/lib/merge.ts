@@ -4,18 +4,24 @@ import type { Env } from "../env";
 import type { ShopifyOrder } from "./shopify";
 import { getSetting, setSetting } from "./util";
 
-const norm = (s: string | null | undefined) => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")
-  .replace(/[.,#]/g, " ")
+const norm = (s: string | null | undefined) => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/[.,#'’\-\/]/g, " ")
   .replace(/\b(street)\b/g, "st").replace(/\b(avenue)\b/g, "ave").replace(/\b(road)\b/g, "rd").replace(/\b(drive)\b/g, "dr").replace(/\b(boulevard)\b/g, "blvd")
-  .replace(/\b(lane)\b/g, "ln").replace(/\b(apartment|apt|unit|suite|ste)\b/g, " ")
+  .replace(/\b(lane)\b/g, "ln").replace(/\b(court)\b/g, "ct").replace(/\b(place)\b/g, "pl").replace(/\b(circle)\b/g, "cir").replace(/\b(highway)\b/g, "hwy")
+  .replace(/\b(parkway)\b/g, "pkwy").replace(/\b(terrace)\b/g, "ter").replace(/\b(square)\b/g, "sq").replace(/\b(trail)\b/g, "trl").replace(/\b(way)\b/g, "wy")
+  .replace(/\bnorth\b/g, "n").replace(/\bsouth\b/g, "s").replace(/\beast\b/g, "e").replace(/\bwest\b/g, "w")
+  .replace(/\b(apartment|apt|unit|suite|ste|floor|fl|number|no)\b/g, " ")
   .replace(/\s+/g, " ").trim();
+/** Letters and digits only: "12 Oak St Apt 3" and "12 OAK ST" + "#3" read the same, spaces and all. */
+const squash = (s: string) => norm(s).replace(/[^a-z0-9]/g, "");
 
 /** Same person, same street address, same postcode and country → can share a box. Null without a shipping address. */
 export function addressKey(o: Pick<ShopifyOrder, "shippingAddress">): string | null {
   const a = o.shippingAddress;
   if (!a?.address1) return null;
   const zip = String(a.zip ?? "").replace(/\s+/g, "").toUpperCase();
-  return [norm(a.name), norm(a.address1), norm(a.address2), (a.countryCodeV2 ?? "US") === "US" ? zip.slice(0, 5) : zip, a.countryCodeV2 ?? ""].join("|");
+  // The apartment may be on the street line in one order and the second line in the other: compare them together
+  return [squash(a.name ?? ""), squash(`${a.address1} ${a.address2 ?? ""}`), (a.countryCodeV2 ?? "US") === "US" ? zip.slice(0, 5) : zip, a.countryCodeV2 ?? ""].join("|");
 }
 
 export interface MergeSuggestion { key: string; orderIds: string[]; names: string[]; customer: string; address: string; items: number }
@@ -107,3 +113,17 @@ export function liveSavedMerges(saved: SavedMerge[], orders: QueueOrder[]) {
       };
     });
 }
+
+/** Groups a teammate chose to ship together although their addresses don't read exactly the same. */
+export const approvedMerges = async (env: Env) => new Set(await getSetting<string[]>(env, "merge_approved", []));
+export async function approveMerge(env: Env, ids: string[]) {
+  const key = mergeDraftKey(ids);
+  const list = await getSetting<string[]>(env, "merge_approved", []);
+  if (!list.includes(key)) await setSetting(env, "merge_approved", [...list, key].slice(-300));
+}
+
+/** "Jane Doe, 12 Oak St Apt 3, Austin TX 78701" for showing where each order goes. */
+export const addressLine = (o: Pick<ShopifyOrder, "shippingAddress">) => {
+  const a = o.shippingAddress ?? {};
+  return [a.name, a.address1, a.address2, [a.city, a.provinceCode, a.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+};

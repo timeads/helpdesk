@@ -25,7 +25,7 @@ import { createManualOrder, getManualOrder, isManualId, openManualOrders, setMan
 import { applyDraft, cleanDraft, deleteDraft, loadDrafts, saveDraft } from "../lib/drafts";
 import { renderCommercialInvoice } from "../lib/invoice";
 import { SLIP_CSS, cleanSlip, renderSlip, slipLayout, type SlipBox } from "../lib/slip";
-import { addressKey, combineOrders, dismissMerge, dismissedMerges, liveSavedMerges, mergeDraftKey, mergeSuggestions, saveMerge, savedMerges, unsaveMerge } from "../lib/merge";
+import { addressKey, addressLine, approveMerge, approvedMerges, combineOrders, dismissMerge, dismissedMerges, liveSavedMerges, mergeDraftKey, mergeSuggestions, saveMerge, savedMerges, unsaveMerge } from "../lib/merge";
 
 const shipping = new Hono<AppEnv>();
 const demo = (env: Env) => !shopifyConfigured(env) && env.DEMO_DATA === "1";
@@ -746,9 +746,22 @@ async function mergeGroup(env: Env, orderIds: unknown) {
     if (d.pickup) throw new HttpError(409, `${d.name} is an in-store pickup`);
   }
   const keys = new Set(orders.map(addressKey));
-  if (keys.size > 1 || keys.has(null)) throw new HttpError(409, "These orders don't go to the same name and address — fix the addresses first, or ship them separately");
+  if (keys.has(null)) throw new HttpError(409, "One of these orders has no shipping address");
+  // Addresses that still differ (a typo, a different apartment…): only when a teammate said they're the same place
+  if (keys.size > 1 && !(await approvedMerges(env)).has(mergeDraftKey(ids))) {
+    throw new HttpError(409, `ADDRESS_MISMATCH These orders' addresses don't read exactly the same:\n${orders.map((o) => `${o.name}: ${addressLine(o)}`).join("\n")}`);
+  }
   return { orders: orders.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), described };
 }
+
+/** A teammate checked: these orders do go to the same place, so they can ship together after all. */
+shipping.post("/merge/approve", async (c) => {
+  const { ids } = await c.req.json<{ ids?: unknown }>();
+  const list = [...new Set(Array.isArray(ids) ? ids.map(String) : [])];
+  if (list.length < 2) throw new HttpError(400, "Pick at least two orders");
+  await approveMerge(c.env, list);
+  return c.json({ ok: true });
+});
 
 /** Keep a ship-together group (its boxes are in its draft) to buy the label later, maybe on another computer. */
 shipping.post("/merge/save", async (c) => {

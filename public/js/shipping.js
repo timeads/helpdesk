@@ -249,10 +249,21 @@ const addrCache = new Map();
  * item of the group, so boxes and items can be adjusted like any order. Each order is marked shipped with the tracking.
  */
 async function shipTogether(orderIds, onDone) {
+  const open = () => api(`/shipping/merge/order?ids=${orderIds.map(encodeURIComponent).join(",")}`);
   try {
-    const { order } = await api(`/shipping/merge/order?ids=${orderIds.map(encodeURIComponent).join(",")}`);
+    let r;
+    try {
+      r = await open();
+    } catch (e) {
+      // Addresses that don't read exactly the same: show both and let the teammate decide
+      if (!String(e.message).startsWith("ADDRESS_MISMATCH")) throw e;
+      const detail = e.message.replace(/^ADDRESS_MISMATCH\s*/, "");
+      if (!confirm(`${detail}\n\nAre these the same place? Ship them together anyway — the label goes to the first (oldest) order's address.`)) return;
+      await api("/shipping/merge/approve", { method: "POST", body: { ids: orderIds } });
+      r = await open();
+    }
     onDone?.();
-    openOrderPage(order, { list: [] });
+    openOrderPage(r.order, { list: [] });
   } catch (e) {
     toast(e.message, true);
   }

@@ -43,6 +43,16 @@ describe("shipping orders together from the order page", () => {
     expect((await call(`/merge/order?ids=${JANE[0]},gid://shopify/Order/9050`)).status).toBe(409); // a different address
   });
 
+  it("shows both addresses when they differ, and ships them together once a teammate says they're the same place", async () => {
+    const ids = [JANE[0], "gid://shopify/Order/9050"];
+    const r = await call(`/merge/order?ids=${ids.join(",")}`);
+    expect(r.status).toBe(409);
+    expect(r.json.error).toMatch(/^ADDRESS_MISMATCH/);
+    expect(r.json.error).toContain("#1042: Jane Doe");
+    expect((await call("/merge/approve", { ids })).status).toBe(200);
+    expect((await call(`/merge/order?ids=${ids.join(",")}`)).json.order.merge.ids).toHaveLength(2);
+  });
+
   it("buys one label with the boxes as packed, marks every order shipped, and voiding undoes them all", async () => {
     const parcels = [{ length: 16, width: 12, height: 10, weight: 5, contents: [{ id: "gid://shopify/LineItem/251", title: "Gun", qty: 1 }] }, { length: 12, width: 10, height: 6, weight: 4 }];
     const r = await call("/labels", { orderId: JANE[0], mergeIds: [JANE[1]], to, parcels, serviceCode: "03", serviceName: "UPS Ground", fulfill: true, notifyCustomer: true });
