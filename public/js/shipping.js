@@ -1520,7 +1520,7 @@ function buildLabelForm(root, o, presets, opts) {
       o.tags?.length ? h("div", { class: "op-tags" }, o.tags.map((t) => h("span", { class: "badge plain" }, t))) : null,
       o.email ? h("button", { class: "btn sm email-customer", onclick: () => emailCustomer(o).catch((e) => toast(e.message, true)) }, icon("mail"), "Email customer") : null,
       h("div", { class: "row", style: { marginTop: "12px", gap: "6px" } },
-        h("button", { class: "btn sm", onclick: () => openPackingSlips(merge ? merge.ids : [o.id]), title: o.slipPrintedAt ? `Printed ${fullTime(o.slipPrintedAt)}` : null },
+        h("button", { class: "btn sm", onclick: () => openPackingSlips(merge ? merge.ids : [o.id], null, { merge: !!merge }), title: o.slipPrintedAt ? `Printed ${fullTime(o.slipPrintedAt)}` : null },
           "Packing slip", o.slipPrintedAt ? h("span", { class: "badge plain", style: { marginLeft: "4px" } }, icon("check"), "printed") : null),
         holdBtn,
         h("a", { class: "btn sm ghost", href: o.adminUrl, target: "_blank", rel: "noopener" }, "Shopify", icon("ext")))),
@@ -1732,7 +1732,7 @@ function buildLabelForm(root, o, presets, opts) {
         nextUp ? h("button", { class: "btn primary", onclick: () => openOrderPage(queueApi?.find(nextUp.id) ?? nextUp, { list: opts.list }) }, "Next order", h("span", { style: { opacity: 0.75 } }, nextUp.name), icon("down")) : null,
         h("button", { class: nextUp ? "btn" : "btn primary", onclick: () => printLabels({ ids: [r.id] }).catch((e) => toast(e.message, true)) }, icon("printer"), split() ? "Print labels again" : "Print again"),
         isIntl() ? h("button", { class: "btn", onclick: () => openCommercialInvoice({ shipmentId: r.id }).catch((e) => toast(e.message, true)) }, icon("printer"), "Commercial invoice") : null,
-        merge ? h("button", { class: "btn", onclick: () => openPackingSlips(merge.ids) }, "Packing slips") : (split() || partialActive()) && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, split() ? "Packing slips (one per box)" : "Packing slip for this box") : null,
+        merge ? h("button", { class: "btn", onclick: () => openPackingSlips(merge.ids, null, { merge: true }) }, "Packing slip") : (split() || partialActive()) && o ? h("button", { class: "btn", onclick: () => openPackingSlips([o.id], null, { shipment: r.id }) }, split() ? "Packing slips (one per box)" : "Packing slip for this box") : null,
         opts.ticketId ? h("a", { class: "btn", href: `/tickets/${opts.ticketId}`, "data-link": "", onclick: () => closeOrderPage(true) }, "Back to ticket") : null,
         (() => {
           const b = h("button", { class: "btn ghost", title: "Cancel this label so you're not charged" }, "Void label");

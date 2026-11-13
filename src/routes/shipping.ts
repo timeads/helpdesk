@@ -321,10 +321,28 @@ shipping.get("/scan/:code", async (c) => {
   // A box's packing slip: "1042/B2" (some scanners turn "/" into "-" or "?", so be forgiving)
   const boxMatch = /^(.*?)[\/?\-\s]B(\d{1,2})$/i.exec(raw);
   const code = boxMatch ? boxMatch[1] : raw;
-  let order: ShopifyOrder | undefined;
-  if (demo(c.env)) order = demoOrders().find((o) => o.name.replace("#", "").toLowerCase() === code.replace("#", "").toLowerCase());
-  else order = await findOrderByName(c.env, code);
-  if (!order) throw new HttpError(404, `No order ${code}`);
+  const byName = async (name: string) => {
+    const o = demo(c.env) ? demoOrders().find((x) => x.name.replace("#", "").toLowerCase() === name.replace("#", "").toLowerCase()) : await findOrderByName(c.env, name).catch(() => undefined);
+    if (!o) throw new HttpError(404, `No order ${name}`);
+    return o;
+  };
+  // Orders shipping together: their combined slip ("1042+1055-TG"), or any one of them once the group is saved
+  const parts = code.split("+").map((x) => x.trim()).filter(Boolean);
+  const first = await byName(parts[0]);
+  const groupIds = parts.length > 1
+    ? (await Promise.all(parts.map(byName))).map((o) => o.id)
+    : (await savedMerges(c.env)).find((m) => m.ids.includes(first.id))?.ids ?? null;
+  if (groupIds) {
+    const { order: g, shipment: groupShipment } = await groupView(c.env, groupIds);
+    const slips = await slipsFor(c.env, [g]);
+    const boxes = slips.filter((x) => x.box).map((x) => ({ n: x.box!.n, of: x.box!.of, name: x.box!.name, tracking: x.box!.tracking, qty: x.box!.qty }));
+    const n = boxMatch ? Number(boxMatch[2]) : null;
+    return c.json({
+      order: g, boxes, box: n && boxes.some((b) => b.n === n) ? n : null,
+      shipmentId: groupShipment?.id ?? null, printedBoxes: groupShipment ? Object.keys(printedBoxes(groupShipment)).map(Number) : [],
+    });
+  }
+  let order: ShopifyOrder | undefined = first;
   const bought = await c.env.DB.prepare("SELECT id, tracking_numbers, printed_boxes FROM shipments WHERE order_id = ? AND status = 'purchased' AND COALESCE(partial, 0) = 0 ORDER BY id DESC LIMIT 1")
     .bind(order.id).first<{ id: number; tracking_numbers: string; printed_boxes: string }>();
   // Once its label is bought Shopify counts the order as fulfilled, so pack it from the whole order, not just what's left
@@ -662,12 +680,15 @@ shipping.post("/labels", async (c) => {
  * inside Cloudflare's per-request limits and progress can be shown.
  */
 shipping.post("/labels/auto", async (c) => {
-  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown; rest?: string }>();
-  const found = await loadOrder(c.env, body.orderId);
+  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown; rest?: string; mergeIds?: unknown }>();
+  // Orders shipping together (packed at the scan station from their combined slip): one label for the group
+  const group = Array.isArray(body.mergeIds) && body.mergeIds.length ? (await mergeGroup(c.env, [body.orderId, ...body.mergeIds])).orders : null;
+  if (group && body.partial) throw new HttpError(400, "Ship part of an order isn't available when shipping orders together");
+  const found = group ? combineOrders(group) : await loadOrder(c.env, body.orderId);
   if (!found) throw new HttpError(404, "Order not found");
-  const order = remaining(found);
+  const order = group ? found : remaining(found);
   const partial = cleanPartial(body.partial, order);
-  const [d] = await describe(c.env, [order]);
+  const [d] = await describe(c.env, [order], group ? mergeDraftKey(group.map((o) => o.id)) : undefined);
   if (d.hasLabel) throw new HttpError(409, `${order.name} already has a label`);
   if (d.hold) throw new HttpError(409, `${order.name} is on hold: ${d.hold}`);
   const plan: Plan = d.plan;
@@ -719,6 +740,14 @@ shipping.post("/labels/auto", async (c) => {
     holdRest: body.rest !== "ship", // "ship": the rest goes in another box today, so it stays in To ship
   });
   if (isManualId(order.id)) await setManualStatus(c.env, order.id, "shipped");
+  if (group) {
+    const names = group.map((o) => o.name).join(" + ");
+    await c.env.DB.prepare("UPDATE shipments SET order_name = ? WHERE id = ?").bind(names.slice(0, 200), r.id).run();
+    const errors = [...(r.fulfillError ? [`${group[0].name}: ${r.fulfillError}`] : []), ...(await fulfillRiders(c.env, r, group.slice(1), body.notifyCustomer ?? true, true))];
+    await c.env.DB.prepare("DELETE FROM order_drafts WHERE order_id IN (?, ?)").bind(mergeDraftKey(group.map((o) => o.id)), group[0].id).run();
+    await unsaveMerge(c.env, group.map((o) => o.id));
+    return c.json({ ...r, orderName: names, serviceName: rate.serviceName, fulfillError: errors.length ? errors.join("; ") : null });
+  }
   return c.json({ ...r, orderName: order.name, serviceName: rate.serviceName });
 });
 
@@ -754,6 +783,35 @@ async function mergeGroup(env: Env, orderIds: unknown) {
   return { orders: orders.sort((a, b) => a.createdAt.localeCompare(b.createdAt)), described };
 }
 
+/**
+ * A ship-together group as one order: every item, the boxes saved for the group, and \`merge\` naming its orders.
+ * Its packing slip reads "1042+1055-TG", which the scan station reads back as the whole group.
+ */
+async function describeGroup(env: Env, ids: string[]) {
+  const { orders } = await mergeGroup(env, ids);
+  const key = mergeDraftKey(orders.map((o) => o.id));
+  const [d] = await describe(env, [combineOrders(orders)], key);
+  const merge = { ids: orders.map((o) => o.id), names: orders.map((o) => o.name), key };
+  return { orders, key, order: { ...d, name: orders.map((o) => o.name).join(" + "), merge }, slipOrder: { ...d, name: `#${orders.map((o) => o.name.replace(/^#/, "")).join("+")}`, merge } };
+}
+
+/**
+ * The group as one order whether or not its label is bought yet. Once bought (e.g. box 2's slip is scanned,
+ * or slips are printed after buying) every item shows as ordered, with that shipment.
+ */
+async function groupView(env: Env, ids: string[]) {
+  const shipment = await env.DB.prepare(`SELECT id, tracking_numbers, printed_boxes FROM shipments WHERE order_id IN (${ids.map(() => "?").join(",")}) AND status = 'purchased' AND COALESCE(partial, 0) = 0 ORDER BY id DESC LIMIT 1`)
+    .bind(...ids).first<{ id: number; tracking_numbers: string; printed_boxes: string }>();
+  if (!shipment) return { ...(await describeGroup(env, ids)), shipment: null };
+  const orders = (await Promise.all(ids.map((id) => loadOrder(env, id)))).filter((o): o is ShopifyOrder => !!o)
+    .map((o) => ({ ...o, lineItems: { ...o.lineItems, nodes: o.lineItems.nodes.map((l) => ({ ...l, unfulfilledQuantity: undefined })) } }))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const key = mergeDraftKey(ids);
+  const [d] = await describe(env, [combineOrders(orders)], key);
+  const merge = { ids: orders.map((o) => o.id), names: orders.map((o) => o.name), key };
+  return { orders, key, shipment, order: { ...d, name: orders.map((o) => o.name).join(" + "), merge }, slipOrder: { ...d, name: `#${orders.map((o) => o.name.replace(/^#/, "")).join("+")}`, merge } };
+}
+
 /** A teammate checked: these orders do go to the same place, so they can ship together after all. */
 shipping.post("/merge/approve", async (c) => {
   const { ids } = await c.req.json<{ ids?: unknown }>();
@@ -780,10 +838,8 @@ shipping.post("/merge/unsave", async (c) => {
 /** Orders shipping together as one order for the order page: every item, boxes to adjust, one label. */
 shipping.get("/merge/order", async (c) => {
   const ids = (c.req.query("ids") ?? "").split(",").filter(Boolean);
-  const { orders } = await mergeGroup(c.env, ids);
-  const key = mergeDraftKey(ids);
-  const [d] = await describe(c.env, [combineOrders(orders)], key);
-  return c.json({ order: { ...d, name: orders.map((o) => o.name).join(" + "), merge: { ids: orders.map((o) => o.id), names: orders.map((o) => o.name), key } } });
+  const { order } = await describeGroup(c.env, ids);
+  return c.json({ order });
 });
 
 /** The orders that rode along on a label: each is marked shipped with its tracking and remembered for voiding. */
@@ -1254,12 +1310,28 @@ shipping.post("/packing-slips/printed", async (c) => {
  * Slips for printing straight to a Zebra: the HTML of each slip (product photos inlined so the
  * browser can draw them) plus which were printed before. The browser turns each into ZPL.
  */
+/**
+ * Packing slips for orders shipping together (?merge=1): one slip listing every item, whose barcode
+ * ("1042+1055-TG") opens the whole group at the scan station. Printing it also saves the group.
+ */
+async function groupSlipOrder(env: Env, ids: string[], merge: boolean) {
+  if (!merge || ids.length < 2) return null;
+  try {
+    const g = await groupView(env, ids);
+    if (!g.shipment) await saveMerge(env, g.orders.map((o) => o.id)); // scanning any one of their slips now opens the group
+    return g.slipOrder;
+  } catch {
+    return null; // can't ship together (e.g. one went on hold): print each order's own slip
+  }
+}
+
 shipping.get("/packing-slips/data", async (c) => {
   const shipmentId = Number(c.req.query("shipment")) || 0; // one shipment's slips (e.g. a partial one)
   const forShipment = shipmentId ? await slipsForShipment(c.env, shipmentId) : null;
   const ids = forShipment ? [forShipment[0].order.id] : (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 50);
   if (!ids.length) throw new HttpError(400, "No orders selected");
-  const described = forShipment ? forShipment.map((x) => x.order) : await describe(c.env, demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids));
+  const grouped = forShipment ? null : await groupSlipOrder(c.env, ids, c.req.query("merge") === "1");
+  const described = forShipment ? forShipment.map((x) => x.order) : grouped ? [grouped] : await describe(c.env, demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids));
   const from = await getSetting<Address | null>(c.env, "ship_from", null);
   const layout = await slipLayout(c.env);
   if (layout.itemImages) {
@@ -1293,7 +1365,8 @@ shipping.get("/packing-slips", async (c) => {
   const ids = forShipment ? [forShipment[0].order.id] : (c.req.query("ids") ?? "").split(",").map(decodeURIComponent).filter((s) => s.startsWith("gid://")).slice(0, 100);
   if (!ids.length) throw new HttpError(400, "No orders selected");
   const size = c.req.query("size") === "letter" ? "letter" : "4x6";
-  const described = forShipment ? [forShipment[0].order] : await describe(c.env, demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids));
+  const grouped = forShipment ? null : await groupSlipOrder(c.env, ids, c.req.query("merge") === "1");
+  const described = forShipment ? [forShipment[0].order] : grouped ? [grouped] : await describe(c.env, demo(c.env) ? demoOrders().filter((o) => ids.includes(o.id)) : await ordersByIds(c.env, ids));
   const from = await getSetting<Address | null>(c.env, "ship_from", null);
   const layout = await slipLayout(c.env);
   const prints = await idMap(c.env, "SELECT order_id, printed_at || '|' || print_count AS v FROM packing_slip_prints WHERE order_id IN (?)", described.map((o) => o.id));
@@ -1302,7 +1375,7 @@ shipping.get("/packing-slips", async (c) => {
   const guard = printGuard({
     what: "packing slip",
     markUrl: "/api/shipping/packing-slips/printed",
-    markIds: described.map((o) => o.id),
+    markIds: grouped ? ids : described.map((o) => o.id),
     already: already.map((o) => { const [at, n] = prints.get(o.id)!.split("|"); return { name: o.name, at, count: Number(n) || 1 }; }),
     total: described.length,
     newOnlyUrl: already.length && fresh.length ? `/api/shipping/packing-slips?size=${size}&ids=${fresh.map((o) => encodeURIComponent(o.id)).join(",")}` : null,

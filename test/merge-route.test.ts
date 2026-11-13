@@ -12,7 +12,11 @@ vi.mock("../src/lib/fulfillment", async (orig) => ({
     return { id: r.id, carrier: "UPS", trackingNumbers: ["1ZX"], cost: 14.2, currency: "USD", fulfillError: null };
   }),
 }));
-vi.mock("../src/lib/carriers", async (orig) => ({ ...(await orig<typeof import("../src/lib/carriers")>()), voidLabel: vi.fn(async () => {}) }));
+vi.mock("../src/lib/carriers", async (orig) => ({
+  ...(await orig<typeof import("../src/lib/carriers")>()),
+  voidLabel: vi.fn(async () => {}),
+  getAllRates: vi.fn(async () => [{ serviceCode: "03", serviceName: "UPS Ground", total: 14.2, currency: "USD", carrier: "UPS", days: 4 }]),
+}));
 
 import shipping from "../src/routes/shipping";
 import { HttpError } from "../src/lib/util";
@@ -41,6 +45,30 @@ describe("shipping orders together from the order page", () => {
     expect(json.order).toMatchObject({ id: JANE[0], name: "#1042 + #1055-TG", merge: { ids: JANE, names: ["#1042", "#1055-TG"], key: `merge:${[...JANE].sort().join(",")}` } });
     expect(json.order.lineItems.nodes.map((l: any) => l.fromOrder)).toEqual(["#1042", "#1042", "#1055-TG"]);
     expect((await call(`/merge/order?ids=${JANE[0]},gid://shopify/Order/9050`)).status).toBe(409); // a different address
+  });
+
+  it("prints one packing slip for the group, and its barcode (or either order's own) opens the whole group at the scan station", async () => {
+    const env2 = env;
+    const slip = await app.request(`/packing-slips/data?ids=${JANE.map(encodeURIComponent).join(",")}&merge=1`, {}, env2);
+    const data = (await slip.json()) as any;
+    expect(data.slips).toHaveLength(1);
+    expect(data.slips[0].html).toContain("1042+1055-TG");
+    const byCombined = (await (await app.request("/scan/1042%2B1055-TG", {}, env2)).json()) as any;
+    expect(byCombined.order.merge.ids).toEqual(JANE);
+    expect(byCombined.order.lineItems.nodes).toHaveLength(3);
+    // printing the combined slip saved the group, so the second order's own slip opens it too
+    const byOne = (await (await app.request("/scan/1055-TG", {}, env2)).json()) as any;
+    expect(byOne.order.merge.ids).toEqual(JANE);
+  });
+
+  it("buys one label for the group from the scan station, every order marked shipped", async () => {
+    env.DB.raw.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ship_from', ?)").run(JSON.stringify({ name: "TTW", address1: "1 Main St", city: "Philadelphia", state: "PA", zip: "19143", country: "US", phone: "2155550100" }));
+    const r = await call("/labels/auto", { orderId: JANE[0], mergeIds: [JANE[1]], policy: "cheapest", parcels: [{ length: 16, width: 12, height: 10, weight: 9 }] });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json.orderName).toBe("#1042 + #1055-TG");
+    expect(bought.inputs[0].order.lineItems.nodes).toHaveLength(3);
+    const q = (await call("/queue")).json;
+    expect(q.orders.filter((o: any) => JANE.includes(o.id)).map((o: any) => o.hasLabel)).toEqual([true, true]);
   });
 
   it("shows both addresses when they differ, and ships them together once a teammate says they're the same place", async () => {

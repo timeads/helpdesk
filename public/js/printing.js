@@ -299,20 +299,21 @@ export async function printLabels({ ids, batch, box = null }, win = null) {
 export const slipsDirect = () => printSettings().labels === "zebra" && printSettings().slips === "4x6" && printSettings().slipsDirect !== false;
 
 /** Packing slips for orders, or ({ shipment }) for one shipment — e.g. what's in a partial shipment. */
-export function openPackingSlips(orderIds, win = null, { shipment = null } = {}) {
+/** merge: the orders ship together, so print one slip for the group (its barcode opens the whole group at the scan station). */
+export function openPackingSlips(orderIds, win = null, { shipment = null, merge = false } = {}) {
   if (slipsDirect()) {
     if (win && !win.closed) win.close();
-    return printSlipsToZebra(orderIds, { shipment });
+    return printSlipsToZebra(orderIds, { shipment, merge });
   }
-  const url = `/api/shipping/packing-slips?size=${printSettings().slips}${shipment ? `&shipment=${shipment}` : `&ids=${orderIds.map(encodeURIComponent).join(",")}`}`;
+  const url = `/api/shipping/packing-slips?size=${printSettings().slips}${shipment ? `&shipment=${shipment}` : `&ids=${orderIds.map(encodeURIComponent).join(",")}${merge ? "&merge=1" : ""}`}`;
   if (win && !win.closed) win.location.href = url;
   else if (!window.open(url, "_blank")) toast("Allow pop-ups for this site to print packing slips", true);
 }
 
 /** Draws each slip, converts it to ZPL and sends it to the Zebra — no window, no dialog. */
-export async function printSlipsToZebra(orderIds, { sample = false, shipment = null } = {}) {
+export async function printSlipsToZebra(orderIds, { sample = false, shipment = null, merge = false } = {}) {
   try {
-    const res = await fetch(`/api/shipping/packing-slips/data?${shipment ? `shipment=${shipment}` : `ids=${orderIds.map(encodeURIComponent).join(",")}`}`, { credentials: "same-origin" });
+    const res = await fetch(`/api/shipping/packing-slips/data?${shipment ? `shipment=${shipment}` : `ids=${orderIds.map(encodeURIComponent).join(",")}${merge ? "&merge=1" : ""}`}`, { credentials: "same-origin" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Couldn't load the packing slips");
     let slips = data.slips;
@@ -333,11 +334,11 @@ export async function printSlipsToZebra(orderIds, { sample = false, shipment = n
     const zpl = [];
     for (const s of slips) zpl.push(await slipToZpl(s.html, data.css, dpi));
     const device = await sendZpl(zpl.join("\n"));
-    if (!sample) fetch("/api/shipping/packing-slips/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: slips.map((s) => s.id) }) }).catch(() => {});
+    if (!sample) fetch("/api/shipping/packing-slips/printed", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: merge ? orderIds : slips.map((s) => s.id) }) }).catch(() => {});
     toast(`${slips.length} packing slip${slips.length === 1 ? "" : "s"} sent to ${device.name || "the Zebra"}`);
   } catch (e) {
     // Never stuck at the packing station: offer the normal print dialog for the same slips
-    const url = `/api/shipping/packing-slips?size=4x6&ids=${orderIds.map(encodeURIComponent).join(",")}`;
+    const url = `/api/shipping/packing-slips?size=4x6&ids=${orderIds.map(encodeURIComponent).join(",")}${merge ? "&merge=1" : ""}`;
     actionToast(`Zebra didn't take it: ${e.message}`, "Print with dialog instead", () => window.open(url, "_blank"), 20000);
   }
 }
