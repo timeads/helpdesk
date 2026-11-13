@@ -5,7 +5,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Env } from "../env";
 import { ask } from "./manual";
-import { cleanHtml, kbArticles, kbPending, kbScanBatch, rankArticles, slugify, textOf, uniqueId, type KbArticle } from "./kb";
+import { cleanHtml, kbArticles, kbScanBatch, rankArticles, slugify, textOf, uniqueId, type KbArticle } from "./kb";
 import { shopify } from "./shopify";
 import { HttpError, getSetting, nowIso, setSetting } from "./util";
 
@@ -261,7 +261,13 @@ export async function autoMergeTick(env: Env) {
   await setSetting(env, "kb_auto_merge_at", nowIso());
   const waiting = await env.DB.prepare("SELECT COUNT(*) AS n FROM kb_suggestions WHERE status = 'pending'").first<{ n: number }>();
   if ((waiting?.n ?? 0) > 0) await integrateSuggestions(env, null, 1);
-  else if ((await kbPending(env)) > 0) await kbScanBatch(env, 4);
+  else {
+    // Looking for unread conversations reads the whole year of tickets; once there are none, look again in 6 hours
+    const idleUntil = await getSetting<number | null>(env, "kb_scan_idle_until", null);
+    if (idleUntil && Date.now() < idleUntil) return;
+    const r = await kbScanBatch(env, 4);
+    if (!r.read || !r.remaining) await setSetting(env, "kb_scan_idle_until", Date.now() + 6 * 3600_000);
+  }
 }
 
 /** Earlier versions of an article, newest first. */

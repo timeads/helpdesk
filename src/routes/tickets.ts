@@ -185,7 +185,7 @@ tickets.get("/counts", async (c) => {
        (SELECT COUNT(*) FROM chats WHERE state = 'waiting') AS chats_waiting,
        SUM(status IN ('open','in_progress') AND channel = 'chat' AND folder_id IS NULL) AS chats,
        SUM(status = 'open' AND channel IN ('instagram', 'facebook') AND folder_id IS NULL) AS social
-     FROM tickets`,
+     FROM tickets WHERE status IN ('open','in_progress','snoozed','spam')`, // only these are counted, so the status index skips the closed archive
   )
     .bind(me)
     .first<Record<string, number>>();
