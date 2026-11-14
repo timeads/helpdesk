@@ -127,7 +127,7 @@ const address = (a: Address) => ({
   street1: a.address1,
   street2: a.address2 || undefined,
   city: a.city,
-  state: a.state,
+  state: a.state || undefined, // many countries have none
   zip: a.zip,
   country: a.country || "US",
   phone: normalizePhone(a.phone, a.country) || undefined,

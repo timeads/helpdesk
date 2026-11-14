@@ -71,6 +71,14 @@ describe("shipping orders together from the order page", () => {
     expect(q.orders.filter((o: any) => JANE.includes(o.id)).map((o: any) => o.hasLabel)).toEqual([true, true]);
   });
 
+  it("doesn't ask for a state on addresses abroad that have none (Denmark), but still does in the US", async () => {
+    const dk = { name: "Mette Hansen", address1: "Vesterbrogade 1", city: "København", state: "", zip: "1620", country: "DK", phone: "4512345678" };
+    const abroad = await call("/labels", { to: dk, parcels: [{ length: 10, width: 8, height: 4, weight: 2 }], serviceCode: "65", serviceName: "UPS Worldwide Saver" });
+    expect(abroad.json.error ?? "").not.toMatch(/state/i);
+    const us = await call("/labels", { to: { ...dk, country: "US", zip: "19143" }, parcels: [{ length: 10, width: 8, height: 4, weight: 2 }], serviceCode: "03", serviceName: "UPS Ground" });
+    expect(us.json.error).toMatch(/missing state/);
+  });
+
   it("shows both addresses when they differ, and ships them together once a teammate says they're the same place", async () => {
     const ids = [JANE[0], "gid://shopify/Order/9050"];
     const r = await call(`/merge/order?ids=${ids.join(",")}`);

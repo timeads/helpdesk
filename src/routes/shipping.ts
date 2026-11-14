@@ -48,9 +48,16 @@ function validParcels(parcels: Parcel[]): Parcel[] {
   });
 }
 
+/** Countries whose addresses need a state/province (most of the world, e.g. Denmark, has none). */
+const STATE_COUNTRIES = new Set(["US", "CA", "AU", "MX", "BR", "IN", "CN", "JP", "AR", "MY"]);
+/** Countries without postal codes. */
+const NO_POSTCODE = new Set(["HK", "MO", "AE", "QA", "AG", "AW", "BS", "BZ", "BO", "FJ", "GD", "JM", "KN", "LC", "VC", "TT", "ZW"]);
+
 function validAddress(a: Address): Address {
-  for (const k of ["name", "address1", "city", "state", "zip", "country"] as const) {
-    if (!a?.[k]?.toString().trim()) throw new HttpError(400, `Ship-to address is missing ${k}`);
+  const country = String(a?.country || "US").trim().toUpperCase();
+  const need = ["name", "address1", "city", "country", ...(STATE_COUNTRIES.has(country) ? ["state"] : []), ...(NO_POSTCODE.has(country) ? [] : ["zip"])] as const;
+  for (const k of need) {
+    if (!a?.[k as keyof Address]?.toString().trim()) throw new HttpError(400, `Ship-to address is missing ${k === "zip" ? "postal code" : k}`);
   }
   return a;
 }

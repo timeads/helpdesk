@@ -153,7 +153,7 @@ export function upsAddress(a: Address, opts: { residential?: boolean } = {}) {
   return {
     AddressLine: [a.address1, a.address2].filter(Boolean).map((l) => trunc(l, 35)),
     City: trunc(a.city, 30),
-    StateProvinceCode: a.state,
+    ...(a.state?.trim() ? { StateProvinceCode: a.state.trim() } : {}), // many countries (e.g. Denmark) have none
     PostalCode: a.zip,
     CountryCode: a.country,
     ...(opts.residential ? { ResidentialAddressIndicator: "" } : {}),
