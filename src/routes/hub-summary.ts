@@ -15,10 +15,14 @@ export async function loadHubStats(db: D1Database, p: HubPeriods): Promise<HubSt
        FROM tickets WHERE status IN ('closed','archived') AND closed_at >= ?3`,
     ).bind(iso(p.weekStart), until, iso(p.prevWeekStart), iso(p.prevWeekUntil)).first<{ cur: number; prev: number }>(),
     // Email tickets opened this week: hours to the first reply a teammate sent (automatic replies have no teammate)
+    // This week's tickets by the created_at index, each with its first reply via the (ticket_id, sent_at) index
+    // (joining every message first read ~90k rows and took seconds)
     db.prepare(
-      `SELECT (julianday(MIN(m.sent_at)) - julianday(t.created_at)) * 24 AS hours
-       FROM tickets t JOIN messages m ON m.ticket_id = t.id AND m.direction = 'out' AND m.kind IS NULL AND m.agent_id IS NOT NULL AND m.sent_at > t.created_at
-       WHERE t.channel = 'email' AND t.created_at >= ?1 AND t.created_at < ?2 AND t.status NOT IN ('spam','deleted') GROUP BY t.id`,
+      `SELECT hours FROM (
+         SELECT (julianday((SELECT MIN(m.sent_at) FROM messages m WHERE m.ticket_id = t.id AND m.sent_at > t.created_at
+                            AND m.direction = 'out' AND m.kind IS NULL AND m.agent_id IS NOT NULL)) - julianday(t.created_at)) * 24 AS hours
+         FROM tickets t WHERE t.created_at >= ?1 AND t.created_at < ?2 AND t.channel = 'email' AND t.status NOT IN ('spam','deleted')
+       ) WHERE hours IS NOT NULL`,
     ).bind(iso(p.weekStart), until).all<{ hours: number }>(),
     // Live chats started in the period that got an answer from a teammate or the chat assistant
     db.prepare(
