@@ -84,6 +84,7 @@ const ORDER_FIELDS_TEMPLATE = `
   totalDiscountsSet: currentTotalDiscountsSet { shopMoney { amount } }
   totalTaxSet: currentTotalTaxSet { shopMoney { amount } }
   shippingAddress { ${ADDRESS} }
+  billingAddress { name company phone }
   shippingLines(first: 1) { nodes { title } }
   customAttributes { key value }
   lineItems(first: __LINES__) {
@@ -142,6 +143,8 @@ export interface ShopifyOrder {
   totalDiscountsSet?: { shopMoney: { amount: string } } | null;
   totalTaxSet?: { shopMoney: { amount: string } } | null;
   shippingAddress: Record<string, string | null> | null;
+  /** Who it's for when there's no shipping address (in-store pickup) */
+  billingAddress?: { name: string | null; company: string | null; phone: string | null } | null;
   shippingLines: { nodes: { title: string }[] };
   /** Order attributes (marketplace apps put the Amazon order id and ship-by dates here) */
   customAttributes?: { key: string; value: string | null }[];

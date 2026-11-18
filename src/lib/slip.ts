@@ -83,7 +83,8 @@ export function cleanSlip(input: any): SlipLayout {
 
 export const slipLayout = async (env: Env) => cleanSlip(await getSetting<unknown>(env, "slip_layout", DEFAULT_SLIP));
 
-export type SlipOrder = Pick<ShopifyOrder, "name" | "createdAt" | "note" | "shippingAddress" | "lineItems"> & {
+export type SlipOrder = Pick<ShopifyOrder, "name" | "createdAt" | "note" | "shippingAddress" | "lineItems"> & Partial<Pick<ShopifyOrder, "email" | "phone" | "billingAddress">> & {
+  pickup?: boolean;
   requestedService?: string;
   plan?: { preset?: unknown; boxes: { preset?: { name: string } | null }[] };
 };
@@ -115,7 +116,10 @@ export function renderSlip(o: SlipOrder, size: "4x6" | "letter", from: Address |
 
   const boxes = o.plan?.boxes ?? [];
   const parts: Record<SlipSection, () => string> = {
-    shipto: () => `<div class="sec"><div class="lbl">Ship to</div><div>${br([a.name, a.company, a.address1, a.address2, `${a.city ?? ""}, ${a.provinceCode ?? ""} ${a.zip ?? ""}`, a.countryCodeV2 && a.countryCodeV2 !== "US" ? a.country : ""].filter(Boolean).join("\n"))}</div></div>`,
+    // In-store pickup has no shipping address: name the customer (from the order's billing details) so the box is theirs
+    shipto: () => o.pickup || !a.address1
+      ? `<div class="sec"><div class="lbl">${o.pickup ? "Pickup for" : "Customer"}</div><div>${br([a.name || o.billingAddress?.name, a.company || o.billingAddress?.company, a.phone || o.billingAddress?.phone || o.phone, o.email].filter(Boolean).join("\n") || "—")}</div></div>`
+      : `<div class="sec"><div class="lbl">Ship to</div><div>${br([a.name, a.company, a.address1, a.address2, `${a.city ?? ""}, ${a.provinceCode ?? ""} ${a.zip ?? ""}`, a.countryCodeV2 && a.countryCodeV2 !== "US" ? a.country : ""].filter(Boolean).join("\n"))}</div></div>`,
     shipping: () => box
       ? `<div class="sec"><div class="lbl">Shipping</div><div>${esc(o.requestedService || "—")}</div><div class="lbl" style="margin-top:4px">Box ${box.n} of ${box.of}</div><div>${esc(box.name ?? "Custom")}</div>${box.tracking ? `<div class="lbl" style="margin-top:4px">Tracking</div><div>${esc(box.tracking)}</div>` : ""}</div>`
       : `<div class="sec"><div class="lbl">Shipping</div><div>${esc(o.requestedService || "—")}</div>${o.plan?.preset && boxes.length ? `<div class="lbl" style="margin-top:4px">${boxes.length > 1 ? `Boxes (${boxes.length})` : "Box"}</div><div>${esc(boxes.map((b) => b.preset?.name ?? "Custom").join(" + "))}</div>` : ""}</div>`,

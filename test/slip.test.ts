@@ -61,4 +61,15 @@ describe("split orders", () => {
     // The box's own barcode (scans as "<order>/B2") is labelled under it
     expect(html).toMatch(/class="v">\d+ · Box 2 of 2</);
   });
+
+  it("names the customer on a pickup order, which has no shipping address", () => {
+    const layout = cleanSlip({});
+    const o = { ...order(), shippingAddress: null, pickup: true, email: "priya@example.com", phone: null, billingAddress: { name: "Priya Shah", company: null, phone: "2155550100" } } as any;
+    const html = renderSlip(o, "4x6", null, layout);
+    expect(html).toContain("Pickup for");
+    expect(html).toContain("Priya Shah");
+    expect(html).toContain("2155550100");
+    expect(html).toContain("priya@example.com");
+    expect(html).not.toContain(">Ship to<");
+  });
 });
