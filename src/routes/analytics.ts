@@ -84,12 +84,14 @@ analytics.get("/", async (c) => {
     ).bind(since),
     db.prepare(`SELECT COUNT(*) AS n FROM tickets WHERE created_at >= ? AND status NOT IN ('spam','deleted')`).bind(since),
     db.prepare(`SELECT COUNT(*) AS n FROM tickets WHERE status IN ('closed','archived') AND closed_at >= ?`).bind(since),
-    db.prepare(`SELECT SUM(status = 'open') AS open, SUM(status = 'in_progress') AS in_progress, SUM(status = 'snoozed') AS snoozed FROM tickets`),
+    db.prepare(`SELECT SUM(status = 'open') AS open, SUM(status = 'in_progress') AS in_progress, SUM(status = 'snoozed') AS snoozed FROM tickets WHERE status IN ('open','in_progress','snoozed')`),
     // Hours from a ticket's first message to our first reply
+    // (each ticket's first reply by the (ticket_id, sent_at) index, rather than joining every message)
     db.prepare(
-      `SELECT (julianday(MIN(m.sent_at)) - julianday(t.created_at)) * 24 AS hours
-       FROM tickets t JOIN messages m ON m.ticket_id = t.id AND m.direction = 'out' AND m.sent_at > t.created_at
-       WHERE t.created_at >= ? GROUP BY t.id`,
+      `SELECT hours FROM (
+         SELECT (julianday((SELECT MIN(m.sent_at) FROM messages m WHERE m.ticket_id = t.id AND m.sent_at > t.created_at AND m.direction = 'out')) - julianday(t.created_at)) * 24 AS hours
+         FROM tickets t WHERE t.created_at >= ?
+       ) WHERE hours IS NOT NULL`,
     ).bind(since),
     db.prepare(
       `SELECT day, SUM(c) AS created, SUM(x) AS closed FROM (

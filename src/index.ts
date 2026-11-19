@@ -5,6 +5,7 @@ import { runBackfill, syncMailbox } from "./lib/gmail";
 import { wakeSnoozed } from "./lib/support";
 import { HttpError } from "./lib/util";
 import { withCredentials } from "./lib/credentials";
+import { withRetryingDb } from "./lib/d1-retry";
 import authRoutes from "./routes/auth";
 import ticketRoutes from "./routes/tickets";
 import shippingRoutes from "./routes/shipping";
@@ -85,7 +86,9 @@ app.route("/api", api);
 app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, rawEnv: Env, ctx: ExecutionContext) {
+    // A busy database ("overloaded") is retried briefly instead of failing the request
+    const env = withRetryingDb(rawEnv);
     // Raw env stays reachable for the credentials screen, which must tell app-entered from Cloudflare values
     const path = new URL(request.url).pathname;
     if (!path.startsWith("/api/") && !path.startsWith("/chat-api/") && !path.startsWith("/meta/")) return app.fetch(request, env, ctx);
@@ -96,7 +99,7 @@ export default {
     return app.fetch(request, withRaw, ctx);
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    const merged = await withCredentials(env);
+    const merged = await withCredentials(withRetryingDb(env));
     ctx.waitUntil(
       Promise.all([
         syncMailbox(merged).catch((e) => console.error("Mail sync failed", e)),
