@@ -208,7 +208,15 @@ function createInbox(main, loc) {
   let searchTimer;
   search.addEventListener("input", () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => { self.q = search.value.trim(); loadList(); }, 250);
+    // While typing: names, emails, subjects and previews (quick). Enter also searches every message's text.
+    searchTimer = setTimeout(() => { self.q = search.value.trim(); self.deep = false; loadList(); }, 350);
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    clearTimeout(searchTimer);
+    self.q = search.value.trim();
+    self.deep = !!self.q;
+    loadList();
   });
   syncBtn.addEventListener("click", busy(syncBtn, async () => {
     const r = await api("/tickets/sync", { method: "POST" });
@@ -222,6 +230,7 @@ function createInbox(main, loc) {
   async function loadList(append = false) {
     const p = qs();
     if (self.q) p.set("q", self.q);
+    if (self.q && self.deep) p.set("deep", "1");
     if (append) p.set("offset", String(self.tickets.length));
     try {
       const { tickets, more } = await api("/tickets?" + p);
@@ -243,7 +252,8 @@ function createInbox(main, loc) {
       mount(listEl, h("div", { class: "empty fade-in" },
         zero ? rugArt() : null,
         h("h2", {}, self.q ? "No matches" : zero ? "Inbox zero" : "Nothing here"),
-        h("p", {}, self.q ? `Nothing matches “${self.q}”. Search covers names, emails, subjects, message text and ticket numbers.`
+        self.q && !self.deep ? h("button", { class: "btn", onclick: () => { self.deep = true; loadList(); } }, icon("search"), "Also search message text") : null,
+        h("p", {}, self.q ? (self.deep ? `Nothing matches “${self.q}” in names, emails, subjects, message text or ticket numbers.` : `Nothing matches “${self.q}” in names, emails, subjects or ticket numbers. Press Enter (or the button) to search the text of every message too.`)
           : zero ? "New mail to support@ shows up here within a minute." : activeFilters() ? "No tickets match these filters." : "Tickets will appear here as their status changes.")));
       return;
     }
@@ -271,7 +281,8 @@ function createInbox(main, loc) {
             : t.status === "open" ? h("span", { class: "badge warn plain" }, "Unassigned") : null,
           tagChips(t.tags, 2),
           t.message_count > 1 ? h("span", { class: "small muted count", title: `${t.message_count} messages` }, t.message_count) : null),
-      )), self.more ? loadMore : null);
+      )), self.more ? loadMore : null,
+      self.q && !self.deep ? h("button", { class: "btn sm ghost load-more", title: "Slower: reads every email", onclick: () => { self.deep = true; loadList(); } }, icon("search"), "Also search message text") : null);
   }
 
   function nextTicketId(afterId) {

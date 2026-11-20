@@ -37,6 +37,8 @@ interface ViewFilters {
   priority?: string;
   unread?: boolean;
   q?: string;
+  /** Search the text of every message too (slow: reads every email). Off while typing in the search box. */
+  deep?: boolean;
   channel?: string; // "chat" for website chats, "instagram" / "facebook", or "social" for both
   folder?: number; // a ticket folder's contents (filed tickets are left out of every other view but All, Closed and searches)
 }
@@ -117,11 +119,12 @@ function whereFor(f: ViewFilters, agentId: number, view = ""): { sql: string; ar
   } else if (!q && !SHOWS_FILED.has(view)) clauses.push("t.folder_id IS NULL");
   if (q) {
     const like = `%${q}%`;
+    const deep = f.deep !== false;
     clauses.push(
-      `(t.subject LIKE ? OR t.customer_email LIKE ? OR t.customer_name LIKE ? OR t.snippet LIKE ? OR CAST(t.id AS TEXT) = ?
-        OR t.id IN (SELECT ticket_id FROM messages WHERE body_text LIKE ? LIMIT 200))`,
+      `(t.subject LIKE ? OR t.customer_email LIKE ? OR t.customer_name LIKE ? OR t.snippet LIKE ? OR CAST(t.id AS TEXT) = ?${deep
+        ? " OR t.id IN (SELECT ticket_id FROM messages WHERE body_text LIKE ? LIMIT 200)" : ""})`,
     );
-    args.push(like, like, like, like, q.replace(/^#/, ""), like);
+    args.push(like, like, like, like, q.replace(/^#/, ""), ...(deep ? [like] : []));
   }
   return { sql: clauses.join(" AND ") || "1 = 1", args };
 }
@@ -134,7 +137,8 @@ async function listWhere(env: Env, query: Record<string, string>, agentId: numbe
   if (query.assignee) f.assignee = query.assignee;
   if (query.priority) f.priority = query.priority;
   if (query.unread === "1") f.unread = true;
-  if (query.q) f.q = query.q;
+  // Typed searches look at names, emails, subjects, previews and #numbers; message text only when asked (deep=1)
+  if (query.q) { f.q = query.q; f.deep = query.deep === "1"; }
   if (query.status) f.status = query.status;
   return whereFor(f, agentId, view);
 }

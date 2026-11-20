@@ -64,3 +64,12 @@ describe("ticket folders", () => {
     expect((await call("PATCH", "/tickets/2", { folder_id: 99 })).status).toBe(404);
   });
 });
+
+describe("ticket search", () => {
+  it("searches names, subjects and previews while typing, and message text only when asked (Enter)", async () => {
+    env.DB.raw.prepare("INSERT INTO messages (ticket_id, direction, from_email, sent_at, body_text) VALUES (2, 'in', 'jane@example.com', ?, 'my yarn tangled in the gun')").run(new Date().toISOString());
+    expect(await ids("view=all&q=Duo")).toEqual([3]); // subject: found while typing
+    expect(await ids("view=all&q=tangled")).toEqual([]); // only in an email's text: not while typing
+    expect(await ids("view=all&q=tangled&deep=1")).toEqual([2]); // …but with Enter
+  });
+});
