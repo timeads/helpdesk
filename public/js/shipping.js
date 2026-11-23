@@ -571,6 +571,7 @@ function renderQueue(root, params) {
     const batch = newBatchId();
     const done = [];
     const failed = [];
+    const unconfirmed = [];
     const bar = h("div", { class: "progress" }, h("i", { style: { width: "0%" } }));
     const status = h("div", { class: "small" });
     mount(progress, h("div", { class: "card", role: "status" }, h("div", { class: "row" }, spinner(), h("b", {}, "Buying labels…"), h("span", { class: "small muted" }, `Batch ${batch}`)), bar, status));
@@ -580,9 +581,24 @@ function renderQueue(root, params) {
         const r = await api("/shipping/labels/auto", { method: "POST", body: { orderId: o.id, policy, labelFormat: labelFormat(), batchId: batch } });
         done.push(r);
       } catch (e) {
-        failed.push(`${o.name}: ${e.message}`);
+        if (String(e.message).startsWith("ADDRESS:")) unconfirmed.push([o, e.message.replace(/^ADDRESS:\s*/, "")]);
+        else failed.push(`${o.name}: ${e.message}`);
       }
       bar.firstChild.style.width = `${Math.round(((i + 1) / ready.length) * 100)}%`;
+    }
+    // Addresses the carrier couldn't confirm: one question for all of them (yes remembers each as correct)
+    if (unconfirmed.length) {
+      const list = unconfirmed.map(([, m]) => m.replace(/ — open it to (fix the address|review)$/, "")).join("\n");
+      if (confirm(`The carrier couldn't confirm ${unconfirmed.length === 1 ? "this address" : `${unconfirmed.length} addresses`}:\n${list}\n\nAre they right? Buy anyway — each address is remembered as correct for future orders.`)) {
+        for (const [o] of unconfirmed) {
+          status.textContent = `${o.name} (address OK'd)`;
+          try {
+            done.push(await api("/shipping/labels/auto", { method: "POST", body: { orderId: o.id, policy, labelFormat: labelFormat(), batchId: batch, addressOk: true } }));
+          } catch (e) {
+            failed.push(`${o.name}: ${e.message}`);
+          }
+        }
+      } else failed.push(...unconfirmed.map(([, m]) => m));
     }
     const spend = done.reduce((n, r) => n + r.cost, 0);
     mount(progress, h("div", { class: "card" },

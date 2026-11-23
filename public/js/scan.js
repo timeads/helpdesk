@@ -33,6 +33,18 @@ const toAddress = (o) => {
 };
 let presetsCache = null;
 
+/** Buys the label; when the carrier couldn't confirm the address, asks before buying anyway (the address is then remembered as good). */
+async function buyAuto(body) {
+  try {
+    return await api("/shipping/labels/auto", { method: "POST", body });
+  } catch (e) {
+    if (!String(e.message).startsWith("ADDRESS:")) throw e;
+    const msg = e.message.replace(/^ADDRESS:\s*/, "").replace(/ — open it to (fix the address|review)$/, "");
+    if (!confirm(`${msg}.\n\nIs the address right? Buy the label anyway — the address is remembered as correct for future orders.`)) throw Object.assign(new Error("Not bought — check the address on the order page"), { status: 422 });
+    return api("/shipping/labels/auto", { method: "POST", body: { ...body, addressOk: true } });
+  }
+}
+
 export function renderScan(root, { openSlideout }) {
   // boxes/boxN: a split order's boxes and the one whose slip was scanned; byBox keeps each box's counts and packed: which boxes are done
   const st = { order: null, counts: new Map(), box: null, quote: null, qseq: 0, boxes: [], boxN: null, byBox: new Map(), packed: new Set() };
@@ -259,7 +271,7 @@ export function renderScan(root, { openSlideout }) {
         if (st.box && (st.box.changed || partial)) {
           body.parcels = [parcelFor(partial ? qty : null, partial ? o.lineItems.nodes.filter((l) => qty(l) > 0).map((l) => ({ id: l.id, title: l.title, qty: qty(l) })) : undefined)];
         }
-        const r = await api("/shipping/labels/auto", { method: "POST", body });
+        const r = await buyAuto(body);
         await printLabels({ ids: [r.id] }, win);
         toast(`${o.name}: ${r.serviceName} · ${money(r.cost, r.currency)}`);
         beep(true);
@@ -292,7 +304,7 @@ export function renderScan(root, { openSlideout }) {
         let id = st.shipmentId;
         if (!id) {
           // First box: buy the labels for every box as one shipment, then print only this one
-          const r = await api("/shipping/labels/auto", { method: "POST", body: { orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: false, mergeIds: riders() } });
+          const r = await buyAuto({ orderId: o.id, policy: "rule", labelFormat: labelFormat(), scanVerified: false, mergeIds: riders() });
           id = st.shipmentId = r.id;
           o.hasLabel = true;
           st.boxes = st.boxes.map((b, i) => ({ ...b, tracking: r.trackingNumbers?.[i] ?? b.tracking }));

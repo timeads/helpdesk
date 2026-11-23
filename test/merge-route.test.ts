@@ -79,6 +79,21 @@ describe("shipping orders together from the order page", () => {
     expect(us.json.error).toMatch(/missing state/);
   });
 
+  it("asks before buying to an address the carrier couldn't confirm, and remembers it once OK'd", async () => {
+    env.DB.raw.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ship_from', ?)").run(JSON.stringify({ name: "TTW", address1: "1 Main St", city: "Philadelphia", state: "PA", zip: "19143", country: "US", phone: "2155550100" }));
+    const { trustAddress } = await import("../src/lib/address");
+    await trustAddress(env, { name: "Jane Doe", address1: "100 Example St", address2: "", city: "Austin", state: "TX", zip: "78701", country: "US" } as any, "x");
+    env.DB.raw.prepare("UPDATE address_checks SET result = ?").run(JSON.stringify({ status: "invalid", residential: null, suggestion: null, provider: "UPS", message: "UPS couldn't find this address" }));
+    const body = { orderId: "gid://shopify/Order/9055", policy: "cheapest", parcels: [{ length: 10, width: 8, height: 4, weight: 2 }] };
+    const first = await call("/labels/auto", body);
+    expect(first.status).toBe(422);
+    expect(first.json.error).toMatch(/^ADDRESS: #1055-TG: ups couldn't find this address/);
+    const ok = await call("/labels/auto", { ...body, addressOk: true });
+    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
+    const row = env.DB.raw.prepare("SELECT result FROM address_checks").get() as any;
+    expect(JSON.parse(row.result)).toMatchObject({ status: "valid", trusted: true });
+  });
+
   it("shows both addresses when they differ, and ships them together once a teammate says they're the same place", async () => {
     const ids = [JANE[0], "gid://shopify/Order/9050"];
     const r = await call(`/merge/order?ids=${ids.join(",")}`);

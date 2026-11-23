@@ -695,7 +695,7 @@ shipping.post("/labels", async (c) => {
  * inside Cloudflare's per-request limits and progress can be shown.
  */
 shipping.post("/labels/auto", async (c) => {
-  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown; rest?: string; mergeIds?: unknown }>();
+  const body = await c.req.json<{ orderId: string; policy?: string; labelFormat?: string; batchId?: string; notifyCustomer?: boolean; scanVerified?: boolean; partial?: unknown; parcels?: unknown; rest?: string; mergeIds?: unknown; addressOk?: boolean }>();
   // Orders shipping together (packed at the scan station from their combined slip): one label for the group
   const group = Array.isArray(body.mergeIds) && body.mergeIds.length ? (await mergeGroup(c.env, [body.orderId, ...body.mergeIds])).orders : null;
   if (group && body.partial) throw new HttpError(400, "Ship part of an order isn't available when shipping orders together");
@@ -719,8 +719,12 @@ shipping.post("/labels/auto", async (c) => {
     if (problems.length) throw new HttpError(422, `${order.name}: ${problems[0]} — open it to fix the customs list`);
   }
   const check = await checkAddress(c.env, to);
-  if (check.status === "invalid") throw new HttpError(422, `${order.name}: ${check.message.toLowerCase()} — open it to fix the address`);
-  if (check.status === "corrected" || check.status === "ambiguous") throw new HttpError(422, `${order.name}: ${check.message.toLowerCase()} — open it to review`);
+  // The carrier couldn't confirm the address: ask the teammate ("ADDRESS:" lets the page offer "Buy anyway"),
+  // unless they already said it's right (addressOk), which also remembers it as good
+  if (!body.addressOk) {
+    if (check.status === "invalid") throw new HttpError(422, `ADDRESS: ${order.name}: ${check.message.toLowerCase()} — open it to fix the address`);
+    if (check.status === "corrected" || check.status === "ambiguous") throw new HttpError(422, `ADDRESS: ${order.name}: ${check.message.toLowerCase()} — open it to review`);
+  }
   if (check.residential !== null) to = { ...to, residential: check.residential };
   // Every box from the plan (a remembered multi-box packing ships as one multi-box shipment)
   const titles = new Map(order.lineItems.nodes.map((l) => [l.id, l.title + (l.variantTitle ? ` · ${l.variantTitle}` : "")]));
@@ -754,6 +758,7 @@ shipping.post("/labels/auto", async (c) => {
     partial,
     holdRest: body.rest !== "ship", // "ship": the rest goes in another box today, so it stays in To ship
   });
+  if (body.addressOk) await rememberShippedAddress(c.env, to, c.get("agent").name || "the team").catch(() => {});
   if (isManualId(order.id)) await setManualStatus(c.env, order.id, "shipped");
   if (group) {
     const names = group.map((o) => o.name).join(" + ");
