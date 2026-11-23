@@ -1214,7 +1214,17 @@ function buildLabelForm(root, o, presets, opts) {
             h("button", { class: "btn sm", onclick: () => applyAddress(r.suggestion) }, "Use this address")) : null,
           r.status === "ambiguous" ? h("div", { class: "stack", style: { gap: "4px", marginTop: "6px" } }, (r.candidates ?? [r.suggestion]).filter(Boolean).map((cand) =>
             h("button", { class: "btn sm ghost cand", onclick: () => applyAddress(cand) }, fmtAddr(cand)))) : null),
-        r.status !== "valid" ? recheck : null)));
+        r.status !== "valid" ? h("div", { class: "stack", style: { gap: "4px", alignItems: "flex-end" } }, recheck, r.status !== "unchecked" ? trustBtn() : null) : null)));
+  };
+  // The team knows the address is right (shipped there before, a new building…): stop the carrier's check from blocking it
+  const trustBtn = () => {
+    const b = h("button", { class: "btn sm", title: "Remember this address as correct, so the carrier's check never blocks a label to it again" }, icon("check"), "This address is correct");
+    b.onclick = busy(b, async () => {
+      const r = await api("/shipping/address/trust", { method: "POST", body: { address: s.to } });
+      drawCheck(r);
+      toast("Address marked correct");
+    });
+    return b;
   };
   const verifySoon = (delay = 800, fresh = false) => {
     clearTimeout(vtimer);

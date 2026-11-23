@@ -23,10 +23,10 @@ export async function checkAddress(env: Env, a: Address, { fresh = false } = {})
   if (!["US", "PR"].includes(country)) return UNCHECKED("International addresses aren't checked yet");
   if (!a.address1 || !a.city || !a.zip) return { status: "invalid", residential: null, suggestion: null, provider: null, message: "The address is incomplete" };
   const hash = await hashOf(a);
-  if (!fresh) {
-    const row = await env.DB.prepare("SELECT result FROM address_checks WHERE hash = ?").bind(hash).first<{ result: string }>();
-    if (row) return JSON.parse(row.result);
-  }
+  const row = await env.DB.prepare("SELECT result FROM address_checks WHERE hash = ?").bind(hash).first<{ result: string }>();
+  const cached = row ? (JSON.parse(row.result) as AddressCheck & { trusted?: boolean }) : null;
+  // An address the team marked correct (or shipped to anyway) stays good, even on "Check again"
+  if (cached && (!fresh || cached.trusted)) return cached;
   const provider = verifierAvailable(env);
   if (!provider) return UNCHECKED(upsConfigured(env) ? "Address checks start when UPS is switched to production" : "Connect UPS or EasyPost to check addresses");
   let result: AddressCheck;
@@ -43,4 +43,28 @@ export async function checkAddress(env: Env, a: Address, { fresh = false } = {})
     .bind(hash, JSON.stringify(result))
     .run();
   return result;
+}
+
+/**
+ * The team knows this address is right although the carrier couldn't confirm it (a new building, an
+ * apartment the database doesn't list…): remember it as good, so it never blocks a label again.
+ */
+export async function trustAddress(env: Env, a: Address, by: string): Promise<AddressCheck> {
+  const result = {
+    status: "valid", residential: a.residential ?? null, suggestion: null, provider: null, trusted: true,
+    message: `Marked correct by ${by} — the carrier couldn't confirm it`,
+  } as AddressCheck & { trusted: true };
+  await env.DB.prepare("INSERT OR REPLACE INTO address_checks (hash, result, checked_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))")
+    .bind(await hashOf(a), JSON.stringify(result))
+    .run();
+  return result;
+}
+
+/** A label was bought to an address the carrier had flagged (the team chose to go ahead): it's good from now on. */
+export async function rememberShippedAddress(env: Env, a: Address, by: string) {
+  if (!["US", "PR"].includes((a.country || "US").toUpperCase())) return;
+  const row = await env.DB.prepare("SELECT result FROM address_checks WHERE hash = ?").bind(await hashOf(a)).first<{ result: string }>();
+  if (!row) return;
+  const r = JSON.parse(row.result) as AddressCheck;
+  if (r.status !== "valid") await trustAddress(env, a, by);
 }

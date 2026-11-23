@@ -5,7 +5,7 @@ import { upsConfigured, type Address, type Parcel, type Signature } from "../lib
 import { anyCarrier, getAllRates as getRates, trackingUrlFor, voidLabel } from "../lib/carriers";
 import { easypostConfigured } from "../lib/easypost";
 import { getRedoRates, recheckRedoSignature, redoBalance, redoConfigured, redoSignatureOption, redoSignatureStatus } from "../lib/redo";
-import { checkAddress } from "../lib/address";
+import { checkAddress, rememberShippedAddress, trustAddress } from "../lib/address";
 import { buildCustoms, cleanCustoms, customsProblems, customsSettings, loadProfiles, type Customs } from "../lib/customs";
 import { isInternationalAddress, normalizePhone, splitCost } from "../lib/ups";
 import { RULE_ACTIONS, RULE_FIELDS, type ShippingRule } from "../lib/rules";
@@ -543,6 +543,13 @@ shipping.get("/labels/:id{[0-9]+}/forms/:n{[0-9]+}", async (c) => {
 });
 
 // ---- Address verification
+/** "This address is correct": the team knows it's right although the carrier couldn't confirm it. */
+shipping.post("/address/trust", async (c) => {
+  const { address } = await c.req.json<{ address: Address }>();
+  if (!address?.address1 || !address.city || !address.zip) throw new HttpError(400, "The address is incomplete");
+  return c.json(await trustAddress(c.env, address, c.get("agent").name || "the team"));
+});
+
 shipping.post("/verify-address", async (c) => {
   const { address, fresh } = await c.req.json<{ address: Address; fresh?: boolean }>();
   if (demo(c.env) && !anyCarrier(c.env)) {
@@ -671,6 +678,7 @@ shipping.post("/labels", async (c) => {
     scanVerified: !!body.scanVerified,
     partial,
   });
+  await rememberShippedAddress(c.env, to, c.get("agent").name || "the team").catch(() => {});
   if (order && isManualId(order.id)) await setManualStatus(c.env, order.id, "shipped");
   if (!group) return c.json(r);
   const names = group.map((o) => o.name).join(" + ");
