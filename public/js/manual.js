@@ -63,7 +63,7 @@ export function renderManual(main) {
   async function load() {
     try {
       const r = await api("/manual");
-      Object.assign(st, { topics: r.topics, pending: r.pending, pendingNew: r.pendingNew ?? r.pending, pendingArchive: r.pendingArchive ?? 0, newDays: r.newDays ?? 14, scanned: r.scanned, repairs: r.repairs, ai: r.ai });
+      Object.assign(st, { topics: r.topics, pending: r.pending, pendingNew: r.pendingNew ?? r.pending, pendingArchive: r.pendingArchive === undefined ? 0 : r.pendingArchive, newDays: r.newDays ?? 14, scanned: r.scanned, repairs: r.repairs, ai: r.ai });
       drawStatus(job.running ? { text: `Read ${job.read} conversation${job.read === 1 ? "" : "s"}${job.remaining ? ` · ${job.remaining} to go` : ""}${job.scope === "archive" ? " (archive)" : ""}`, recent: job.recent } : null);
       drawList();
       if (id) openTopic(id);
@@ -80,9 +80,10 @@ export function renderManual(main) {
     // New conversations (the everyday update) and the archive (a deep dig, run on purpose) are separate
     const runNew = st.pendingNew ? h("button", { class: "btn primary sm", title: `Closed repair conversations from the last ${st.newDays} days` }, icon("spark"), `Read ${st.pendingNew} new`) : null;
     if (runNew) runNew.onclick = () => scan("new");
-    const runOld = st.pendingArchive ? h("button", { class: "btn sm", title: `Closed repair conversations older than ${st.newDays} days` }, icon("search"), `Dig into archive (${st.pendingArchive})`) : null;
+    const unknownOld = st.pendingArchive === null; // never counted (counting the archive is too heavy)
+    const runOld = st.pendingArchive || unknownOld ? h("button", { class: "btn sm", title: `Closed repair conversations older than ${st.newDays} days` }, icon("search"), unknownOld ? "Dig into archive" : `Dig into archive (${st.pendingArchive})`) : null;
     if (runOld) runOld.onclick = () => {
-      if (confirm(`Read ${st.pendingArchive} older repair conversation${st.pendingArchive === 1 ? "" : "s"} from the archive? This uses AI for each one (counted as the one-time backlog). You can stop any time.`)) scan("archive");
+      if (confirm(`Read ${unknownOld ? "the" : st.pendingArchive} older repair conversation${st.pendingArchive === 1 ? "" : "s"} from the archive? This uses AI for each one (counted as the one-time backlog). You can stop any time.`)) scan("archive");
     };
     const run = runNew || runOld ? h("div", { class: "row", style: { gap: "6px", flexWrap: "nowrap" } }, runNew, runOld) : null;
     const stop = h("button", { class: "btn sm", onclick: () => { job.stop = true; stop.disabled = true; stop.textContent = "Stopping after this batch…"; } }, "Stop");
@@ -131,7 +132,7 @@ export function renderManual(main) {
     if (job.topicsChanged) {
       job.topicsChanged = false;
       const fresh = await api("/manual").catch(() => null);
-      if (fresh) Object.assign(st, { topics: fresh.topics, pending: fresh.pending, pendingNew: fresh.pendingNew ?? fresh.pending, pendingArchive: fresh.pendingArchive ?? 0, scanned: fresh.scanned, repairs: fresh.repairs });
+      if (fresh) Object.assign(st, { topics: fresh.topics, pending: fresh.pending, pendingNew: fresh.pendingNew ?? fresh.pending, pendingArchive: fresh.pendingArchive === undefined ? 0 : fresh.pendingArchive, scanned: fresh.scanned, repairs: fresh.repairs });
       drawList();
     }
     drawStatus(job.running ? { text: `Read ${job.read} conversation${job.read === 1 ? "" : "s"}${job.remaining ? ` · ${job.remaining} to go` : ""}${job.scope === "archive" ? " (archive)" : ""}`, recent: job.recent } : { recent: job.recent });

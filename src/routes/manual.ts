@@ -19,7 +19,7 @@ manual.get("/", async (c) => {
   ).all();
   const scanned = await c.env.DB.prepare("SELECT COUNT(*) AS n, SUM(result = 'repair') AS repairs FROM manual_scanned").first<{ n: number; repairs: number | null }>();
   const { new: pendingNew, archive: pendingArchive } = await pendingCounts(c.env);
-  return c.json({ topics: results, pending: pendingNew + pendingArchive, pendingNew, pendingArchive, newDays: NEW_DAYS, scanned: scanned?.n ?? 0, repairs: scanned?.repairs ?? 0, ai: aiConfigured(c.env) });
+  return c.json({ topics: results, pending: pendingNew + (pendingArchive ?? 0), pendingNew, pendingArchive, newDays: NEW_DAYS, scanned: scanned?.n ?? 0, repairs: scanned?.repairs ?? 0, ai: aiConfigured(c.env) });
 });
 
 manual.get("/:id{[0-9]+}", async (c) => {

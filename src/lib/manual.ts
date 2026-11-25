@@ -53,12 +53,18 @@ export async function pendingCount(env: Env, scope: ScanScope = "all"): Promise<
  * text, which is heavy on the database, so it's counted at most every 15 minutes and kept up to date as
  * batches are read in between.
  */
-type Pending = { new: number; archive: number; at: number };
+type Pending = { new: number; archive: number | null; at: number };
 const PENDING_KEY = "manual_pending";
+/**
+ * The archive is never recounted while someone waits: counting it reads the text of every archived email
+ * (thousands), which overloaded the database each time the Repair manual page opened. Its number only
+ * counts down as batches are read (null when it was never counted: the page then shows no number).
+ * The last 14 days are cheap to count, so "new" is recounted every 15 minutes.
+ */
 export async function pendingCounts(env: Env): Promise<Pending> {
   const cached = await getSetting<Pending | null>(env, PENDING_KEY, null);
   if (cached && Date.now() - cached.at < 15 * 60_000) return cached;
-  const fresh = { new: await pendingCount(env, "new"), archive: await pendingCount(env, "archive"), at: Date.now() };
+  const fresh = { new: await pendingCount(env, "new"), archive: cached?.archive ?? null, at: Date.now() };
   await setSetting(env, PENDING_KEY, fresh);
   return fresh;
 }
@@ -66,11 +72,14 @@ async function countDown(env: Env, scope: ScanScope, read: number, done: boolean
   const p = await getSetting<Pending | null>(env, PENDING_KEY, null);
   if (!p) return done ? 0 : read; // not counted yet: keep the loop going until a batch comes back empty
   const next = { ...p };
-  if (scope === "new" || scope === "archive") next[scope] = done ? 0 : Math.max(0, p[scope] - read);
-  else { next.new = 0; next.archive = done ? 0 : Math.max(0, p.archive - read); }
+  const less = (n: number | null) => (done ? 0 : n === null ? null : Math.max(0, n - read));
+  if (scope === "new") next.new = less(next.new) ?? 0;
+  else if (scope === "archive") next.archive = less(next.archive);
+  else { next.new = 0; next.archive = less(next.archive); }
   await setSetting(env, PENDING_KEY, next);
   // Never report 0 while a batch was full: there may be more than the estimate said
-  return scope === "new" ? next.new : scope === "archive" ? next.archive : next.new + next.archive || (done ? 0 : 1);
+  const left = scope === "new" ? next.new : scope === "archive" ? next.archive : next.new + (next.archive ?? 0);
+  return done ? 0 : Math.max(1, left ?? read);
 }
 
 interface TicketRow { id: number; subject: string; customer_name: string | null; customer_email: string; created_at: string; closed_at: string | null }
