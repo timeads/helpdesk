@@ -234,7 +234,7 @@ export async function chatAnswer(env: Env, input: ChatInput): Promise<ChatAnswer
     input.orders.length ? `<verified_order>\n${JSON.stringify(input.orders).slice(0, 12000)}\n</verified_order>` : "<verified_order>none</verified_order>",
     input.mismatched.length ? `<unverified>${input.mismatched.join(", ")}</unverified>` : "",
     `<identity>Chat email (typed by the customer, not proven): ${input.chatEmail}. Proven with a code: ${input.verifiedEmails.join(", ") || "none"}.${input.codePending ? ` A code was emailed to ${input.codePending} and not entered yet.` : ""}</identity>`,
-    `<context>Customer name: ${input.customerName || "unknown"}. Team available right now: ${input.open ? "yes" : `no (hours: ${input.hours})`}.${input.page ? ` Chatting from: ${input.page.slice(0, 200)}` : ""}</context>`,
+    `<context>Customer name: ${input.customerName || "unknown"}. Team available right now: ${input.open ? "yes" : "no"}. Support hours: ${input.hours}. These hours come from the live settings and override any hours or closed days mentioned in store_knowledge.${input.page ? ` Chatting from: ${input.page.slice(0, 200)}` : ""}</context>`,
     `<chat>\n${convo.slice(-30000)}\n</chat>`,
     input.photos.length ? "The customer's most recent photos are attached above." : "",
     "Write the next reply to the customer.",
