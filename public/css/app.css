@@ -559,6 +559,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .table-card { padding: 0; overflow: hidden; }
 .tbl.queue th { background: var(--panel); position: sticky; top: 0; z-index: 1; }
 .tbl.queue td, .tbl.queue th { padding: 10px 12px; }
+.tbl.queue tr.grp-row td { background: var(--panel-2, var(--bg)); padding: 8px 12px; font-size: 13px; border-top: 2px solid var(--border); }
+.input.queue-sort { width: auto; flex: none; min-width: 0; padding-top: 6px; padding-bottom: 6px; }
 .tbl .chk { width: 34px; padding-right: 0; }
 .tbl .chk input { accent-color: var(--ochre); width: 16px; height: 16px; }
 .tbl .num { text-align: right; white-space: nowrap; }
@@ -1570,6 +1572,9 @@ body.order-nav .op-menu { color: var(--ochre-text); }
   .tbl.queue td:nth-child(10) { grid-area: ship; font-size: 13px; }
   .tbl.queue td:nth-child(11) { grid-area: flags; display: flex; flex-wrap: wrap; gap: 4px; }
   .tbl.queue td:nth-child(11):empty { display: none; }
+  .tbl.queue tr.grp-row { display: flex; align-items: center; gap: 10px; background: none; border: 0; padding: 14px 2px 4px; margin: 0; }
+  .tbl.queue tr.grp-row td { display: block !important; background: none; border: 0 !important; padding: 0 !important; }
+  .queue-tools { flex-wrap: wrap !important; }
   .tbl.queue .q-line { flex-direction: column; align-items: flex-end; gap: 0; }
   .bulk-bar { position: sticky; bottom: 0; z-index: 3; }
 }

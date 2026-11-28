@@ -287,8 +287,60 @@ function loadAddressChecks(orders, onEach) {
   return Promise.all([worker(), worker()]);
 }
 
+function savedSort() {
+  try { const v = localStorage.getItem("shipSort"); return ["box", "contents"].includes(v) ? v : "newest"; } catch { return "newest"; }
+}
+
+/** The box an order is planned to go in, as shown in the Box column. */
+export function boxNameOf(o) {
+  const n = o.plan?.boxes?.length ?? 1;
+  return n > 1 ? `${n} boxes` : o.plan?.preset?.name ?? "Custom";
+}
+
+/** What's in the order: "AK-I Cut Pile × 1 + Yarn · Red × 2", same text for identical orders. */
+export function contentsLabel(o) {
+  if (o.manual) return "Saved label";
+  const qty = (l) => l.unfulfilledQuantity ?? l.quantity;
+  const parts = (o.lineItems?.nodes ?? []).filter((l) => qty(l) > 0)
+    .map((l) => `${l.title}${l.variantTitle ? ` · ${l.variantTitle}` : ""} × ${qty(l)}`).sort();
+  return parts.join(" + ") || "No items";
+}
+
+/** Rows that share this key sit together under one heading; null = no grouping. */
+export function groupKeyOf(o, by) {
+  if (by === "box") return boxNameOf(o);
+  if (by === "contents") return contentsLabel(o);
+  return null;
+}
+
+/** Box size: one-box orders by box (smallest volume first), then multi-box, then custom; contents next, oldest first.
+ *  Contents: biggest groups of identical orders first, so a run of kits prints together. */
+export function sortQueue(rows, by) {
+  if (by !== "box" && by !== "contents") return rows;
+  const vol = (o) => {
+    const p = o.plan?.preset;
+    if ((o.plan?.boxes?.length ?? 1) > 1) return 1e9;
+    return p ? (p.length || 0) * (p.width || 0) * (p.height || 0) || 1e8 : 2e9;
+  };
+  const size = new Map();
+  for (const o of rows) { const k = groupKeyOf(o, by); size.set(k, (size.get(k) ?? 0) + 1); }
+  const age = (o) => Date.parse(o.createdAt) || 0;
+  return rows.map((o, i) => ({ o, i })).sort((a, b) => {
+    const ka = groupKeyOf(a.o, by), kb = groupKeyOf(b.o, by);
+    if (ka !== kb) {
+      if (by === "box") return vol(a.o) - vol(b.o) || ka.localeCompare(kb);
+      return size.get(kb) - size.get(ka) || ka.localeCompare(kb);
+    }
+    if (by === "box") { const c = contentsLabel(a.o).localeCompare(contentsLabel(b.o)); if (c) return c; }
+    return age(a.o) - age(b.o) || a.i - b.i;
+  }).map((x) => x.o);
+}
+
 function renderQueue(root, params) {
-  const st = { view: params.get("view") || "ready", orders: [], counts: {}, selected: new Set(), q: "", searchResults: null, policy: "rule" };
+  const st = { view: params.get("view") || "ready", orders: [], counts: {}, selected: new Set(), q: "", searchResults: null, policy: "rule", sortBy: savedSort() };
+  const sortSel = h("select", { class: "input sm queue-sort", "aria-label": "Sort orders", title: "Group orders that pack the same way, then select a group to print its packing slips together" },
+    [["newest", "Sort: Oldest first"], ["box", "Sort: Box size"], ["contents", "Sort: Contents"]].map(([v, l]) => h("option", { value: v, selected: st.sortBy === v }, l)));
+  sortSel.onchange = () => { st.sortBy = sortSel.value; try { localStorage.setItem("shipSort", st.sortBy); } catch {} draw(); };
   const chips = h("div", { class: "view-chips", role: "tablist" });
   const search = h("input", { class: "input", type: "search", placeholder: "Find any order — #, email or name", "aria-label": "Search orders" });
   const bulk = h("div", { class: "bulk-bar card", hidden: true });
@@ -300,7 +352,7 @@ function renderQueue(root, params) {
   const refresh = h("button", { class: "btn sm", title: "Get the latest orders from Shopify (also happens every few minutes)" }, icon("refresh"), "Refresh");
   refresh.onclick = busy(refresh, async () => { await load(); toast("Up to date with Shopify"); });
   mount(root, h("div", { class: "row", style: { marginBottom: "12px", alignItems: "flex-start" } }, chips,
-    h("div", { class: "row queue-tools", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
+    h("div", { class: "row queue-tools", style: { marginLeft: "auto", gap: "8px", flexWrap: "nowrap" } }, updated, refresh, sortSel, h("div", { class: "search", style: { minWidth: "240px" } }, icon("search"), search))),
     bulk, progress, sigEl, mergeEl, tableWrap);
 
   const load = async () => {
@@ -337,7 +389,8 @@ function renderQueue(root, params) {
   };
   const visible = () => {
     const rows = st.searchResults ?? st.orders.filter(VIEW_FILTERS[st.view]);
-    return st.view === "signature" && st.redoSort && !st.searchResults ? [...rows].sort((a, b) => savingOf(b) - savingOf(a)) : rows;
+    if (st.view === "signature" && st.redoSort && !st.searchResults) return [...rows].sort((a, b) => savingOf(b) - savingOf(a));
+    return sortQueue(rows, st.sortBy);
   };
 
   function draw() {
@@ -362,7 +415,22 @@ function renderQueue(root, params) {
     mount(tableWrap, h("div", { class: "tbl-wrap" }, h("table", { class: "tbl queue" },
       h("thead", {}, h("tr", {}, h("th", { class: "chk" }, allBox),
         ["Order", "Customer", "Items", "Weight", "Box", "Customer chose", "Paid", "Best quote · margin", "Ship to", ""].map((x) => h("th", { class: x === "Paid" ? "num" : null }, x)))),
-      h("tbody", {}, rows.map((o) => {
+      h("tbody", {}, rows.flatMap((o, i) => {
+        const gkey = groupKeyOf(o, st.sortBy);
+        const head = gkey != null && (i === 0 || groupKeyOf(rows[i - 1], st.sortBy) !== gkey) ? groupHead(rows.filter((x) => groupKeyOf(x, st.sortBy) === gkey), st.sortBy) : null;
+        return head ? [head, orderRow(o)] : [orderRow(o)];
+      })))));
+    function groupHead(members, by) {
+      const allIn = members.every((o) => st.selected.has(o.id));
+      const cb = h("input", { type: "checkbox", checked: allIn, "aria-label": "Select this group" });
+      cb.indeterminate = !allIn && members.some((o) => st.selected.has(o.id));
+      cb.onchange = () => { members.forEach((o) => (cb.checked ? st.selected.add(o.id) : st.selected.delete(o.id))); draw(); };
+      const label = by === "box" ? boxNameOf(members[0]) : contentsLabel(members[0]);
+      return h("tr", { class: "grp-row" }, h("td", { class: "chk" }, cb),
+        h("td", { colspan: 10 }, h("b", {}, label), h("span", { class: "muted" }, ` · ${members.length} order${members.length === 1 ? "" : "s"}`),
+          by === "contents" ? h("span", { class: "muted small" }, ` · ${boxNameOf(members[0])}`) : null));
+    }
+    function orderRow(o) {
         const box = h("input", { type: "checkbox", checked: st.selected.has(o.id), "aria-label": `Select ${o.name}` });
         box.onclick = (e) => e.stopPropagation();
         box.onchange = () => { box.checked ? st.selected.add(o.id) : st.selected.delete(o.id); drawBulk(rows); tr.classList.toggle("sel", box.checked); };
@@ -397,7 +465,7 @@ function renderQueue(root, params) {
             o.plan.signature ? h("span", { class: "badge plain", title: signatureReason(o.plan) ?? "" }, o.plan.signature === "adult" ? "Adult sig." : "Signature") : null,
             st.view === "signature" && signatureReason(o.plan) ? h("div", { class: "small muted sig-why" }, signatureReason(o.plan)) : null));
         return tr;
-      })))));
+    }
     refreshQuotes(rows).then(() => {
       // Sorted by Redo savings: put the rows in order once every quote is in
       if (st.view !== "signature" || !st.redoSort) return;
